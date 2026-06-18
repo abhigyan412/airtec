@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   ADD THIS TO THE BOTTOM OF frontend/app/globals.css
+   ============================================ */
+
+@layer base {
+  body {
+    font-feature-settings: "cv11", "ss01";
+    letter-spacing: -0.01em;
+  }
+}
+
+/* Slightly stronger hover lift on cards app-wide */
+.hover\:shadow-md:hover {
+  box-shadow: 0 8px 24px -8px rgba(91, 91, 214, 0.18), 0 2px 4px -2px rgb(0 0 0 / 0.04);
+}
+
+/* Gradient utility classes for buttons / icons */
+.bg-gradient-primary {
+  background-image: linear-gradient(135deg, #9D8FFF, #5B5BD6);
+}
+.shadow-glow-indigo {
+  box-shadow: 0 4px 12px rgba(91, 91, 214, 0.3);
+}
+.shadow-glow-violet {
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+.shadow-glow-green {
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+.shadow-glow-rose {
+  box-shadow: 0 4px 12px rgba(244, 63, 94, 0.3);
+}
