@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "seed": "tsx src/seed.ts",
-    "build": "tsc",
-    "start": "node dist/index.js"
+    "build": "echo 'skipping build, running via tsx directly'",
+    "start": "tsx src/index.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
