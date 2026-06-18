@@ -2,13 +2,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { api, admitCardApi } from '@/lib/api'
+import { api, admitCardApi, API_BASE } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
 import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { API_BASE } from '@/lib/api'
 
 const TABS = ['Datesheet', 'Marks Entry', 'Results']
 
@@ -180,10 +179,6 @@ export default function ExamDetailPage() {
 // ═══════════════════════════════════════════════════════════════
 // RESULT FREEZE & PUBLISH WORKFLOW PIPELINE
 // ═══════════════════════════════════════════════════════════════
-//
-// 3 steps: Exam Controller (freeze) -> Principal (verify) -> Principal (publish)
-// Shown only once results have been generated (exam.status is one of
-// result_declared / result_frozen / result_verified / result_published).
 
 const STEP_ICONS: Record<string, any> = {
   freeze: Snowflake,
@@ -239,7 +234,6 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Action failed'),
   })
 
-  // Results not generated yet — nothing to show
   if (!RESULT_STATUSES.includes(exam.status)) {
     return null
   }
@@ -252,7 +246,6 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
     )
   }
 
-  // No workflow instance yet — offer to start it
   if (!workflow) {
     const canStart = ['school_admin', 'principal', 'teacher'].includes(user?.role ?? '')
     return (
@@ -281,11 +274,6 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
   const approvals: any[] = workflow.approvals ?? []
   const status = workflow.status as 'in_progress' | 'approved' | 'rejected' | 'cancelled'
 
-  // Map old single-role users.role -> new Role names used in workflow_steps.
-  // 'teacher' can also hold the additional "Exam Controller" role via
-  // user_roles, but we can't see that here without a separate query —
-  // School Admin/Principal always bypass via actOnWorkflow's super-role
-  // check, so they can act on any step.
   const roleMap: Record<string, string> = {
     school_admin: 'School Admin',
     principal: 'Principal',
@@ -293,8 +281,6 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
   const canAct = status === 'in_progress' && currentStep && (
     user?.role === 'school_admin' ||
     roleMap[user?.role ?? ''] === currentStep.roles?.name ||
-    // Teachers might hold "Exam Controller" — let the backend be the
-    // final arbiter; show the buttons and let a 403 explain if not.
     (user?.role === 'teacher' && currentStep.roles?.name === 'Exam Controller')
   )
 
@@ -316,7 +302,6 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
         <StatusBadge status={status} />
       </div>
 
-      {/* Pipeline steps */}
       <div className="flex items-center gap-1">
         {allSteps.map((step, idx) => {
           const approval = approvals.find((a: any) => a.workflow_steps?.step_order === step.step_order)
@@ -353,7 +338,6 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
         })}
       </div>
 
-      {/* Current step actions */}
       {status === 'in_progress' && currentStep && (
         <div className="border-t border-gray-100 pt-4">
           <p className="text-sm text-gray-500 mb-3">
@@ -413,7 +397,6 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
         </div>
       )}
 
-      {/* History */}
       {approvals.length > 0 && (
         <div className="border-t border-gray-100 pt-4">
           <p className="text-xs font-semibold text-gray-400 uppercase mb-3">History</p>
@@ -668,7 +651,7 @@ function ResultsView({ examId }: { examId: string }) {
                   target="_blank" rel="noreferrer"
                   className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">
                   View Card
-                </>
+                </a>
               </td>
             </tr>
           ))}
