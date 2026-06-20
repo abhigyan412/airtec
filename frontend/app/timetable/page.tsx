@@ -3,8 +3,9 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { timetableApi, admissionApi, api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { Plus, Trash2, Loader2, Clock, Grid3X3, List, Printer, User, AlertTriangle } from 'lucide-react'
+import { Plus, Trash2, Loader2, Clock, Grid3X3, List, Printer, User, AlertTriangle, ShieldOff } from 'lucide-react'
 import { toast } from 'sonner'
+import { usePermissions } from '@/lib/usePermissions'
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -42,6 +43,11 @@ export default function TimetablePage() {
   const [addingDay,       setAddingDay]       = useState(1)
   const [showPrint,       setShowPrint]       = useState(false)
   const qc = useQueryClient()
+
+  // ── RBAC ──────────────────────────────────────────────────
+  const { can, isLoading: permLoading } = usePermissions()
+  const canView   = can('timetable.view')
+  const canManage = can('timetable.manage')
 
   const { data: classesData } = useQuery({
     queryKey: ['classes'],
@@ -110,6 +116,17 @@ export default function TimetablePage() {
     ? (teachersData ?? []).find((t: any) => t.id === selectedTeacher)?.full_name ?? 'Teacher'
     : `${selectedClassObj?.name ?? ''}${selectedSection ? ' · Sec ' + sections.find((s: any) => s.id === selectedSection)?.name : ''}`
 
+  // ── PERMISSION GUARD ──────────────────────────────────────
+  if (!permLoading && !canView) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+        <ShieldOff className="w-12 h-12 mb-3 text-gray-200" />
+        <p className="font-semibold text-gray-500">Access Denied</p>
+        <p className="text-sm mt-1">You don't have permission to view timetables.</p>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -143,7 +160,7 @@ export default function TimetablePage() {
               <List className="w-4 h-4" />
             </button>
           </div>
-          {/* Print */}
+          {/* Print — visible to anyone who can view */}
           {timetableData && timetableData.length > 0 && (
             <button onClick={() => setShowPrint(true)}
               className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
@@ -243,7 +260,7 @@ export default function TimetablePage() {
                     <th key={day} className="px-3 py-3 border-b border-r border-gray-200 last:border-r-0 min-w-[150px]">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-gray-700">{DAY_SHORT[idx]}</span>
-                        {viewMode === 'class' && (
+                        {viewMode === 'class' && canManage && (
                           <button onClick={() => { setAddingDay(idx + 1); setShowAdd(true) }}
                             className="text-indigo-400 hover:text-indigo-600 transition-colors">
                             <Plus className="w-3.5 h-3.5" />
@@ -276,7 +293,7 @@ export default function TimetablePage() {
                                   {hasConflict && <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />}
                                   {period.subject_name}
                                 </p>
-                                {viewMode === 'class' && !period.is_break && (
+                                {viewMode === 'class' && !period.is_break && canManage && (
                                   <button onClick={() => deleteMutation.mutate(period.id)}
                                     className="opacity-0 group-hover:opacity-100 flex-shrink-0 text-red-400 hover:text-red-600 transition-all">
                                     <Trash2 className="w-3 h-3" />
@@ -293,7 +310,7 @@ export default function TimetablePage() {
                                 <p className="text-xs opacity-50 mt-0.5">{period.room}</p>
                               )}
                             </div>
-                          ) : viewMode === 'class' ? (
+                          ) : viewMode === 'class' && canManage ? (
                             <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }}
                               className="w-full h-14 border-2 border-dashed border-gray-200 rounded-xl text-gray-300 hover:border-indigo-300 hover:text-indigo-400 transition-all flex items-center justify-center">
                               <Plus className="w-4 h-4" />
@@ -337,7 +354,7 @@ export default function TimetablePage() {
               <div key={day} className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
                 <div className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b border-gray-100">
                   <h3 className="font-semibold text-gray-900 text-sm">{day}</h3>
-                  {viewMode === 'class' && (
+                  {viewMode === 'class' && canManage && (
                     <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }}
                       className="flex items-center gap-1 text-xs text-indigo-600 font-medium hover:text-indigo-700">
                       <Plus className="w-3.5 h-3.5" /> Add Period
@@ -360,7 +377,7 @@ export default function TimetablePage() {
                               {hasConflict && <AlertTriangle className="w-3 h-3 text-red-500" />}
                               {p.subject_name}
                             </span>
-                            {viewMode === 'class' && !p.is_break && (
+                            {viewMode === 'class' && !p.is_break && canManage && (
                               <button onClick={() => deleteMutation.mutate(p.id)}
                                 className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity">
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -381,7 +398,7 @@ export default function TimetablePage() {
         </div>
       )}
 
-      {showAdd && selectedClass && (
+      {showAdd && selectedClass && canManage && (
         <AddPeriodModal
           classId={selectedClass}
           sectionId={selectedSection || undefined}
@@ -428,7 +445,6 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
     return `${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}`
   }
 
-  // Check conflict when teacher/day/period changes
   const checkConflict = (tid: string, day: number, period: number) => {
     if (!tid) { setConflict(null); return }
     const clash = allPeriods.find((p: any) =>

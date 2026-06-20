@@ -3,8 +3,9 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { studentsApi, admissionApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { CheckCircle, XCircle, Clock, Save, Loader2, ChevronLeft, ChevronRight, Calendar } from 'lucide-react'
+import { CheckCircle, XCircle, Clock, Save, Loader2, ChevronLeft, ChevronRight, Calendar, ShieldOff } from 'lucide-react'
 import { toast } from 'sonner'
+import { usePermissions } from '@/lib/usePermissions'
 
 type AttendanceStatus = 'present' | 'absent' | 'late' | 'leave'
 
@@ -23,6 +24,11 @@ export default function AttendancePage() {
   const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>({})
   const [saved, setSaved] = useState(false)
   const qc = useQueryClient()
+
+  // ── RBAC ──────────────────────────────────────────────────
+  const { can, canAny, isLoading: permLoading } = usePermissions()
+  const canView   = can('attendance.view')
+  const canManage = canAny('attendance.mark', 'attendance.edit')
 
   const { data: classesData } = useQuery({
     queryKey: ['classes'],
@@ -63,6 +69,7 @@ export default function AttendancePage() {
   })
 
   const markAll = (status: AttendanceStatus) => {
+    if (!canManage) return
     const updated: Record<string, AttendanceStatus> = {}
     for (const key of Object.keys(attendance)) updated[key] = status
     setAttendance(updated)
@@ -82,11 +89,24 @@ export default function AttendancePage() {
     setSelectedDate(d.toISOString().split('T')[0])
   }
 
+  // ── PERMISSION GUARD ──────────────────────────────────────
+  if (!permLoading && !canView) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+        <ShieldOff className="w-12 h-12 mb-3 text-gray-200" />
+        <p className="font-semibold text-gray-500">Access Denied</p>
+        <p className="text-sm mt-1">You don't have permission to view attendance.</p>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Attendance</h1>
-        <p className="text-gray-500 text-sm mt-0.5">Mark daily attendance by class</p>
+        <p className="text-gray-500 text-sm mt-0.5">
+          {canManage ? 'Mark daily attendance by class' : 'View daily attendance by class'}
+        </p>
       </div>
 
       {/* Controls */}
@@ -136,8 +156,8 @@ export default function AttendancePage() {
             </div>
           )}
 
-          {/* Quick mark all */}
-          {selectedClass && Object.keys(attendance).length > 0 && (
+          {/* Quick mark all — only for users who can manage */}
+          {canManage && selectedClass && Object.keys(attendance).length > 0 && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Mark All</label>
               <div className="flex gap-2">
@@ -152,6 +172,14 @@ export default function AttendancePage() {
           )}
         </div>
       </div>
+
+      {/* Read-only notice */}
+      {!canManage && selectedClass && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-3 flex items-center gap-3">
+          <ShieldOff className="w-5 h-5 text-amber-500 flex-shrink-0" />
+          <p className="text-sm text-amber-700">You have view-only access. Contact an admin to mark or edit attendance.</p>
+        </div>
+      )}
 
       {/* Stats bar */}
       {selectedClass && stats.total > 0 && (
@@ -180,7 +208,7 @@ export default function AttendancePage() {
       {!selectedClass ? (
         <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
           <Calendar className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-          <p className="font-medium">Select a class to mark attendance</p>
+          <p className="font-medium">Select a class to {canManage ? 'mark' : 'view'} attendance</p>
         </div>
       ) : isLoading ? (
         <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
@@ -196,21 +224,23 @@ export default function AttendancePage() {
             <h3 className="font-semibold text-gray-900">
               {selectedClassData?.name} — {new Date(selectedDate).toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' })}
             </h3>
-            <button onClick={() => saveMutation.mutate()}
-              disabled={saveMutation.isPending}
-              className={cn(
-                'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all',
-                saved
-                  ? 'bg-green-100 text-green-700'
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60'
-              )}>
-              {saveMutation.isPending
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>
-                : saved
-                ? <><CheckCircle className="w-4 h-4" /> Saved!</>
-                : <><Save className="w-4 h-4" /> Save Attendance</>
-              }
-            </button>
+            {canManage && (
+              <button onClick={() => saveMutation.mutate()}
+                disabled={saveMutation.isPending}
+                className={cn(
+                  'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all',
+                  saved
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60'
+                )}>
+                {saveMutation.isPending
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>
+                  : saved
+                  ? <><CheckCircle className="w-4 h-4" /> Saved!</>
+                  : <><Save className="w-4 h-4" /> Save Attendance</>
+                }
+              </button>
+            )}
           </div>
 
           <div className="divide-y divide-gray-50">
@@ -236,16 +266,18 @@ export default function AttendancePage() {
                       {student.sections?.name && ` · Sec ${student.sections.name}`}
                     </p>
                   </div>
-                  {/* Status buttons */}
+                  {/* Status buttons — interactive only if canManage */}
                   <div className="flex gap-2">
                     {(Object.entries(STATUS_CONFIG) as [AttendanceStatus, any][]).map(([s, config]) => (
                       <button key={s}
-                        onClick={() => setAttendance(a => ({ ...a, [student.id]: s }))}
+                        onClick={() => canManage && setAttendance(a => ({ ...a, [student.id]: s }))}
+                        disabled={!canManage}
                         className={cn(
                           'w-9 h-9 rounded-xl text-xs font-bold border-2 transition-all',
                           attendance[student.id] === s
                             ? config.color + ' ' + config.border + ' scale-110 shadow-sm'
-                            : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'
+                            : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300',
+                          !canManage && 'cursor-default opacity-70 hover:border-gray-200'
                         )}>
                         {config.label}
                       </button>
