@@ -37,8 +37,8 @@ const StaffProfileSchema = z.object({
   bank_ifsc: z.string().optional(),
   pan_number: z.string().optional(),
   photo_url: z.string().optional(),
-  employment_type: z.enum(['full_time','part_time','contract','probation']).optional(),
-  employment_status: z.enum(['active','on_leave','suspended','resigned','terminated']).optional(),
+  employment_type: z.enum(['full_time', 'part_time', 'contract', 'probation']).optional(),
+  employment_status: z.enum(['active', 'on_leave', 'suspended', 'resigned', 'terminated']).optional(),
   reporting_to: z.string().optional(),
 })
 
@@ -103,9 +103,9 @@ router.get('/staff', asyncHandler(async (req: AuthRequest, res: Response) => {
   let query = supabase
     .from('users')
     .select(`
-      id, full_name, email, role, phone, created_at,
-      staff_profiles(*)
-    `, { count: 'exact' })
+  id, full_name, email, role, phone, created_at,
+  staff_profiles!staff_profiles_user_id_fkey(*)
+`, { count: 'exact' })
     .eq('school_id', school_id)
     .neq('role', 'student')
     .range(from, to)
@@ -136,7 +136,7 @@ router.get('/staff/stats', asyncHandler(async (req: AuthRequest, res: Response) 
     supabase.from('staff_profiles').select('employment_status, department').eq('school_id', school_id),
     supabase.from('leave_requests').select('*', { count: 'exact', head: true }).eq('school_id', school_id).eq('status', 'pending'),
     supabase.from('job_postings').select('*', { count: 'exact', head: true }).eq('school_id', school_id).eq('status', 'open'),
-    supabase.from('job_applications').select('*', { count: 'exact', head: true }).eq('school_id', school_id).in('status', ['applied','shortlisted','interview_scheduled']),
+    supabase.from('job_applications').select('*', { count: 'exact', head: true }).eq('school_id', school_id).in('status', ['applied', 'shortlisted', 'interview_scheduled']),
   ])
 
   const active = (profiles ?? []).filter(p => p.employment_status === 'active').length
@@ -197,7 +197,7 @@ router.get('/staff/:user_id', asyncHandler(async (req: AuthRequest, res: Respons
 }))
 
 // PUT /hrms/staff/:user_id/profile - create/update staff profile
-router.put('/staff/:user_id/profile', requireRole('school_admin','principal'),
+router.put('/staff/:user_id/profile', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { user_id } = req.params
     const school_id = req.user!.school_id
@@ -235,7 +235,7 @@ router.get('/leave-requests', asyncHandler(async (req: AuthRequest, res: Respons
   const { status, user_id, page = '1', limit = '20' } = req.query
   const { from, to } = getPagination(Number(page), Number(limit))
   const school_id = req.user!.school_id
-  const isAdmin = ['school_admin','principal'].includes(req.user!.role)
+  const isAdmin = ['school_admin', 'principal'].includes(req.user!.role)
 
   let query = supabase
     .from('leave_requests')
@@ -482,7 +482,7 @@ router.get('/salary-structure/:user_id', asyncHandler(async (req: AuthRequest, r
 }))
 
 // PUT /hrms/salary-structure - create/update salary structure
-router.put('/salary-structure', requireRole('school_admin','principal'),
+router.put('/salary-structure', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = SalaryStructureSchema.parse(req.body)
     const school_id = req.user!.school_id
@@ -505,7 +505,7 @@ router.get('/payslips', asyncHandler(async (req: AuthRequest, res: Response) => 
   const { user_id, month, year, payment_status, page = '1', limit = '50' } = req.query
   const { from, to } = getPagination(Number(page), Number(limit))
   const school_id = req.user!.school_id
-  const isAdmin = ['school_admin','principal','accountant'].includes(req.user!.role)
+  const isAdmin = ['school_admin', 'principal', 'accountant'].includes(req.user!.role)
 
   let query = supabase
     .from('payslips')
@@ -527,7 +527,7 @@ router.get('/payslips', asyncHandler(async (req: AuthRequest, res: Response) => 
 }))
 
 // POST /hrms/payslips/generate - generate payslips for a month for all active staff
-router.post('/payslips/generate', requireRole('school_admin','principal','accountant'),
+router.post('/payslips/generate', requireRole('school_admin', 'principal', 'accountant'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { month, year, user_ids } = req.body
     const school_id = req.user!.school_id
@@ -569,14 +569,14 @@ router.post('/payslips/:id/approve', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const school_id = req.user!.school_id
- 
+
     const { data: payslip } = await supabase.from('payslips').select('payment_status').eq('id', id).eq('school_id', school_id).single()
     if (!payslip) return res.status(404).json({ success: false, error: 'Payslip not found' })
- 
+
     if (payslip.payment_status !== 'pending') {
       return res.status(400).json({ success: false, error: `Cannot approve a payslip with status '${payslip.payment_status}'` })
     }
- 
+
     const { data, error } = await supabase
       .from('payslips')
       .update({ payment_status: 'approved', approved_by: req.user!.id, approved_at: new Date().toISOString() })
@@ -584,23 +584,23 @@ router.post('/payslips/:id/approve', requireRole('school_admin', 'principal'),
       .eq('school_id', school_id)
       .select()
       .single()
- 
+
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true, data })
   })
 )
- 
+
 // ── PATCH /payslips/:id — UPDATED with approval guard ──────────
 // REPLACE your existing PATCH /payslips/:id handler with this version.
 // Only change: marking payment_status='paid' now requires the
 // payslip to already be 'approved' (by Principal). Everything else
 // (lop recalculation etc) is unchanged.
-router.patch('/payslips/:id', requireRole('school_admin','principal','accountant'),
+router.patch('/payslips/:id', requireRole('school_admin', 'principal', 'accountant'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { payment_status, payment_date, payment_mode, remarks, lop_days, lop_amount } = req.body
     const school_id = req.user!.school_id
- 
+
     if (payment_status === 'paid') {
       const { data: existing } = await supabase.from('payslips').select('payment_status').eq('id', id).eq('school_id', school_id).single()
       if (!existing) return res.status(404).json({ success: false, error: 'Payslip not found' })
@@ -611,7 +611,7 @@ router.patch('/payslips/:id', requireRole('school_admin','principal','accountant
         })
       }
     }
- 
+
     const update: any = {}
     if (payment_status) update.payment_status = payment_status
     if (payment_date) update.payment_date = payment_date
@@ -619,14 +619,14 @@ router.patch('/payslips/:id', requireRole('school_admin','principal','accountant
     if (remarks !== undefined) update.remarks = remarks
     if (lop_days !== undefined) update.lop_days = lop_days
     if (lop_amount !== undefined) update.lop_amount = lop_amount
- 
+
     if (lop_amount !== undefined) {
       const { data: existing } = await supabase.from('payslips').select('gross_salary, total_deductions').eq('id', id).single()
       if (existing) {
         update.net_salary = existing.gross_salary - existing.total_deductions - lop_amount
       }
     }
- 
+
     const { data, error } = await supabase.from('payslips').update(update).eq('id', id).eq('school_id', school_id).select().single()
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true, data })
@@ -634,7 +634,7 @@ router.patch('/payslips/:id', requireRole('school_admin','principal','accountant
 )
 
 // GET /hrms/payroll/summary - month-wise summary
-router.get('/payroll/summary', requireRole('school_admin','principal','accountant'),
+router.get('/payroll/summary', requireRole('school_admin', 'principal', 'accountant'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { month, year } = req.query
     const school_id = req.user!.school_id
@@ -679,7 +679,7 @@ router.get('/attendance', asyncHandler(async (req: AuthRequest, res: Response) =
   res.json({ success: true, data })
 }))
 
-router.post('/attendance', requireRole('school_admin','principal'),
+router.post('/attendance', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { records, date } = req.body
     const school_id = req.user!.school_id
@@ -701,7 +701,7 @@ router.post('/attendance', requireRole('school_admin','principal'),
 // RECRUITMENT
 // ═══════════════════════════════════════════════════════════════
 
-const APPLICATION_STAGES = ['applied','shortlisted','interview_scheduled','interviewed','selected','offer_sent','joined','rejected','withdrawn']
+const APPLICATION_STAGES = ['applied', 'shortlisted', 'interview_scheduled', 'interviewed', 'selected', 'offer_sent', 'joined', 'rejected', 'withdrawn']
 
 // GET /hrms/job-postings
 router.get('/job-postings', asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -724,7 +724,7 @@ router.get('/job-postings', asyncHandler(async (req: AuthRequest, res: Response)
 }))
 
 // POST /hrms/job-postings
-router.post('/job-postings', requireRole('school_admin','principal'),
+router.post('/job-postings', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = JobPostingSchema.parse(req.body)
     const school_id = req.user!.school_id
@@ -735,7 +735,7 @@ router.post('/job-postings', requireRole('school_admin','principal'),
 )
 
 // PATCH /hrms/job-postings/:id
-router.patch('/job-postings/:id', requireRole('school_admin','principal'),
+router.patch('/job-postings/:id', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { status, vacancies } = req.body
@@ -817,17 +817,17 @@ router.post('/applications', asyncHandler(async (req: AuthRequest, res: Response
 
 // PATCH /hrms/applications/:id - move pipeline stage / update
 const VALID_STAFF_ROLES = ['school_admin', 'principal', 'teacher', 'accountant', 'counselor'] as const
- 
-router.patch('/applications/:id', requireRole('school_admin','principal','counselor'),
+
+router.patch('/applications/:id', requireRole('school_admin', 'principal', 'counselor'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { status, interview_date, interview_notes, rating, notes, role, email } = req.body
     const school_id = req.user!.school_id
- 
+
     if (status && !APPLICATION_STAGES.includes(status)) {
       return res.status(400).json({ success: false, error: 'Invalid status' })
     }
- 
+
     // Approval gate: only school_admin/principal can authorize sending
     // an offer, and only from the 'selected' stage.
     if (status === 'offer_sent') {
@@ -840,7 +840,7 @@ router.patch('/applications/:id', requireRole('school_admin','principal','counse
         return res.status(400).json({ success: false, error: `Candidate must be 'selected' before an offer can be sent (current: '${existing.status}')` })
       }
     }
- 
+
     // 'joined' requires a valid role AND an email on file (email is
     // the login identifier for their new team-member account).
     if (status === 'joined') {
@@ -850,7 +850,7 @@ router.patch('/applications/:id', requireRole('school_admin','principal','counse
           error: `A valid role is required when marking a candidate as joined. Must be one of: ${VALID_STAFF_ROLES.join(', ')}`,
         })
       }
- 
+
       const { data: appCheck } = await supabase.from('job_applications').select('email').eq('id', id).eq('school_id', school_id).single()
       const effectiveEmail = email ?? appCheck?.email
       if (!effectiveEmail) {
@@ -860,7 +860,7 @@ router.patch('/applications/:id', requireRole('school_admin','principal','counse
         })
       }
     }
- 
+
     const update: any = {}
     if (status) update.status = status
     if (interview_date !== undefined) update.interview_date = interview_date
@@ -869,10 +869,10 @@ router.patch('/applications/:id', requireRole('school_admin','principal','counse
     if (notes !== undefined) update.notes = notes
     if (email !== undefined) update.email = email
     update.updated_at = new Date().toISOString()
- 
+
     const { data, error } = await supabase.from('job_applications').update(update).eq('id', id).eq('school_id', school_id).select('*, job_postings(title, department, designation)').single()
     if (error) return res.status(400).json({ success: false, error: error.message })
- 
+
     if (status) {
       await supabase.from('application_status_history').insert({
         application_id: id, status,
@@ -880,12 +880,12 @@ router.patch('/applications/:id', requireRole('school_admin','principal','counse
         changed_by: req.user!.id,
       })
     }
- 
+
     let newUserId: string | null = null
- 
+
     if (status === 'joined') {
       const { data: existingUser } = await supabase.from('users').select('id').eq('email', data.email).eq('school_id', school_id).maybeSingle()
- 
+
       if (!existingUser && data.email) {
         const { data: newUser, error: userErr } = await supabase.from('users').insert({
           id: crypto.randomUUID(),
@@ -896,11 +896,11 @@ router.patch('/applications/:id', requireRole('school_admin','principal','counse
           role,
           is_active: true,
         }).select().single()
- 
+
         if (userErr) {
           return res.status(400).json({ success: false, error: `Application updated but failed to create team member: ${userErr.message}` })
         }
- 
+
         if (newUser) {
           newUserId = newUser.id
           await supabase.from('staff_profiles').insert({
@@ -918,17 +918,17 @@ router.patch('/applications/:id', requireRole('school_admin','principal','counse
         newUserId = existingUser.id
       }
     }
- 
+
     res.json({ success: true, data, new_user_id: newUserId })
   })
-) 
+)
 // ═══════════════════════════════════════════════════════════════
 // ROLE PERMISSIONS (legacy table — superseded by /api/rbac/roles/:id/permissions
 // and role_permissions_v2. Kept for backward compatibility only;
 // no longer used by the frontend after the RBAC unification.)
 // ═══════════════════════════════════════════════════════════════
 
-router.get('/role-permissions', requireRole('school_admin','principal'),
+router.get('/role-permissions', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { data, error } = await supabase.from('role_permissions').select('*').eq('school_id', req.user!.school_id)
     if (error) return res.status(500).json({ success: false, error: error.message })
@@ -936,7 +936,7 @@ router.get('/role-permissions', requireRole('school_admin','principal'),
   })
 )
 
-router.put('/role-permissions', requireRole('school_admin','principal'),
+router.put('/role-permissions', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { permissions } = req.body // array of { role, module, can_view, can_create, can_edit, can_delete }
     const school_id = req.user!.school_id
@@ -1013,7 +1013,7 @@ router.get('/reports/leave-summary', asyncHandler(async (req: AuthRequest, res: 
   })
 }))
 
-router.get('/reports/payroll-summary', requireRole('school_admin','principal','accountant'),
+router.get('/reports/payroll-summary', requireRole('school_admin', 'principal', 'accountant'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { year } = req.query
     const school_id = req.user!.school_id
