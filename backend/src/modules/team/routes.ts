@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler } from '../../shared/utils/helpers'
+import { assignDefaultUserRole, setPrimaryUserRole } from '../rbac/seed'
 
 const router = Router()
 router.use(authenticate)
@@ -120,6 +121,12 @@ router.post('/invite', requireRole('school_admin', 'principal'),
       })
     }
 
+    // 4. Seed default RBAC roles for the school (if missing) and assign
+    //    this user their primary role — this is what drives sidebar/page
+    //    visibility (see usePermissions.ts). Without this the user gets
+    //    zero permissions and only sees the null-gated nav items.
+    await assignDefaultUserRole(newUser.id, school_id, body.role)
+
     res.status(201).json({
       success: true,
       data: { ...newUser, has_login: true },
@@ -184,6 +191,10 @@ router.post('/:id/reset-login', requireRole('school_admin', 'principal'),
 
     // Update staff_profiles.user_id to match (FK reference)
     await supabase.from('staff_profiles').update({ user_id: newId }).eq('user_id', oldId)
+    // Relink any RBAC role assignments so the user doesn't lose access
+    await supabase.from('user_roles').update({ user_id: newId }).eq('user_id', oldId)
+    // Safety net for legacy users that never had a primary role assigned
+    await assignDefaultUserRole(newId, school_id, user.role)
 
     res.json({
       success: true,
@@ -210,10 +221,19 @@ router.patch('/:id', requireRole('school_admin', 'principal'),
     if (full_name) update.full_name = full_name
     if (phone !== undefined) update.phone = phone
 
+    const { data: before } = await supabase.from('users').select('role').eq('id', id).eq('school_id', school_id).maybeSingle()
+
     const { data, error } = await supabase
       .from('users').update(update).eq('id', id).eq('school_id', school_id).select().single()
 
     if (error) return res.status(400).json({ success: false, error: error.message })
+
+    // Keep the RBAC primary role in sync with the legacy role field —
+    // otherwise sidebar/page permissions silently stay on the old role.
+    if (role && before?.role && role !== before.role) {
+      await setPrimaryUserRole(id, school_id, role, before.role)
+    }
+
     res.json({ success: true, data })
   })
 )

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { authenticate, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler } from '../../shared/utils/helpers'
+import { assignDefaultUserRole } from '../rbac/seed'
 
 const router = Router()
 
@@ -74,6 +75,9 @@ router.post('/register-school', asyncHandler(async (req: Request, res: Response)
 
   // 4. Seed default data for the school
   await seedDefaultData(school.id)
+
+  // 5. Seed default RBAC roles for the school and assign the admin their role
+  await assignDefaultUserRole(user.id, school.id, 'school_admin')
 
   res.status(201).json({
     success: true,
@@ -181,6 +185,8 @@ router.post('/invite-user', authenticate, asyncHandler(async (req: AuthRequest, 
     .single()
 
   if (error) return res.status(400).json({ success: false, error: error.message })
+
+  await assignDefaultUserRole(user.id, req.user!.school_id, role)
 
   res.status(201).json({ success: true, data: user })
 }))
