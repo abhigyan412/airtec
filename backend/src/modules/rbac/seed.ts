@@ -29,7 +29,7 @@ const CORE = [
   'staff.payroll_manage', 'staff.recruitment_manage',
 ]
 
-const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
+export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   'School Admin': [...CORE, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
   'Principal': [...CORE, 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
   'Vice Principal': CORE.filter(c => c !== 'staff.payroll_manage').concat(['role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage']),
