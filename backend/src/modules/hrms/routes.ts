@@ -5,6 +5,7 @@ import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { getPermissionsForRole } from '../../shared/middleware/permissions'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
+import { assignDefaultUserRole } from '../rbac/seed'
 
 const router = Router()
 router.use(authenticate)
@@ -913,6 +914,7 @@ router.patch('/applications/:id', requireRole('school_admin', 'principal', 'coun
             employment_status: 'active',
             phone: data.phone || null,
           })
+          await assignDefaultUserRole(newUser.id, school_id, role)
         }
       } else if (existingUser) {
         newUserId = existingUser.id

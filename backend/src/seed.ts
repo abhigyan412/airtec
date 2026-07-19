@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { supabase } from './shared/db/client'
+import { assignDefaultUserRole } from './modules/rbac/seed'
 
 async function seed() {
   console.log('🌱 Starting AIRTEC demo seed...\n')
@@ -39,6 +40,10 @@ async function seed() {
       email: 'admin@dpslucknow.com',
       role: 'school_admin',
     })
+    // Seed default RBAC roles for the school and assign the admin
+    // theirs — without this, the sidebar shows almost nothing for them
+    // (see rbac/seed.ts for why).
+    await assignDefaultUserRole(userId, school.id, 'school_admin')
   }
   console.log(`   ✅ Admin: admin@dpslucknow.com / Admin@1234\n`)
 

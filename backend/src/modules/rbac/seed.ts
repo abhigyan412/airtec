@@ -51,6 +51,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
 // Maps the legacy `users.role` text value to the RBAC role name it
 // should be auto-assigned in `user_roles` on creation.
 export const LEGACY_ROLE_TO_RBAC_ROLE: Record<string, string> = {
+  super_admin: 'School Admin',
   school_admin: 'School Admin',
   principal: 'Principal',
   teacher: 'Teacher',

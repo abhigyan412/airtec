@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler } from '../../shared/utils/helpers'
-import { assignDefaultUserRole, setPrimaryUserRole } from '../rbac/seed'
+import { assignDefaultUserRole, setPrimaryUserRole, LEGACY_ROLE_TO_RBAC_ROLE } from '../rbac/seed'
 
 const router = Router()
 router.use(authenticate)
@@ -267,16 +267,10 @@ router.delete('/:id', requireRole('school_admin', 'principal'),
 // "Exam Controller" role so they can act on workflow steps that
 // require it, without changing their primary role.
 
-const LEGACY_ROLE_TO_NEW_NAME: Record<string, string> = {
-  super_admin: 'School Admin',
-  school_admin: 'School Admin',
-  principal: 'Principal',
-  teacher: 'Teacher',
-  accountant: 'Accountant',
-  counselor: 'Counselor',
-  parent: 'Parent',
-  student: 'Student',
-}
+// Primary-role name lookup is the same mapping assignDefaultUserRole()
+// uses to seed/assign roles — imported as LEGACY_ROLE_TO_RBAC_ROLE so
+// the two never drift out of sync.
+const LEGACY_ROLE_TO_NEW_NAME = LEGACY_ROLE_TO_RBAC_ROLE
 
 // ── GET /team/extra-roles - map of user_id -> additional role names ──
 router.get('/extra-roles', requireRole('school_admin', 'principal'),
