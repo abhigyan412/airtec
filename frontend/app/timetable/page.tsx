@@ -188,7 +188,7 @@ export default function TimetablePage() {
                 <select value={selectedSection} onChange={e => setSelectedSection(e.target.value)}
                   className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none">
                   <option value="">All sections</option>
-                  {sections.map((s: any) => <option key={s.id} value={s.id}>Section {s.name}</option>)}
+                  {sections.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </div>
             )}

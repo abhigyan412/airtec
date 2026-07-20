@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import { supabase } from './shared/db/client'
 import { assignDefaultUserRole } from './modules/rbac/seed'
+import { defaultSectionNamesForClass } from './shared/utils/helpers'
 
 async function seed() {
   console.log('🌱 Starting AIRTEC demo seed...\n')
@@ -62,12 +63,13 @@ async function seed() {
   const { data: classes } = await supabase.from('classes').insert(classRows).select()
   console.log(`   ✅ Created ${classes!.length} classes\n`)
 
-  // ── 5. Sections A & B for each class ────────────────────
+  // ── 5. Sections for each class (streams for 11 & 12) ────
   console.log('5️⃣  Creating sections...')
-  const sectionRows = classes!.flatMap(c => [
-    { school_id: school.id, class_id: c.id, name: 'A', max_strength: 40 },
-    { school_id: school.id, class_id: c.id, name: 'B', max_strength: 40 },
-  ])
+  const sectionRows = classes!.flatMap(c =>
+    defaultSectionNamesForClass(c.numeric_level).map(name => ({
+      school_id: school.id, class_id: c.id, name, max_strength: 40,
+    }))
+  )
   const { data: sections } = await supabase.from('sections').insert(sectionRows).select()
   console.log(`   ✅ Created ${sections!.length} sections\n`)
 

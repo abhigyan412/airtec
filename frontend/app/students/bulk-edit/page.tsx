@@ -138,7 +138,7 @@ export default function BulkEditPage() {
             <select value={filterSection} onChange={e => { setFilterSection(e.target.value); setSelected(new Set()) }}
               className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
               <option value="">All Sections</option>
-              {sections.map((s: any) => <option key={s.id} value={s.id}>Section {s.name}</option>)}
+              {sections.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           )}
           <select value={filterHouse} onChange={e => { setFilterHouse(e.target.value); setSelected(new Set()) }}
@@ -287,7 +287,7 @@ export default function BulkEditPage() {
                   </div>
                   <div className="hidden md:flex items-center gap-3 text-xs text-gray-500">
                     <span>{s.classes?.name ?? '—'}</span>
-                    {s.sections?.name && <span>Sec {s.sections.name}</span>}
+                    {s.sections?.name && <span>{s.sections.name}</span>}
                     {s.houses && (
                       <span className="px-2 py-0.5 rounded-full text-white text-xs font-medium"
                         style={{ backgroundColor: s.houses.color ?? '#6366f1' }}>

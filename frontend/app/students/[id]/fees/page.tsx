@@ -66,7 +66,7 @@ export default function StudentDetailPage() {
                 )}
                 {s.classes?.name && (
                   <span className="text-sm text-gray-500">
-                    {s.classes.name}{s.sections?.name ? ` · Section ${s.sections.name}` : ''}
+                    {s.classes.name}{s.sections?.name ? ` · ${s.sections.name}` : ''}
                   </span>
                 )}
                 {s.houses && (
@@ -109,7 +109,7 @@ export default function StudentDetailPage() {
           <Card title="Academic Details" icon={BookOpen}>
             <div className="grid grid-cols-2 gap-x-8 gap-y-4">
               <Detail label="Class" value={s.classes?.name ?? '—'} />
-              <Detail label="Section" value={s.sections?.name ? `Section ${s.sections.name}` : '—'} />
+              <Detail label="Section" value={s.sections?.name ?? '—'} />
               <Detail label="Roll Number" value={s.roll_number ?? '—'} />
               <Detail label="Stream" value={s.stream ?? '—'} />
               <Detail label="Academic Year" value={s.academic_years?.name ?? '—'} />

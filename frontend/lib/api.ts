@@ -136,6 +136,22 @@ export const admissionApi = {
     api.get('/admission/classes').then(r => r.data),
 }
 
+export const classesApi = {
+  list: () => api.get('/admission/classes').then(r => r.data),
+  create: (data: { name: string; numeric_level?: number; stream?: string }) =>
+    api.post('/admission/classes', data).then(r => r.data),
+  update: (id: string, data: { name?: string; numeric_level?: number; stream?: string }) =>
+    api.patch(`/admission/classes/${id}`, data).then(r => r.data),
+  delete: (id: string) => api.delete(`/admission/classes/${id}`).then(r => r.data),
+  sections: {
+    create: (classId: string, data: { name: string; max_strength?: number }) =>
+      api.post(`/admission/classes/${classId}/sections`, data).then(r => r.data),
+    update: (id: string, data: { name?: string; max_strength?: number }) =>
+      api.patch(`/admission/sections/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/admission/sections/${id}`).then(r => r.data),
+  },
+}
+
 export const feeApi = {
   heads: {
     list: () => api.get('/fees/heads').then(r => r.data),

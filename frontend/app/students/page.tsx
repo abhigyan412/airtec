@@ -114,7 +114,7 @@ export default function StudentsPage() {
                     </td>
                     <td className="px-5 py-3.5 text-gray-600">
                       {s.classes?.name ?? '—'}
-                      {s.sections?.name && <span className="text-gray-400"> · Sec {s.sections.name}</span>}
+                      {s.sections?.name && <span className="text-gray-400"> · {s.sections.name}</span>}
                     </td>
                     <td className="px-5 py-3.5">
                       {s.houses

@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Users, UserPlus, CreditCard,
   GraduationCap, LogOut, BookOpen, CalendarDays, MessageSquare,
-  Award, Clock, Library, Briefcase, Settings as SettingsIcon
+  Award, Clock, Library, Briefcase, Settings as SettingsIcon, GraduationCap as ClassesIcon
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -98,13 +98,31 @@ export function Sidebar() {
             href="/settings/team"
             className={cn(
               'flex items-center gap-2.5 px-[14px] py-2 rounded-[10px] text-[12px] transition-colors',
-              pathname.startsWith('/settings')
+              pathname.startsWith('/settings/team')
                 ? 'text-white bg-white/[0.06]'
                 : 'text-[#8A8A99] hover:text-white hover:bg-white/[0.04]'
             )}
           >
             <SettingsIcon className="w-[15px] h-[15px] flex-shrink-0" />
             <span>Team & Settings</span>
+          </Link>
+        </div>
+      )}
+
+      {/* Classes & Sections — same gate as the backend enforces (school_admin/principal) */}
+      {(isSuperRole || user?.role === 'principal') && (
+        <div className="px-2.5 mb-1">
+          <Link
+            href="/settings/classes"
+            className={cn(
+              'flex items-center gap-2.5 px-[14px] py-2 rounded-[10px] text-[12px] transition-colors',
+              pathname.startsWith('/settings/classes')
+                ? 'text-white bg-white/[0.06]'
+                : 'text-[#8A8A99] hover:text-white hover:bg-white/[0.04]'
+            )}
+          >
+            <ClassesIcon className="w-[15px] h-[15px] flex-shrink-0" />
+            <span>Classes & Sections</span>
           </Link>
         </div>
       )}

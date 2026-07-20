@@ -150,7 +150,7 @@ export default function AttendancePage() {
                 className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-gray-50 focus:bg-white">
                 <option value="">All sections</option>
                 {sections.map((s: any) => (
-                  <option key={s.id} value={s.id}>Section {s.name}</option>
+                  <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
             </div>
@@ -263,7 +263,7 @@ export default function AttendancePage() {
                     <p className="text-sm font-medium text-gray-900">{student.first_name} {student.last_name}</p>
                     <p className="text-xs text-gray-400">
                       Roll: {student.roll_number ?? '—'}
-                      {student.sections?.name && ` · Sec ${student.sections.name}`}
+                      {student.sections?.name && ` · ${student.sections.name}`}
                     </p>
                   </div>
                   {/* Status buttons — interactive only if canManage */}

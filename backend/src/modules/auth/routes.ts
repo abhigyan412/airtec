@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { authenticate, AuthRequest } from '../../shared/middleware/auth'
-import { asyncHandler } from '../../shared/utils/helpers'
+import { asyncHandler, defaultSectionNamesForClass } from '../../shared/utils/helpers'
 import { assignDefaultUserRole } from '../rbac/seed'
 
 const router = Router()
@@ -207,13 +207,20 @@ async function seedDefaultData(schoolId: string) {
     .select()
     .single()
 
-  // Default classes 1-12
-  const classes = Array.from({ length: 12 }, (_, i) => ({
+  // Default classes 1-12, each with default sections (streams for 11 & 12)
+  const classRows = Array.from({ length: 12 }, (_, i) => ({
     school_id: schoolId,
     name: `Class ${i + 1}`,
     numeric_level: i + 1,
   }))
-  await supabase.from('classes').insert(classes)
+  const { data: classes } = await supabase.from('classes').insert(classRows).select()
+
+  const sectionRows = (classes ?? []).flatMap(c =>
+    defaultSectionNamesForClass(c.numeric_level).map(name => ({
+      school_id: schoolId, class_id: c.id, name, max_strength: 40,
+    }))
+  )
+  if (sectionRows.length) await supabase.from('sections').insert(sectionRows)
 
   // Default houses
   await supabase.from('houses').insert([

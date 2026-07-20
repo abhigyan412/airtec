@@ -51,3 +51,17 @@ export const getPagination = (page = 1, limit = 20) => {
   const to = from + safeLimit - 1
   return { from, to, limit: safeLimit, page: safePage }
 }
+
+// Default section names for a freshly-created class, by numeric level.
+// Classes 11–12 (senior secondary) are organized by stream rather than
+// arbitrary letter sections, matching how Indian CBSE/ICSE/state-board
+// schools actually structure those two years — subject combinations,
+// and therefore timetables, differ by stream, not by section letter.
+// Used both by the demo seed script and by seedDefaultData() on new
+// school signup, so both stay in sync.
+export const defaultSectionNamesForClass = (numericLevel: number | null | undefined): string[] => {
+  if (numericLevel === 11 || numericLevel === 12) {
+    return ['PCM', 'PCB', 'Commerce', 'Humanities']
+  }
+  return ['A', 'B']
+}

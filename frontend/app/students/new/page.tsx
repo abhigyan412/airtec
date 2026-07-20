@@ -118,7 +118,7 @@ export default function NewStudentPage() {
             <Select label="Class" field="class_id" required
               options={(classesData ?? []).map((c: any) => ({ value: c.id, label: c.name }))} />
             <Select label="Section" field="section_id"
-              options={sections.map((s: any) => ({ value: s.id, label: `Section ${s.name}` }))} />
+              options={sections.map((s: any) => ({ value: s.id, label: s.name }))} />
             <Input label="Roll Number" field="roll_number" placeholder="01" />
             <Select label="Stream" field="stream"
               options={['Science','Commerce','Arts','General']} />

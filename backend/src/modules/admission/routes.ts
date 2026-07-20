@@ -684,6 +684,119 @@ router.get('/classes', asyncHandler(async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data })
 }))
 
+// POST /classes — create a class (e.g. "Class 11")
+router.post('/classes', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { name, numeric_level, stream } = req.body
+    const school_id = req.user!.school_id
+    if (!name) return res.status(400).json({ success: false, error: 'name is required' })
+
+    const { data, error } = await supabase
+      .from('classes')
+      .insert({ school_id, name, numeric_level: numeric_level ?? null, stream: stream || null })
+      .select('*, sections(*)')
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+// PATCH /classes/:id — rename a class / edit its level or stream label
+router.patch('/classes/:id', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const { name, numeric_level, stream } = req.body
+    const school_id = req.user!.school_id
+
+    const update: Record<string, any> = {}
+    if (name !== undefined) update.name = name
+    if (numeric_level !== undefined) update.numeric_level = numeric_level
+    if (stream !== undefined) update.stream = stream || null
+
+    const { data, error } = await supabase
+      .from('classes').update(update).eq('id', id).eq('school_id', school_id)
+      .select('*, sections(*)').single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// DELETE /classes/:id — refuses if any student is still assigned to it
+router.delete('/classes/:id', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+
+    const { count } = await supabase.from('students').select('*', { count: 'exact', head: true })
+      .eq('class_id', id).eq('school_id', school_id)
+    if (count) {
+      return res.status(400).json({ success: false, error: `Cannot delete — ${count} student(s) are assigned to this class` })
+    }
+
+    await supabase.from('sections').delete().eq('class_id', id).eq('school_id', school_id)
+    const { error } = await supabase.from('classes').delete().eq('id', id).eq('school_id', school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
+// POST /classes/:id/sections — add a section (or stream, e.g. "PCM") to a class
+router.post('/classes/:id/sections', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const { name, max_strength } = req.body
+    const school_id = req.user!.school_id
+    if (!name) return res.status(400).json({ success: false, error: 'name is required' })
+
+    const { data: cls } = await supabase.from('classes').select('id').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!cls) return res.status(404).json({ success: false, error: 'Class not found' })
+
+    const { data, error } = await supabase
+      .from('sections')
+      .insert({ school_id, class_id: id, name, max_strength: max_strength ?? 40 })
+      .select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+// PATCH /sections/:id — rename a section/stream
+router.patch('/sections/:id', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const { name, max_strength } = req.body
+    const school_id = req.user!.school_id
+
+    const update: Record<string, any> = {}
+    if (name !== undefined) update.name = name
+    if (max_strength !== undefined) update.max_strength = max_strength
+
+    const { data, error } = await supabase
+      .from('sections').update(update).eq('id', id).eq('school_id', school_id)
+      .select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// DELETE /sections/:id — refuses if any student is still assigned to it
+router.delete('/sections/:id', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+
+    const { count } = await supabase.from('students').select('*', { count: 'exact', head: true })
+      .eq('section_id', id).eq('school_id', school_id)
+    if (count) {
+      return res.status(400).json({ success: false, error: `Cannot delete — ${count} student(s) are assigned to this section` })
+    }
+
+    const { error } = await supabase.from('sections').delete().eq('id', id).eq('school_id', school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
 router.get('/academic-years', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase
     .from('academic_years')
