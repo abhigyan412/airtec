@@ -55,12 +55,12 @@ export const certificateApi = {
 export const admitCardApi = {
   single: (examId: string, studentId: string) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
-    return `http://localhost:4000/api/documents/admit-card/${examId}/${studentId}?token=${token}`
+    return `${API_BASE}/documents/admit-card/${examId}/${studentId}?token=${token}`
   },
   bulk: (examId: string, classId?: string) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
     const classParam = classId ? `&class_id=${classId}` : ''
-    return `${API_BASE}/documents/admit-card/${examId}/${studentId}?token=${token}`
+    return `${API_BASE}/documents/admit-cards/bulk/${examId}?token=${token}${classParam}`
   },
 }
 
