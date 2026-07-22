@@ -27,22 +27,32 @@ const CORE = [
   'resource.view', 'resource.upload', 'resource.delete',
   'staff.view', 'staff.edit', 'staff.attendance_mark', 'staff.leave_approve',
   'staff.payroll_manage', 'staff.recruitment_manage',
+  'homework.view', 'homework.create', 'homework.delete',
+  'syllabus.view', 'syllabus.plan', 'syllabus.log_progress',
 ]
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   'School Admin': [...CORE, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
   'Principal': [...CORE, 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
   'Vice Principal': CORE.filter(c => c !== 'staff.payroll_manage').concat(['role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage']),
-  'Teacher': ['student.view', 'exam.view', 'exam.marks_entry', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete'],
-  'Class Teacher': ['student.view', 'student.edit', 'exam.view', 'exam.marks_entry', 'exam.result_publish', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'complaint.resolve', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete'],
+  // Two different jobs that both live under "Homework": day-to-day
+  // homework/classwork is a teacher's direct communication to their own
+  // students/parents ("tonight's assignment is..."), so Teacher/Class
+  // Teacher get full control there — restricted client-side to only the
+  // class/section/subject combos on their own timetable. Syllabus due
+  // dates (the term-level pacing target) stay a senior-management-only
+  // responsibility (syllabus.plan) — teachers only log actual coverage
+  // against it (syllabus.log_progress).
+  'Teacher': ['student.view', 'exam.view', 'exam.marks_entry', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress'],
+  'Class Teacher': ['student.view', 'student.edit', 'exam.view', 'exam.marks_entry', 'exam.result_publish', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'complaint.resolve', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress'],
   'Accountant': ['student.view', 'fee.view', 'fee.collect', 'fee.discount', 'fee.export', 'fee.structure_manage', 'staff.view', 'staff.payroll_manage'],
   'Counselor': ['student.view', 'admission.view', 'admission.create', 'admission.edit', 'admission.follow_up', 'complaint.view', 'complaint.create'],
   'HR': ['staff.view', 'staff.edit', 'staff.attendance_mark', 'staff.leave_approve', 'staff.payroll_manage', 'staff.recruitment_manage', 'team.view', 'team.invite'],
   'Receptionist': ['student.view', 'admission.view', 'admission.create', 'admission.follow_up', 'complaint.view', 'complaint.create'],
   'Librarian': ['student.view', 'resource.view', 'resource.upload', 'resource.delete'],
-  'Exam Controller': ['student.view', 'exam.view', 'exam.create', 'exam.publish', 'exam.schedule', 'exam.marks_entry', 'exam.result_publish', 'exam.freeze', 'certificate.view', 'certificate.generate', 'tc.generate'],
-  'Parent': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view'],
-  'Student': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view'],
+  'Exam Controller': ['student.view', 'exam.view', 'exam.create', 'exam.publish', 'exam.schedule', 'exam.marks_entry', 'exam.result_publish', 'exam.freeze', 'certificate.view', 'certificate.generate', 'tc.generate', 'syllabus.view'],
+  'Parent': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
+  'Student': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
   'Transport Manager': ['student.view'],
   'Hostel Warden': ['student.view'],
   'Coordinator': ['student.view'],

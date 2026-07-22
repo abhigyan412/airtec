@@ -797,6 +797,47 @@ router.delete('/sections/:id', requireRole('school_admin', 'principal'),
   })
 )
 
+// ── SUBJECTS — the master list every subject_name field in the app
+// (timetable, homework, syllabus) should draw from, so "Mathematics"
+// typed in one place is the exact same string everywhere else instead
+// of drifting into "Maths"/"maths"/etc. class_id null = offered to
+// every class; set = specific to that one class (e.g. senior-secondary
+// electives), same nullable-scope pattern used for sections.
+router.get('/subjects', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { class_id } = req.query
+  const school_id = req.user!.school_id
+
+  let query = supabase.from('subjects').select('*').eq('school_id', school_id).order('name')
+  if (class_id) query = query.or(`class_id.eq.${class_id},class_id.is.null`)
+
+  const { data, error } = await query
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data })
+}))
+
+router.post('/subjects', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { name, class_id, is_elective } = req.body
+    const school_id = req.user!.school_id
+    if (!name?.trim()) return res.status(400).json({ success: false, error: 'name is required' })
+
+    const { data, error } = await supabase
+      .from('subjects')
+      .insert({ school_id, name: name.trim(), class_id: class_id || null, is_elective: !!is_elective })
+      .select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.delete('/subjects/:id', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { error } = await supabase.from('subjects').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
 router.get('/academic-years', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase
     .from('academic_years')

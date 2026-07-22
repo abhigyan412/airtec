@@ -150,6 +150,12 @@ export const classesApi = {
       api.patch(`/admission/sections/${id}`, data).then(r => r.data),
     delete: (id: string) => api.delete(`/admission/sections/${id}`).then(r => r.data),
   },
+  subjects: {
+    list: (classId?: string) => api.get('/admission/subjects', { params: { class_id: classId } }).then(r => r.data),
+    create: (data: { name: string; class_id?: string; is_elective?: boolean }) =>
+      api.post('/admission/subjects', data).then(r => r.data),
+    delete: (id: string) => api.delete(`/admission/subjects/${id}`).then(r => r.data),
+  },
 }
 
 export const feeApi = {
@@ -343,5 +349,32 @@ export const rbacApi = {
     list: () => api.get('/rbac/permissions').then(r => r.data),
   },
   userRoles: (userId: string) => api.get(`/rbac/users/${userId}/roles`).then(r => r.data),
+}
+
+export const homeworkApi = {
+  list: (params?: { class_id?: string; section_id?: string; subject_name?: string }) =>
+    api.get('/academics/homework', { params }).then(r => r.data),
+  create: (data: any) => api.post('/academics/homework', data).then(r => r.data),
+  delete: (id: string) => api.delete(`/academics/homework/${id}`).then(r => r.data),
+}
+
+export const syllabusApi = {
+  list: (params?: { class_id?: string; section_id?: string; subject_name?: string }) =>
+    api.get('/academics/syllabus', { params }).then(r => r.data),
+  stats: (params?: { class_id?: string; section_id?: string }) =>
+    api.get('/academics/syllabus/stats', { params }).then(r => r.data),
+  createChapters: (data: any) => api.post('/academics/syllabus', data).then(r => r.data),
+  update: (id: string, data: any) => api.patch(`/academics/syllabus/${id}`, data).then(r => r.data),
+  delete: (id: string) => api.delete(`/academics/syllabus/${id}`).then(r => r.data),
+  notes: {
+    list: (params?: { class_id?: string; subject_name?: string; from?: string; to?: string }) =>
+      api.get('/academics/progress-notes', { params }).then(r => r.data),
+    create: (data: any) => api.post('/academics/progress-notes', data).then(r => r.data),
+    delete: (id: string) => api.delete(`/academics/progress-notes/${id}`).then(r => r.data),
+  },
+}
+
+export const academicsApi = {
+  myClasses: () => api.get('/academics/my-classes').then(r => r.data),
 }
 

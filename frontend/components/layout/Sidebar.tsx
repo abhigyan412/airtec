@@ -4,7 +4,8 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Users, UserPlus, CreditCard,
   GraduationCap, LogOut, BookOpen, CalendarDays, MessageSquare,
-  Award, Clock, Library, Briefcase, Settings as SettingsIcon, GraduationCap as ClassesIcon
+  Award, Clock, Library, Briefcase, Settings as SettingsIcon, GraduationCap as ClassesIcon,
+  NotebookPen
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -27,6 +28,7 @@ const NAV = [
   { href: '/complaints', label: 'Complaints', icon: MessageSquare, permission: 'complaint.view' },
   { href: '/certificates', label: 'Certificates', icon: Award, permission: 'certificate.view' },
   { href: '/timetable', label: 'Timetable', icon: Clock, permission: 'timetable.view' },
+  { href: '/homework', label: 'Homework', icon: NotebookPen, permission: 'homework.view' },
   { href: '/resources', label: 'Resource Centre', icon: Library, permission: 'resource.view' },
   { href: '/hr/staff', label: 'Staff & HR', icon: Briefcase, permission: 'staff.view' },
   { href: '/hr/my-leave', label: 'My Leave', icon: CalendarDays, permission: null },

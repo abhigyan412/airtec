@@ -15,6 +15,7 @@ import documentRoutes from './modules/documents/routes'
 import { errorHandler, notFoundHandler } from './shared/utils/helpers'
 import teamRoutes from './modules/team/routes'
 import rbacRoutes from './modules/rbac/routes'
+import academicsRoutes from './modules/academics/routes'
 
 
 
@@ -40,6 +41,7 @@ app.use('/api/documents', documentRoutes)
 app.use('/api/hrms', hrmsRoutes)
 app.use('/api/team', teamRoutes)
 app.use('/api/rbac', rbacRoutes)
+app.use('/api/academics', academicsRoutes)
 
 app.use(notFoundHandler)
 app.use(errorHandler)

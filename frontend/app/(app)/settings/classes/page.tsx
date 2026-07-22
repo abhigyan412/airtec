@@ -119,6 +119,26 @@ function ClassCard({ cls, onDeleteClass, onChanged }: { cls: any; onDeleteClass:
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to rename section'),
   })
 
+  const [addingSubject, setAddingSubject] = useState(false)
+  const [subjectName, setSubjectName] = useState('')
+
+  const { data: subjects, refetch: refetchSubjects } = useQuery({
+    queryKey: ['subjects', cls.id],
+    queryFn: () => classesApi.subjects.list(cls.id).then(r => r.data),
+  })
+
+  const addSubjectMutation = useMutation({
+    mutationFn: () => classesApi.subjects.create({ name: subjectName.trim(), class_id: cls.id }),
+    onSuccess: () => { refetchSubjects(); setSubjectName(''); setAddingSubject(false); toast.success('Subject added') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to add subject'),
+  })
+
+  const deleteSubjectMutation = useMutation({
+    mutationFn: (id: string) => classesApi.subjects.delete(id),
+    onSuccess: () => { refetchSubjects(); toast.success('Subject removed') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to remove subject'),
+  })
+
   const sections = cls.sections ?? []
   const isSenior = cls.numeric_level === 11 || cls.numeric_level === 12
 
@@ -183,6 +203,54 @@ function ClassCard({ cls, onDeleteClass, onChanged }: { cls: any; onDeleteClass:
           <span className="text-xs text-gray-400">No {isSenior ? 'streams' : 'sections'} yet</span>
         )}
       </div>
+
+      <div className="mt-4 pt-4 border-t border-gray-50">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">
+          Subjects — used across Timetable, Homework & Syllabus
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {(subjects ?? []).map((s: any) => (
+            <SubjectChip key={s.id} subject={s} onDelete={() => deleteSubjectMutation.mutate(s.id)} />
+          ))}
+
+          {addingSubject ? (
+            <div className="flex items-center gap-1">
+              <input autoFocus value={subjectName} onChange={e => setSubjectName(e.target.value)}
+                placeholder="e.g. Physics"
+                onKeyDown={e => e.key === 'Enter' && subjectName.trim() && addSubjectMutation.mutate()}
+                className="px-3 py-1.5 text-xs border border-emerald-300 rounded-lg w-32 focus:outline-none focus:ring-2 focus:ring-emerald-500/20" />
+              <button onClick={() => subjectName.trim() && addSubjectMutation.mutate()} disabled={addSubjectMutation.isPending}
+                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
+                {addSubjectMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+              </button>
+              <button onClick={() => { setAddingSubject(false); setSubjectName('') }} className="p-1.5 text-gray-400 hover:bg-gray-50 rounded-lg transition-colors">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => setAddingSubject(true)}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-dashed border-gray-300 text-gray-400 hover:border-emerald-300 hover:text-emerald-500 transition-colors">
+              <Plus className="w-3 h-3" /> Add Subject
+            </button>
+          )}
+
+          {(subjects ?? []).length === 0 && !addingSubject && (
+            <span className="text-xs text-gray-400">No subjects yet</span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── SUBJECT CHIP ──────────────────────────────────────────────
+function SubjectChip({ subject, onDelete }: { subject: any; onDelete: () => void }) {
+  return (
+    <div className="group flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 rounded-lg text-xs font-medium border bg-emerald-50 border-emerald-100 text-emerald-700">
+      <span>{subject.name}</span>
+      <button onClick={onDelete} className="opacity-0 group-hover:opacity-100 text-emerald-300 hover:text-red-500 transition-all">
+        <X className="w-3 h-3" />
+      </button>
     </div>
   )
 }

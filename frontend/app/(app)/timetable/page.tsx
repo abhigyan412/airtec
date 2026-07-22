@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { timetableApi, admissionApi, api } from '@/lib/api'
+import { timetableApi, admissionApi, classesApi, api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Plus, Trash2, Loader2, Clock, Grid3X3, List, Printer, User, AlertTriangle, ShieldOff } from 'lucide-react'
 import { toast } from 'sonner'
@@ -439,6 +439,15 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
     queryFn: () => api.get('/students/timetable/teachers').then(r => r.data.data).catch(() => []),
   })
 
+  // Subjects come from the school's master list (Settings -> Classes &
+  // Sections), not free text — this is the same list Homework and
+  // Syllabus draw from, so a teacher scheduled here for "Mathematics"
+  // matches exactly what shows up on their Homework/Syllabus view.
+  const { data: subjectsData } = useQuery({
+    queryKey: ['subjects', classId],
+    queryFn: () => classesApi.subjects.list(classId).then(r => r.data),
+  })
+
   const calcEnd = (start: string, mins = 45) => {
     const [h, m] = start.split(':').map(Number)
     const t = h * 60 + m + mins
@@ -478,7 +487,6 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
   }
 
   const ic = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-  const SUBJECTS = ['Mathematics','English','Science','Hindi','Social Studies','Computer','Art','Physical Ed','Sanskrit','Drawing','Sports','Moral Science','General Knowledge']
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
@@ -500,9 +508,14 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
             <>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject *</label>
-                <input list="subj-list" className={ic} value={form.subject_name}
-                  onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))} placeholder="e.g. Mathematics" />
-                <datalist id="subj-list">{SUBJECTS.map(s => <option key={s} value={s} />)}</datalist>
+                <select className={ic} value={form.subject_name}
+                  onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))}>
+                  <option value="">Select subject...</option>
+                  {(subjectsData ?? []).map((s: any) => <option key={s.id} value={s.name}>{s.name}</option>)}
+                </select>
+                {(subjectsData ?? []).length === 0 && (
+                  <p className="text-xs text-amber-600 mt-1.5">No subjects set up for this class yet — add some in Settings → Classes & Sections.</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Teacher</label>

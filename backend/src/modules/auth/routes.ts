@@ -230,6 +230,13 @@ async function seedDefaultData(schoolId: string) {
     { school_id: schoolId, name: 'Yellow House', color: '#EAB308' },
   ])
 
+  // Default subjects (school-wide — class_id null) — a starting point;
+  // admins add/remove their own from Settings -> Classes & Sections.
+  await supabase.from('subjects').insert([
+    'Mathematics', 'English', 'Science', 'Hindi', 'Social Studies', 'Computer',
+    'Art', 'Physical Education', 'Sanskrit', 'Moral Science', 'General Knowledge',
+  ].map(name => ({ school_id: schoolId, name })))
+
   // Default fee heads
   await supabase.from('fee_heads').insert([
     { school_id: schoolId, name: 'Tuition Fee', description: 'Monthly tuition charges' },
