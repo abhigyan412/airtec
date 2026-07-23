@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, Download } from 'lucide-react'
+import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, Download, AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 
@@ -27,6 +27,7 @@ export default function PayrollPage() {
   const [year, setYear] = useState(now.getFullYear())
 
   const canApprove = ['school_admin', 'principal'].includes(user?.role ?? '')
+  const [skipped, setSkipped] = useState<{ user_id: string; full_name: string; role: string }[] | null>(null)
 
   const { data: payslips, isLoading } = useQuery({
     queryKey: ['payslips', month, year],
@@ -43,7 +44,10 @@ export default function PayrollPage() {
     onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['payslips'] })
       qc.invalidateQueries({ queryKey: ['payroll-summary'] })
-      toast.success(`${res.data?.count ?? 0} payslip(s) generated`)
+      // count/skipped are siblings of data (the generated payslips array),
+      // not nested inside it — res.data?.count was always undefined.
+      toast.success(`${res.count ?? 0} payslip(s) generated`)
+      setSkipped(res.skipped ?? [])
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to generate'),
   })
@@ -103,10 +107,10 @@ export default function PayrollPage() {
       </div>
 
       {/* Summary cards */}
-      {summary && summary.total_staff > 0 && (
+      {summary && summary.payslip_count > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {[
-            { label: 'Total Staff', value: summary.total_staff, color: 'text-gray-900' },
+            { label: 'Payslips Generated', value: summary.payslip_count, color: 'text-gray-900' },
             { label: 'Gross Total', value: `₹${Number(summary.total_gross).toLocaleString('en-IN')}`, color: 'text-emerald-600' },
             { label: 'Deductions', value: `₹${Number(summary.total_deductions).toLocaleString('en-IN')}`, color: 'text-red-500' },
             { label: 'Net Payable', value: `₹${Number(summary.total_net).toLocaleString('en-IN')}`, color: 'text-indigo-600' },
@@ -117,6 +121,24 @@ export default function PayrollPage() {
               <p className="text-xs text-gray-500 mt-1">{s.label}</p>
             </div>
           ))}
+        </div>
+      )}
+
+      {skipped !== null && skipped.length > 0 && (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4">
+          <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-800">
+            <p className="font-semibold">{skipped.length} staff member{skipped.length !== 1 ? 's' : ''} skipped — no salary structure on file</p>
+            <p className="text-xs text-amber-700 mt-1">
+              {skipped.map((s, i) => (
+                <span key={s.user_id}>
+                  {i > 0 && ', '}
+                  <Link href={`/hr/staff/${s.user_id}`} className="underline hover:text-amber-900">{s.full_name}</Link>
+                </span>
+              ))}
+              {' — set their salary under Staff → Payroll tab, then generate again.'}
+            </p>
+          </div>
         </div>
       )}
 

@@ -77,6 +77,8 @@ export const studentsApi = {
     api.get('/students/stats/dashboard').then(r => r.data),
   bulkPromote: (data: any) =>
     api.post('/students/bulk/promote', data).then(r => r.data),
+  promotions: (params?: { student_id?: string; limit?: number }) =>
+    api.get('/students/promotions', { params }).then(r => r.data),
   issueTC: (id: string, data: any) =>
     api.post(`/students/${id}/tc`, data).then(r => r.data),
   uploadPhoto: (id: string, data: any) =>
@@ -93,6 +95,11 @@ export const studentsApi = {
     api.get('/students/attendance/class', { params: { class_id: classId, date, section_id: sectionId } }).then(r => r.data),
   saveAttendance: (data: any) =>
     api.post('/students/attendance', data).then(r => r.data),
+  getAttendanceReport: (classId: string, month: number, year: number, sectionId?: string) =>
+    api.get('/students/attendance/report', { params: { class_id: classId, month, year, section_id: sectionId || undefined } }).then(r => r.data),
+  // Custom range (e.g. academic-year-to-date) instead of a single month.
+  getAttendanceReportRange: (classId: string, from: string, to: string, sectionId?: string) =>
+    api.get('/students/attendance/report', { params: { class_id: classId, from, to, section_id: sectionId || undefined } }).then(r => r.data),
   tc: {
     request: (id: string, data: any) => api.post(`/students/${id}/tc`, data).then(r => r.data),
     list: (id: string) => api.get(`/students/${id}/tc`).then(r => r.data),
@@ -101,6 +108,10 @@ export const studentsApi = {
     workflowAction: (id: string, tcId: string, status: 'approved' | 'rejected', notes?: string) =>
       api.post(`/students/${id}/tc/${tcId}/workflow-action`, { status, notes }).then(r => r.data),
   },
+}
+
+export const academicYearsApi = {
+  list: () => api.get('/admission/academic-years').then(r => r.data),
 }
 
 export const admissionApi = {
@@ -155,6 +166,20 @@ export const classesApi = {
     create: (data: { name: string; class_id?: string; is_elective?: boolean }) =>
       api.post('/admission/subjects', data).then(r => r.data),
     delete: (id: string) => api.delete(`/admission/subjects/${id}`).then(r => r.data),
+  },
+}
+
+export const calendarApi = {
+  holidays: {
+    list: (year?: number) => api.get('/admission/holidays', { params: { year } }).then(r => r.data),
+    create: (data: { date: string; name: string }) =>
+      api.post('/admission/holidays', data).then(r => r.data),
+    delete: (id: string) => api.delete(`/admission/holidays/${id}`).then(r => r.data),
+  },
+  weeklyOff: {
+    get: () => api.get('/admission/weekly-off').then(r => r.data),
+    update: (weekly_off_days: number[]) =>
+      api.patch('/admission/weekly-off', { weekly_off_days }).then(r => r.data),
   },
 }
 
@@ -266,6 +291,7 @@ export const hrmsApi = {
     stats: () => api.get('/hrms/leave-requests/stats').then(r => r.data),
     create: (data: any) => api.post('/hrms/leave-requests', data).then(r => r.data),
     update: (id: string, data: any) => api.patch(`/hrms/leave-requests/${id}`, data).then(r => r.data),
+    cancel: (id: string, reason?: string) => api.delete(`/hrms/leave-requests/${id}`, { data: { reason } }).then(r => r.data),
   },
   leaveBalances: (userId: string, year?: number) =>
     api.get(`/hrms/leave-balances/${userId}`, { params: { year } }).then(r => r.data),
@@ -285,6 +311,8 @@ export const hrmsApi = {
   attendance: {
     list: (params?: any) => api.get('/hrms/attendance', { params }).then(r => r.data),
     save: (data: any) => api.post('/hrms/attendance', data).then(r => r.data),
+    report: (month: number, year: number, department?: string) =>
+      api.get('/hrms/attendance/report', { params: { month, year, department: department || undefined } }).then(r => r.data),
   },
   jobPostings: {
     list: (params?: any) => api.get('/hrms/job-postings', { params }).then(r => r.data),

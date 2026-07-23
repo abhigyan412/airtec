@@ -4,6 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
+import { getNonWorkingDaySets, isWorkingDate } from '../../shared/utils/academicCalendar'
 
 const router = Router()
 router.use(authenticate)
@@ -229,6 +230,89 @@ router.post('/attendance', requireRole('school_admin', 'principal', 'teacher'),
   })
 )
 
+// ── ATTENDANCE (report — class-wise / section-wise, month or a
+// custom range e.g. academic-year-to-date) ──
+// Per-student rollup. section_id is optional, same nullable-scope
+// convention as everywhere else: omit it for the whole class, pass it
+// to narrow to one section. Pass explicit `from`/`to` (YYYY-MM-DD) to
+// roll up an arbitrary range — e.g. the current academic year's
+// start_date through today — instead of a single calendar month.
+//
+// "Working days" = distinct dates that have an attendance record for
+// this class/section AND aren't a declared holiday AND aren't a
+// weekly-off weekday (schools.weekly_off_days). A date attendance was
+// (mistakenly) marked on a holiday/weekly-off day doesn't count either
+// way — it's dropped from both the numerator and denominator. Days
+// nobody marked attendance on are excluded from the denominator too,
+// not assumed as absences, since there's no way to tell "closed" from
+// "forgot to mark".
+router.get('/attendance/report', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { class_id, section_id, month, year, from, to } = req.query
+  const school_id = req.user!.school_id
+  if (!class_id) return res.status(400).json({ success: false, error: 'class_id required' })
+
+  const now = new Date()
+  const y = year ? Number(year) : now.getFullYear()
+  const m = month ? Number(month) : now.getMonth() + 1
+  const mStr = String(m).padStart(2, '0')
+  const fromDate = (from as string) || `${y}-${mStr}-01`
+  const toDate = (to as string) || `${y}-${mStr}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+
+  let studentsQuery = supabase.from('students')
+    .select('id, first_name, last_name, roll_number, admission_number, section_id, sections(name)')
+    .eq('school_id', school_id).eq('class_id', class_id as string).eq('status', 'active').order('roll_number')
+  if (section_id) studentsQuery = studentsQuery.eq('section_id', section_id as string)
+  const { data: students, error: studentsErr } = await studentsQuery
+  if (studentsErr) return res.status(500).json({ success: false, error: studentsErr.message })
+
+  const nonWorkingSets = await getNonWorkingDaySets(school_id, fromDate, toDate)
+
+  const studentIds = (students ?? []).map(s => s.id)
+  const { data: rawRecords, error: attErr } = studentIds.length
+    ? await supabase.from('attendance').select('student_id, date, status')
+        .eq('school_id', school_id).in('student_id', studentIds)
+        .gte('date', fromDate).lte('date', toDate)
+    : { data: [], error: null }
+  if (attErr) return res.status(500).json({ success: false, error: attErr.message })
+
+  const records = (rawRecords ?? []).filter(r => isWorkingDate(r.date, nonWorkingSets))
+  const workingDays = new Set(records.map(r => r.date)).size
+
+  const byStudent = new Map<string, { present: number; absent: number; late: number; leave: number }>()
+  for (const r of records) {
+    if (!byStudent.has(r.student_id)) byStudent.set(r.student_id, { present: 0, absent: 0, late: 0, leave: 0 })
+    const counts = byStudent.get(r.student_id)!
+    if (r.status === 'present') counts.present++
+    else if (r.status === 'absent') counts.absent++
+    else if (r.status === 'late') counts.late++
+    else if (r.status === 'leave') counts.leave++
+  }
+
+  const data = (students ?? []).map(s => {
+    const counts = byStudent.get(s.id) ?? { present: 0, absent: 0, late: 0, leave: 0 }
+    const percentage = workingDays > 0 ? Math.round((counts.present / workingDays) * 100) : 0
+    return {
+      student_id: s.id,
+      first_name: s.first_name,
+      last_name: s.last_name,
+      roll_number: s.roll_number,
+      admission_number: s.admission_number,
+      section_id: s.section_id,
+      section_name: (s as any).sections?.name ?? null,
+      ...counts,
+      percentage,
+    }
+  })
+
+  res.json({
+    success: true,
+    data: {
+      students: data, working_days: workingDays, holidays_in_month: nonWorkingSets.holidays.size,
+      month: m, year: y, from: fromDate, to: toDate,
+    },
+  })
+}))
+
 // ── COMPLAINTS ───────────────────────────────────────────────
 router.get('/complaints/all', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { status, category, priority, page = '1', limit = '20' } = req.query
@@ -312,7 +396,14 @@ router.post('/bulk/promote', requireRole('school_admin', 'principal'),
       to_section_id: body.to_section_id, promotion_type: body.promotion_type,
       promoted_by: req.user!.id, notes: body.notes,
     }))
-    await supabase.from('student_promotions').insert(promotionRecords)
+    // Write the audit record BEFORE moving the students, and check its
+    // error — this insert previously ran unchecked and silently failed
+    // (RLS was enabled on student_promotions with zero policies), so
+    // every promotion's audit trail was lost while the actual class
+    // change went through unnoticed. Failing loudly here beats an
+    // invisible gap in a compliance-relevant history table.
+    const { error: promoErr } = await supabase.from('student_promotions').insert(promotionRecords)
+    if (promoErr) return res.status(500).json({ success: false, error: `Failed to record promotion history: ${promoErr.message}` })
 
     const { error: updateErr } = await supabase.from('students')
       .update({ class_id: body.to_class_id, section_id: body.to_section_id ?? null, academic_year_id: body.to_academic_year_id })
@@ -322,6 +413,35 @@ router.post('/bulk/promote', requireRole('school_admin', 'principal'),
     res.json({ success: true, data: { promoted_count: students.length, message: `${students.length} students promoted successfully` } })
   })
 )
+
+// GET /students/promotions — audit trail for the endpoint above. Was
+// write-only until now (nothing could ever see a promotion/transfer
+// after the fact). Optional student_id narrows to one student's history
+// (used on their profile); omit it for a school-wide recent-activity feed.
+router.get('/promotions', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { student_id, limit = '50' } = req.query
+  const school_id = req.user!.school_id
+
+  let query = supabase
+    .from('student_promotions')
+    .select(`
+      *,
+      students(first_name, last_name, admission_number),
+      from_class:from_class_id(name), to_class:to_class_id(name),
+      from_section:from_section_id(name), to_section:to_section_id(name),
+      from_year:from_academic_year_id(name), to_year:to_academic_year_id(name),
+      promoter:promoted_by(full_name)
+    `)
+    .eq('school_id', school_id)
+    .order('created_at', { ascending: false })
+    .limit(Number(limit))
+
+  if (student_id) query = query.eq('student_id', student_id as string)
+
+  const { data, error } = await query
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data })
+}))
 router.get('/timetable/teachers', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase
     .from('users')
@@ -600,10 +720,12 @@ router.get('/:id/attendance', asyncHandler(async (req: AuthRequest, res: Respons
   const { id } = req.params
   const { month, year } = req.query
   const school_id = req.user!.school_id
-  const m = month ? String(month).padStart(2, '0') : String(new Date().getMonth() + 1).padStart(2, '0')
-  const y = year ?? new Date().getFullYear()
+  const yNum = year ? Number(year) : new Date().getFullYear()
+  const mNum = month ? Number(month) : new Date().getMonth() + 1
+  const m = String(mNum).padStart(2, '0')
+  const lastDay = new Date(yNum, mNum, 0).getDate()
   const { data, error } = await supabase.from('attendance').select('*')
-    .eq('student_id', id).eq('school_id', school_id).gte('date', `${y}-${m}-01`).lte('date', `${y}-${m}-31`).order('date')
+    .eq('student_id', id).eq('school_id', school_id).gte('date', `${yNum}-${m}-01`).lte('date', `${yNum}-${m}-${String(lastDay).padStart(2, '0')}`).order('date')
   if (error) return res.status(500).json({ success: false, error: error.message })
   const present = data?.filter(a => a.status === 'present').length ?? 0
   const absent = data?.filter(a => a.status === 'absent').length ?? 0

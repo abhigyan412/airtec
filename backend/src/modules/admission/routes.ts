@@ -838,6 +838,67 @@ router.delete('/subjects/:id', requireRole('school_admin', 'principal'),
   })
 )
 
+// ── ACADEMIC CALENDAR — holiday list + weekly-off pattern. This is
+// the source of truth attendance.report reads "working days" from,
+// so a date only counts against a student's attendance % if it's
+// neither a weekly-off weekday nor an explicitly declared holiday.
+router.get('/holidays', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { year } = req.query
+  const school_id = req.user!.school_id
+
+  let query = supabase.from('holidays').select('*').eq('school_id', school_id).order('date')
+  if (year) query = query.gte('date', `${year}-01-01`).lte('date', `${year}-12-31`)
+
+  const { data, error } = await query
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data })
+}))
+
+router.post('/holidays', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { date, name } = req.body
+    const school_id = req.user!.school_id
+    if (!date || !name?.trim()) return res.status(400).json({ success: false, error: 'date and name are required' })
+
+    const { data, error } = await supabase
+      .from('holidays')
+      .insert({ school_id, date, name: name.trim() })
+      .select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.delete('/holidays/:id', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { error } = await supabase.from('holidays').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
+// weekly_off_days: array of JS Date.getDay() indices (0=Sun..6=Sat) that
+// never count as a working day, regardless of the holiday list above.
+router.get('/weekly-off', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { data, error } = await supabase.from('schools').select('weekly_off_days').eq('id', req.user!.school_id).single()
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data: { weekly_off_days: data?.weekly_off_days ?? [0] } })
+}))
+
+router.patch('/weekly-off', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { weekly_off_days } = req.body
+    if (!Array.isArray(weekly_off_days) || weekly_off_days.some((d: any) => !Number.isInteger(d) || d < 0 || d > 6)) {
+      return res.status(400).json({ success: false, error: 'weekly_off_days must be an array of integers 0-6' })
+    }
+    const { data, error } = await supabase
+      .from('schools').update({ weekly_off_days }).eq('id', req.user!.school_id)
+      .select('weekly_off_days').single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
 router.get('/academic-years', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase
     .from('academic_years')

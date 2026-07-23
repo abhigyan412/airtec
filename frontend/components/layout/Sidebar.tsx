@@ -129,6 +129,24 @@ export function Sidebar() {
         </div>
       )}
 
+      {/* Academic Calendar — same gate as Classes & Sections */}
+      {(isSuperRole || user?.role === 'principal') && (
+        <div className="px-2.5 mb-1">
+          <Link
+            href="/settings/calendar"
+            className={cn(
+              'flex items-center gap-2.5 px-[14px] py-2 rounded-[10px] text-[12px] transition-colors',
+              pathname.startsWith('/settings/calendar')
+                ? 'text-white bg-white/[0.06]'
+                : 'text-[#8A8A99] hover:text-white hover:bg-white/[0.04]'
+            )}
+          >
+            <CalendarDays className="w-[15px] h-[15px] flex-shrink-0" />
+            <span>Academic Calendar</span>
+          </Link>
+        </div>
+      )}
+
       {/* User */}
       <div className="m-2.5 mt-1.5">
         <div className="flex items-center gap-2.5 px-[14px] py-3 rounded-[10px] bg-white/[0.03] hover:bg-white/[0.06] transition-colors">

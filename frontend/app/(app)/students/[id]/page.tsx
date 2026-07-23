@@ -1,21 +1,29 @@
 'use client'
 import { useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { studentsApi } from '@/lib/api'
+import { studentsApi, admissionApi, academicYearsApi } from '@/lib/api'
 import { formatDate, formatCurrency, cn, STATUS_COLORS } from '@/lib/utils'
 import { TransferCertificateCard } from '@/components/students/TransferCertificateCard'
-import { ArrowLeft, User, BookOpen, Phone, CreditCard, FileText, Calendar, Droplets, MapPin, Mail, Hash, Camera, Loader2 } from 'lucide-react'
+import { ArrowLeft, User, BookOpen, Phone, CreditCard, FileText, Calendar, Droplets, MapPin, Mail, Hash, Camera, Loader2, ArrowRightLeft, X, History } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { API_BASE } from '@/lib/api'
 
 export default function StudentDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const qc = useQueryClient()
+  const [showTransferModal, setShowTransferModal] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['student', id],
     queryFn: () => studentsApi.get(id).then(r => r.data),
+  })
+
+  const { data: promotions } = useQuery({
+    queryKey: ['student-promotions', id],
+    queryFn: () => studentsApi.promotions({ student_id: id }).then(r => r.data),
+    enabled: !!id,
   })
 
   if (isLoading) {
@@ -83,6 +91,10 @@ export default function StudentDetailPage() {
             className="px-4 py-2 border border-gray-200 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
             ID Card
           </a>
+          <button onClick={() => setShowTransferModal(true)}
+            className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
+            <ArrowRightLeft className="w-3.5 h-3.5" /> Transfer
+          </button>
           <Link href={`/students/${id}/edit`}
             className="px-4 py-2 border border-gray-200 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
             Edit profile
@@ -122,6 +134,29 @@ export default function StudentDetailPage() {
               </div>
             )}
           </Card>
+
+          {(promotions ?? []).length > 0 && (
+            <Card title="Promotion / Transfer History" icon={History}>
+              <div className="space-y-3">
+                {promotions.map((p: any) => (
+                  <div key={p.id} className="flex items-center justify-between text-sm border-b border-gray-50 last:border-0 pb-3 last:pb-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold capitalize bg-indigo-50 text-indigo-600 flex-shrink-0">
+                        {p.promotion_type}
+                      </span>
+                      <span className="text-gray-500 truncate">
+                        {p.from_class?.name ?? '—'}{p.from_section?.name ? ` · ${p.from_section.name}` : ''}
+                        {' → '}
+                        {p.to_class?.name ?? '—'}{p.to_section?.name ? ` · ${p.to_section.name}` : ''}
+                        {p.to_year?.name && ` (${p.to_year.name})`}
+                      </span>
+                    </div>
+                    <span className="text-xs text-gray-400 flex-shrink-0 ml-3">{formatDate(p.created_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
 
           {parent && (
             <Card title="Parent / Guardian" icon={Phone}>
@@ -190,9 +225,120 @@ export default function StudentDetailPage() {
           </div>
         </div>
       </div>
+
+      {showTransferModal && (
+        <TransferModal
+          student={s}
+          onClose={() => setShowTransferModal(false)}
+          onDone={() => {
+            setShowTransferModal(false)
+            qc.invalidateQueries({ queryKey: ['student', id] })
+            qc.invalidateQueries({ queryKey: ['student-promotions', id] })
+          }}
+        />
+      )}
     </div>
   )
 }
+
+function TransferModal({ student, onClose, onDone }: { student: any; onClose: () => void; onDone: () => void }) {
+  const [toClass, setToClass] = useState(student.class_id ?? '')
+  const [toSection, setToSection] = useState(student.section_id ?? '')
+  const [toAcademicYear, setToAcademicYear] = useState(student.academic_year_id ?? '')
+  const [promotionType, setPromotionType] = useState('transferred')
+  const [notes, setNotes] = useState('')
+
+  const { data: classesData } = useQuery({
+    queryKey: ['classes'],
+    queryFn: () => admissionApi.classes().then(r => r.data),
+  })
+  const { data: academicYears } = useQuery({
+    queryKey: ['academic-years'],
+    queryFn: () => academicYearsApi.list().then(r => r.data),
+  })
+  const toClassObj = (classesData ?? []).find((c: any) => c.id === toClass)
+  const toSections = toClassObj?.sections ?? []
+
+  const transferMutation = useMutation({
+    mutationFn: () => studentsApi.bulkPromote({
+      student_ids: [student.id],
+      to_class_id: toClass,
+      to_section_id: toSection || undefined,
+      to_academic_year_id: toAcademicYear,
+      promotion_type: promotionType,
+      notes: notes || undefined,
+    }),
+    onSuccess: () => {
+      toast.success('Student transferred')
+      onDone()
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to transfer'),
+  })
+
+  const ic = "w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
+        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900">Transfer — {student.first_name} {student.last_name}</h2>
+          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Class *</label>
+              <select className={ic} value={toClass} onChange={e => { setToClass(e.target.value); setToSection('') }}>
+                <option value="">Select class...</option>
+                {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Section</label>
+              <select className={ic} value={toSection} onChange={e => setToSection(e.target.value)} disabled={!toClass}>
+                <option value="">Unassigned</option>
+                {toSections.map((sec: any) => <option key={sec.id} value={sec.id}>{sec.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Academic Year *</label>
+              <select className={ic} value={toAcademicYear} onChange={e => setToAcademicYear(e.target.value)}>
+                <option value="">Select year...</option>
+                {(academicYears ?? []).map((y: any) => <option key={y.id} value={y.id}>{y.name}{y.is_current ? ' (current)' : ''}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
+              <select className={ic} value={promotionType} onChange={e => setPromotionType(e.target.value)}>
+                {PROMOTION_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Notes (optional)</label>
+            <input type="text" className={ic} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason for transfer..." />
+          </div>
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
+          <button onClick={() => transferMutation.mutate()} disabled={transferMutation.isPending || !toClass || !toAcademicYear}
+            className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60">
+            {transferMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} Confirm Transfer
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const PROMOTION_TYPES = [
+  { value: 'transferred', label: 'Transferred' },
+  { value: 'promoted', label: 'Promoted' },
+  { value: 'detained', label: 'Detained' },
+  { value: 'withdrawn', label: 'Withdrawn' },
+]
 
 function PhotoUpload({ studentId, currentUrl, initials }: { studentId: string, currentUrl?: string, initials: string }) {
   const [preview, setPreview] = useState(currentUrl)

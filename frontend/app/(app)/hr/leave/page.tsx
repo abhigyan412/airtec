@@ -4,9 +4,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, Plus, Calendar, Check, X, Loader2 } from 'lucide-react'
+import { ArrowLeft, Plus, Calendar, Check, X, Loader2, AlertTriangle, Ban } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { ApplyLeaveModal } from '@/components/hr/ApplyLeaveModal'
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-amber-100 text-amber-700',
@@ -40,10 +41,25 @@ export default function LeavePage() {
 
   const approveMutation = useMutation({
     mutationFn: ({ id, status }: any) => hrmsApi.leaveRequests.update(id, { status }),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['leave-requests'] })
+      if (res.data?.exceeds_balance) {
+        toast.warning('Approved — this pushed the staff member past their remaining balance (leave-without-pay).')
+      } else {
+        toast.success('Leave updated')
+      }
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: (id: string) => hrmsApi.leaveRequests.cancel(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['leave-requests'] })
-      toast.success('Leave updated')
+      qc.invalidateQueries({ queryKey: ['leave-balances'] })
+      toast.success('Leave cancelled')
     },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to cancel'),
   })
 
   return (
@@ -69,7 +85,7 @@ export default function LeavePage() {
         {(balances ?? []).map((b: any) => (
           <div key={b.leave_type_id} className="bg-white rounded-xl border border-gray-200 p-4 text-center">
             <p className="text-xs text-gray-400 font-medium">{b.code}</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{b.remaining_days}</p>
+            <p className={cn('text-2xl font-bold mt-1', b.remaining_days < 0 ? 'text-red-600' : 'text-gray-900')}>{b.remaining_days}</p>
             <p className="text-xs text-gray-400">of {b.total_days} days</p>
           </div>
         ))}
@@ -86,10 +102,15 @@ export default function LeavePage() {
             {pendingAll.map((lr: any) => (
               <div key={lr.id} className="px-6 py-4 flex items-center justify-between">
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-semibold text-gray-900">{lr.users?.full_name}</span>
                     <span className="text-xs text-gray-400">·</span>
                     <span className="text-sm text-gray-600">{lr.leave_types?.name}</span>
+                    {lr.exceeds_balance && (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold flex items-center gap-1 bg-amber-100 text-amber-700">
+                        <AlertTriangle className="w-3 h-3" /> Exceeds balance
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-gray-500 mt-1">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
                   {lr.reason && <p className="text-xs text-gray-400 mt-1">{lr.reason}</p>}
@@ -127,13 +148,21 @@ export default function LeavePage() {
             {(myRequests ?? []).map((lr: any) => (
               <div key={lr.id} className="px-6 py-4 flex items-center justify-between">
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-semibold text-gray-900">{lr.leave_types?.name}</span>
                     <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium capitalize', STATUS_COLORS[lr.status])}>{lr.status}</span>
                   </div>
                   <p className="text-xs text-gray-500 mt-1">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
                   {lr.reason && <p className="text-xs text-gray-400 mt-1">{lr.reason}</p>}
                   {lr.rejection_reason && <p className="text-xs text-red-400 mt-1">Reason: {lr.rejection_reason}</p>}
+                </div>
+                <div className="flex items-center gap-2">
+                  {(lr.status === 'pending' || (isAdmin && lr.status === 'approved')) && (
+                    <button onClick={() => cancelMutation.mutate(lr.id)} disabled={cancelMutation.isPending}
+                      className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gray-500 hover:text-red-600 transition-colors">
+                      <Ban className="w-3.5 h-3.5" /> {lr.status === 'approved' ? 'Cancel' : 'Withdraw'}
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -148,80 +177,6 @@ export default function LeavePage() {
           qc.invalidateQueries({ queryKey: ['leave-balances'] })
         }} />
       )}
-    </div>
-  )
-}
-
-function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
-  const [form, setForm] = useState({ leave_type_id: '', from_date: '', to_date: '', reason: '' })
-  const [loading, setLoading] = useState(false)
-
-  const { data: leaveTypes } = useQuery({
-    queryKey: ['leave-types'],
-    queryFn: () => hrmsApi.leaveTypes.list().then(r => r.data),
-  })
-
-  const calcDays = () => {
-    if (!form.from_date || !form.to_date) return 0
-    const from = new Date(form.from_date)
-    const to = new Date(form.to_date)
-    const diff = Math.round((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)) + 1
-    return diff > 0 ? diff : 0
-  }
-
-  const handleSave = async () => {
-    if (!form.leave_type_id || !form.from_date || !form.to_date) return toast.error('Please fill all required fields')
-    const days = calcDays()
-    if (days <= 0) return toast.error('Invalid date range')
-    setLoading(true)
-    try {
-      await hrmsApi.leaveRequests.create({ ...form, total_days: days })
-      toast.success('Leave request submitted')
-      onClose()
-    } catch (e: any) { toast.error(e?.response?.data?.error ?? 'Failed') } finally { setLoading(false) }
-  }
-
-  const ic = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Apply for Leave</h2>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Leave Type *</label>
-            <select className={ic} value={form.leave_type_id} onChange={e => setForm(f => ({ ...f, leave_type_id: e.target.value }))}>
-              <option value="">Select leave type</option>
-              {(leaveTypes ?? []).map((lt: any) => <option key={lt.id} value={lt.id}>{lt.name} ({lt.code})</option>)}
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">From Date *</label>
-              <input type="date" className={ic} value={form.from_date} onChange={e => setForm(f => ({ ...f, from_date: e.target.value }))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">To Date *</label>
-              <input type="date" className={ic} value={form.to_date} onChange={e => setForm(f => ({ ...f, to_date: e.target.value }))} />
-            </div>
-          </div>
-          {calcDays() > 0 && (
-            <p className="text-sm text-indigo-600 font-medium">{calcDays()} day(s) total</p>
-          )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Reason</label>
-            <textarea rows={3} className={ic + ' resize-none'} value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason for leave..." />
-          </div>
-        </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSave} disabled={loading} className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Submit Request
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

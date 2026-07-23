@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
-import { Search, Plus, Users, Edit3 } from 'lucide-react'
+import { Search, Plus, Users, Edit3, GraduationCap } from 'lucide-react'
 import Link from 'next/link'
 import { studentsApi } from '@/lib/api'
 import { cn, STATUS_COLORS, formatDate } from '@/lib/utils'
@@ -30,6 +30,10 @@ export default function StudentsPage() {
           <p className="text-gray-400 text-sm mt-0.5">{meta.total} total students</p>
         </div>
         <div className="flex items-center gap-3">
+          <Link href="/students/promote"
+            className="flex items-center gap-2 border border-gray-200 text-gray-600 px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-all">
+            <GraduationCap className="w-4 h-4" /> Promote / Transfer
+          </Link>
           <Link href="/students/bulk-edit"
             className="flex items-center gap-2 border border-gray-200 text-gray-600 px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-all">
             <Edit3 className="w-4 h-4" /> Bulk Edit
