@@ -7,15 +7,19 @@
 # proxies /api/* to the backend over the internal Docker network, so the
 # backend needs no public domain and there is no CORS to configure.
 #
-# Host ports are loopback-bound (127.0.0.1) and taken from env so they can
-# be moved to avoid a clash on a shared host:
-#   WEB_HOST_PORT     (frontend, default 3000)
-#   BACKEND_HOST_PORT (backend,  default 4000)
-# e.g. `WEB_HOST_PORT=3010 docker compose up`, or set them in Dokploy env.
-# Domain routing goes through Traefik to the container port regardless of
-# the host port, so a domain keeps working even if you change these.
+# Host ports are loopback-bound (127.0.0.1) and taken from env. Defaults
+# are 3010/4010 (NOT 3000/4000) so they don't collide with another app on
+# a shared Dokploy host — if that host already runs something on the port
+# you pick, the container fails to start with "port is already allocated".
+#   WEB_HOST_PORT     (frontend, default 3010)
+#   BACKEND_HOST_PORT (backend,  default 4010)
+# Set them in the Dokploy Environment tab to any free ports.
 #
-# Local run:  docker compose up --build   → http://localhost:${WEB_HOST_PORT:-3000}
+# The public DOMAIN is independent of these: Dokploy/Traefik routes the
+# domain to the CONTAINER port (frontend = 3000), so the domain works
+# regardless of the host port. Assign one frontend domain → port 3000.
+#
+# Local run:  docker compose up --build   → http://localhost:${WEB_HOST_PORT:-3010}
 # ─────────────────────────────────────────────────────────────────────
 services:
   backend:
@@ -35,7 +39,7 @@ services:
     ports:
       # Loopback-bound: the frontend reaches the backend over the compose
       # network as http://backend:4000; this is just for local host access.
-      - "127.0.0.1:${BACKEND_HOST_PORT:-4000}:4000"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-4010}:4000"
 
   frontend:
     build:
@@ -57,4 +61,4 @@ services:
     expose:
       - "3000"
     ports:
-      - "127.0.0.1:${WEB_HOST_PORT:-3000}:3000"
+      - "127.0.0.1:${WEB_HOST_PORT:-3010}:3000"
