@@ -33,6 +33,8 @@ COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 USER nextjs
 EXPOSE 3000
+# Probe /auth/login: it returns 200 directly. "/" returns a 307 redirect,
+# which wget exits non-zero on (exit 8) → false "unhealthy".
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:${PORT}/ || exit 1
+  CMD wget -qO- http://127.0.0.1:${PORT}/auth/login || exit 1
 CMD ["node", "server.js"]
