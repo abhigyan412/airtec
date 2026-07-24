@@ -10,9 +10,13 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # NEXT_PUBLIC_* vars are inlined into the bundle at build time, so the
 # API URL must be supplied as a build arg — NOT a runtime env var.
-# Changing it later requires rebuilding this image.
-ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_API_URL=/api
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# The /api rewrite target is baked at build time too (Next evaluates
+# rewrites() during `next build`), so BACKEND_URL is a build arg. It
+# points at the internal backend service on the Docker network.
+ARG BACKEND_URL=http://backend:4000
+ENV BACKEND_URL=$BACKEND_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 # `public/` may not exist in this repo; ensure it does so the COPY below never fails.
 RUN mkdir -p public && npm run build

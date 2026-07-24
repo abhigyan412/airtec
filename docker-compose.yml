@@ -3,11 +3,15 @@
 #
 # In Dokploy: create a "Compose" application pointing at this repo, set the
 # environment variables below in the Environment tab, then assign a domain
-# to each service (backend → port 4000, frontend → port 3000).
+# to ONLY the frontend (container port 3000). The frontend proxies /api/*
+# to the backend over the internal Docker network, so the backend needs no
+# public domain and there is no CORS to configure.
 #
-# IMPORTANT: NEXT_PUBLIC_API_URL is baked into the frontend at BUILD time
-# (Next.js inlines NEXT_PUBLIC_* vars). It must equal the backend's PUBLIC
-# URL + /api. Changing it requires a frontend rebuild/redeploy.
+# No host `ports:` are published — Dokploy/Traefik routes to the container
+# via the exposed port + the domain you assign, and publishing a host port
+# collides with other apps on the shared host ("port is already allocated").
+# For LOCAL testing with host access, use docker-compose.override.yml (see
+# that file) which adds a port mapping.
 # ─────────────────────────────────────────────────────────────────────
 services:
   backend:
@@ -22,19 +26,20 @@ services:
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       JWT_SECRET: ${JWT_SECRET}
-      # Public URL of the frontend, used for CORS allow-origin.
-      FRONTEND_URL: ${FRONTEND_URL}
+    # Internal only — reached by the frontend as http://backend:4000.
     expose:
       - "4000"
-    ports:
-      - "4000:4000"
 
   frontend:
     build:
       context: ./frontend
       args:
-        # Build-time only — see note above.
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        # Both are baked in at BUILD time (Next inlines NEXT_PUBLIC_* and
+        # evaluates rewrites() during the build):
+        #  - NEXT_PUBLIC_API_URL: relative same-origin base the browser uses
+        #  - BACKEND_URL: the /api rewrite target (internal service name)
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+        BACKEND_URL: http://backend:4000
     image: airtec-frontend
     restart: unless-stopped
     depends_on:
@@ -44,5 +49,3 @@ services:
       PORT: 3000
     expose:
       - "3000"
-    ports:
-      - "3000:3000"

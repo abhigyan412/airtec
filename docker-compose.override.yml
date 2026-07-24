@@ -1,0 +1,8 @@
+# Local-only overrides — publishes host ports so you can reach the app at
+# http://localhost:3000 during `docker compose up`. Docker Compose merges
+# this automatically; Dokploy does NOT use override files, so production
+# stays port-conflict-free (routing via Traefik + assigned domain).
+services:
+  frontend:
+    ports:
+      - "3000:3000"
