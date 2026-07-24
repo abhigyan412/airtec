@@ -1,11 +1,12 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { timetableApi, admissionApi, classesApi, api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { Plus, Trash2, Loader2, Clock, Grid3X3, List, Printer, User, AlertTriangle, ShieldOff } from 'lucide-react'
+import { Plus, Trash2, Loader2, Clock, Grid3X3, List, Printer, User, AlertTriangle, ShieldOff, UserCheck, BookOpen } from 'lucide-react'
 import { toast } from 'sonner'
 import { usePermissions } from '@/lib/usePermissions'
+import { useAuth } from '@/lib/auth'
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -31,7 +32,7 @@ const SUBJECT_COLORS: Record<string, string> = {
 }
 const getColor = (s: string) => SUBJECT_COLORS[s] ?? 'bg-violet-50 border-violet-300 text-violet-800'
 
-type ViewMode = 'class' | 'teacher'
+type ViewMode = 'class' | 'teacher' | 'free'
 
 export default function TimetablePage() {
   const [selectedClass,   setSelectedClass]   = useState('')
@@ -46,8 +47,10 @@ export default function TimetablePage() {
 
   // ── RBAC ──────────────────────────────────────────────────
   const { can, isLoading: permLoading } = usePermissions()
+  const { isRole } = useAuth()
   const canView   = can('timetable.view')
   const canManage = can('timetable.manage')
+  const canSeeFreeFaculty = isRole('principal', 'school_admin')
 
   const { data: classesData } = useQuery({
     queryKey: ['classes'],
@@ -148,20 +151,29 @@ export default function TimetablePage() {
                 viewMode === 'teacher' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700')}>
               <User className="w-3.5 h-3.5" /> Teacher View
             </button>
+            {canSeeFreeFaculty && (
+              <button onClick={() => setViewMode('free')}
+                className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all',
+                  viewMode === 'free' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700')}>
+                <UserCheck className="w-3.5 h-3.5" /> Free Faculty
+              </button>
+            )}
           </div>
           {/* Grid/List */}
-          <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
-            <button onClick={() => setGridOrList('grid')}
-              className={cn('p-1.5 rounded-lg transition-all', gridOrList === 'grid' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400')}>
-              <Grid3X3 className="w-4 h-4" />
-            </button>
-            <button onClick={() => setGridOrList('list')}
-              className={cn('p-1.5 rounded-lg transition-all', gridOrList === 'list' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400')}>
-              <List className="w-4 h-4" />
-            </button>
-          </div>
+          {viewMode !== 'free' && (
+            <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
+              <button onClick={() => setGridOrList('grid')}
+                className={cn('p-1.5 rounded-lg transition-all', gridOrList === 'grid' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400')}>
+                <Grid3X3 className="w-4 h-4" />
+              </button>
+              <button onClick={() => setGridOrList('list')}
+                className={cn('p-1.5 rounded-lg transition-all', gridOrList === 'list' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400')}>
+                <List className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           {/* Print — visible to anyone who can view */}
-          {timetableData && timetableData.length > 0 && (
+          {viewMode !== 'free' && timetableData && timetableData.length > 0 && (
             <button onClick={() => setShowPrint(true)}
               className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
               <Printer className="w-4 h-4" /> Print
@@ -170,6 +182,10 @@ export default function TimetablePage() {
         </div>
       </div>
 
+      {viewMode === 'free' ? (
+        <FreeFacultyView />
+      ) : (
+      <>
       {/* Selectors */}
       <div className="bg-white rounded-2xl border border-gray-200 p-5 flex gap-4 items-end flex-wrap">
         {viewMode === 'class' ? (
@@ -397,6 +413,8 @@ export default function TimetablePage() {
           })}
         </div>
       )}
+      </>
+      )}
 
       {showAdd && selectedClass && canManage && (
         <AddPeriodModal
@@ -416,6 +434,256 @@ export default function TimetablePage() {
           viewMode={viewMode}
           onClose={() => setShowPrint(false)}
         />
+      )}
+    </div>
+  )
+}
+
+// ── ATTENTION REQUIRED — periods happening RIGHT NOW where the
+// assigned teacher's check-in doesn't line up: no check-in recorded
+// yet, marked absent/on leave, or checked in after the period had
+// already started. Cross-references the timetable against today's
+// staff check-in/out times (HR → Attendance), which otherwise never
+// talk to each other. Polls every 60s since "right now" keeps moving.
+function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (day: number, period: number) => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['timetable-attention-required'],
+    queryFn: () => timetableApi.attentionRequired().then((r: any) => r.data),
+    refetchInterval: 60_000,
+  })
+
+  const REASON_STYLES: Record<string, string> = {
+    not_checked_in: 'bg-red-100 text-red-700',
+    absent: 'bg-red-100 text-red-700',
+    on_leave: 'bg-amber-100 text-amber-700',
+    no_checkin_time: 'bg-amber-100 text-amber-700',
+    checked_in_late: 'bg-orange-100 text-orange-700',
+  }
+
+  if (isLoading) {
+    return <div className="bg-white rounded-2xl border border-gray-200 p-5 h-20 animate-pulse" />
+  }
+
+  // Sunday — nothing scheduled, nothing to check.
+  if (!data?.day_of_week) {
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-2xl px-5 py-4 flex items-center gap-3">
+        <Clock className="w-4 h-4 text-gray-400" />
+        <p className="text-sm text-gray-500">No school today — nothing to check.</p>
+      </div>
+    )
+  }
+
+  const flagged: any[] = data?.flagged ?? []
+  const periodsInProgress: number = data?.periods_in_progress ?? 0
+
+  // A school day, but no period is running this exact minute (before
+  // first bell, during a gap, after the last period) — distinct from
+  // "classes in session and all covered," so it needs its own message
+  // rather than silently looking identical to "all good."
+  if (periodsInProgress === 0) {
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-2xl px-5 py-4 flex items-center gap-3">
+        <Clock className="w-4 h-4 text-gray-400" />
+        <p className="text-sm text-gray-500">No class is in session right now — check back once periods start.</p>
+      </div>
+    )
+  }
+
+  if (flagged.length === 0) {
+    return (
+      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-5 py-4 flex items-center gap-3">
+        <UserCheck className="w-4 h-4 text-emerald-500" />
+        <p className="text-sm text-emerald-700">All {periodsInProgress} class{periodsInProgress !== 1 ? 'es' : ''} in session right now {periodsInProgress !== 1 ? 'are' : 'is'} covered.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-red-50 border border-red-200 rounded-2xl p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <AlertTriangle className="w-4 h-4 text-red-500" />
+        <h3 className="font-semibold text-red-700">Classes Needing Immediate Attention</h3>
+        <span className="text-xs text-red-400">({flagged.length} right now)</span>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {flagged.map((f: any) => (
+          <div key={f.period_id} className="bg-white rounded-xl border border-red-100 p-4 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-900">
+                {f.class_name}{f.section_name ? ` - ${f.section_name}` : ''} · {f.subject_name}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                P{f.period_number} · {f.start_time?.slice(0, 5)}–{f.end_time?.slice(0, 5)} · {f.teacher_name}{f.room ? ` · ${f.room}` : ''}
+              </p>
+              <span className={cn('inline-block mt-2 px-2 py-0.5 rounded-full text-[11px] font-semibold', REASON_STYLES[f.reason] ?? 'bg-gray-100 text-gray-600')}>
+                {f.reason_label}
+              </span>
+            </div>
+            <button onClick={() => onFindSubstitute(data.day_of_week, f.period_number)}
+              className="flex-shrink-0 px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700">
+              Find Substitute
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── FREE FACULTY VIEW — who's free at a given day + period, for
+// finding a substitute. Principal/Admin only (the page already hides
+// the tab for other roles, and the backend enforces the same gate).
+//
+// Defaults to "right now" when viewing today: once the day's periods
+// load, it finds whichever period's start/end window contains the
+// current time and auto-selects it — the common case is "someone's
+// out RIGHT NOW, who can cover," not browsing a hypothetical slot.
+function FreeFacultyView() {
+  const jsDay = new Date().getDay() // 0=Sun..6=Sat; this schema's day_of_week is 1=Mon..6=Sat
+  const todayDayOfWeek = jsDay === 0 ? 1 : jsDay
+  const [day, setDay] = useState(todayDayOfWeek)
+  const [period, setPeriod] = useState<number | ''>('')
+  const [subjectFilter, setSubjectFilter] = useState('')
+  const [autoPicked, setAutoPicked] = useState(false)
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['free-faculty', day, period],
+    queryFn: () => timetableApi.freeFaculty(day, period === '' ? undefined : period).then((r: any) => r.data),
+  })
+
+  useEffect(() => {
+    if (autoPicked || period !== '' || !data?.available_periods?.length) return
+    if (day === todayDayOfWeek) {
+      const nowStr = new Date().toTimeString().slice(0, 8)
+      const current = data.available_periods.find((p: any) => p.start_time <= nowStr && nowStr <= p.end_time)
+      if (current) setPeriod(current.period_number)
+    }
+    setAutoPicked(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
+
+  const availablePeriods = data?.available_periods ?? []
+  const freeTeachers: any[] = data?.free ?? []
+  const busyTeachers: any[] = data?.busy ?? []
+  const allSubjects = Array.from(new Set(freeTeachers.flatMap((t: any) => t.subjects_today as string[]))).sort()
+  const shownFree = subjectFilter ? freeTeachers.filter(t => t.subjects_today.includes(subjectFilter)) : freeTeachers
+  const selectedPeriodInfo = availablePeriods.find((p: any) => p.period_number === period)
+
+  const selectCls = "px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none min-w-[140px]"
+
+  return (
+    <div className="space-y-5">
+      <AttentionRequiredPanel onFindSubstitute={(d, p) => { setDay(d); setPeriod(p); setAutoPicked(true) }} />
+
+      <div className="bg-white rounded-2xl border border-gray-200 p-5 flex gap-4 items-end flex-wrap">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Day</label>
+          <select className={selectCls} value={day} onChange={e => { setDay(Number(e.target.value)); setPeriod(''); setAutoPicked(false) }}>
+            {DAYS.map((d, i) => <option key={d} value={i + 1}>{d}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Period</label>
+          <select className={selectCls} value={period} onChange={e => setPeriod(e.target.value ? Number(e.target.value) : '')}>
+            <option value="">Whole day (any period)</option>
+            {availablePeriods.map((p: any) => (
+              <option key={p.period_number} value={p.period_number}>
+                P{p.period_number} · {p.start_time?.slice(0, 5)}–{p.end_time?.slice(0, 5)}
+              </option>
+            ))}
+          </select>
+        </div>
+        {allSubjects.length > 0 && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
+            <select className={selectCls} value={subjectFilter} onChange={e => setSubjectFilter(e.target.value)}>
+              <option value="">Any subject</option>
+              {allSubjects.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+        )}
+        {period !== '' && (
+          <div className="ml-auto flex items-center gap-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-emerald-600">{shownFree.length}</p>
+              <p className="text-xs text-gray-500">Free</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-gray-400">{busyTeachers.length}</p>
+              <p className="text-xs text-gray-500">Teaching</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
+          <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+        </div>
+      ) : availablePeriods.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-gray-200 p-16 text-center text-gray-400">
+          <Clock className="w-12 h-12 mx-auto mb-3 text-gray-200" />
+          <p className="font-medium">No periods scheduled on {DAYS[day - 1]} yet</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          {/* Free */}
+          <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <UserCheck className="w-4 h-4 text-emerald-500" />
+                Free {selectedPeriodInfo ? `— P${selectedPeriodInfo.period_number} (${selectedPeriodInfo.start_time?.slice(0,5)}–${selectedPeriodInfo.end_time?.slice(0,5)})` : ''}
+              </h3>
+              <span className="text-xs text-gray-400">{shownFree.length}</span>
+            </div>
+            {period === '' ? (
+              <p className="px-5 py-6 text-sm text-gray-400">Pick a period to see who's free at that time.</p>
+            ) : shownFree.length === 0 ? (
+              <p className="px-5 py-6 text-sm text-gray-400">No one's free at this period{subjectFilter ? ` who teaches ${subjectFilter}` : ''}.</p>
+            ) : (
+              <div className="divide-y divide-gray-50">
+                {shownFree.map((t: any) => (
+                  <div key={t.id} className="px-5 py-3">
+                    <p className="text-sm font-semibold text-gray-900">{t.full_name}</p>
+                    {t.subjects_today.length > 0 && (
+                      <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+                        <BookOpen className="w-3 h-3" /> {t.subjects_today.join(', ')}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Busy */}
+          <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <User className="w-4 h-4 text-gray-400" /> Teaching Right Now
+              </h3>
+              <span className="text-xs text-gray-400">{busyTeachers.length}</span>
+            </div>
+            {period === '' ? (
+              <p className="px-5 py-6 text-sm text-gray-400">Pick a period to see who's teaching.</p>
+            ) : busyTeachers.length === 0 ? (
+              <p className="px-5 py-6 text-sm text-gray-400">No one is teaching at this period.</p>
+            ) : (
+              <div className="divide-y divide-gray-50">
+                {busyTeachers.map((b: any) => (
+                  <div key={b.teacher_id} className="px-5 py-3">
+                    <p className="text-sm font-semibold text-gray-900">{b.full_name}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {b.subject_name} · {b.class_name}{b.section_name ? ` - ${b.section_name}` : ''}
+                      {b.room ? ` · ${b.room}` : ''}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   )

@@ -3,8 +3,8 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { studentsApi, admissionApi, academicYearsApi } from '@/lib/api'
-import { cn, STATUS_COLORS } from '@/lib/utils'
-import { ArrowLeft, Search, CheckSquare, Square, Users, ArrowRight, Loader2, GraduationCap, AlertTriangle } from 'lucide-react'
+import { cn, STATUS_COLORS, formatDate } from '@/lib/utils'
+import { ArrowLeft, Search, CheckSquare, Square, Users, ArrowRight, Loader2, GraduationCap, AlertTriangle, History, ArrowRightLeft } from 'lucide-react'
 import { toast } from 'sonner'
 
 const PROMOTION_TYPES = [
@@ -16,6 +16,7 @@ const PROMOTION_TYPES = [
 
 export default function PromoteStudentsPage() {
   const qc = useQueryClient()
+  const [view, setView] = useState<'tool' | 'history'>('tool')
 
   // Source filters
   const [fromClass, setFromClass] = useState('')
@@ -98,19 +99,38 @@ export default function PromoteStudentsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Link href="/students" className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
-          <ArrowLeft className="w-5 h-5 text-gray-500" />
-        </Link>
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Promote / Transfer Students</h1>
-          <p className="text-gray-500 text-sm mt-0.5">
-            Move students to a new class, section, or academic year — tracked in each student's promotion history
-          </p>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-4">
+          <Link href="/students" className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
+            <ArrowLeft className="w-5 h-5 text-gray-500" />
+          </Link>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Promote / Transfer Students</h1>
+            <p className="text-gray-500 text-sm mt-0.5">
+              {view === 'tool'
+                ? "Move students to a new class, section, or academic year — tracked in each student's promotion history"
+                : 'Every promotion, transfer, detention, and withdrawal recorded so far'}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+          <button onClick={() => setView('tool')}
+            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
+              view === 'tool' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
+            <ArrowRightLeft className="w-4 h-4" /> Promote / Transfer
+          </button>
+          <button onClick={() => setView('history')}
+            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
+              view === 'history' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
+            <History className="w-4 h-4" /> History
+          </button>
         </div>
       </div>
 
+      {view === 'history' && <PromotionHistory classesData={classesData} />}
+
       {/* Step 1: source */}
+      {view === 'tool' && (<>
       <div className="bg-white rounded-2xl border border-gray-200 p-5">
         <p className="text-sm font-semibold text-gray-700 mb-3">1. Select students</p>
         <div className="flex flex-wrap gap-3">
@@ -268,6 +288,98 @@ export default function PromoteStudentsPage() {
           </div>
         </div>
       )}
+      </>)}
+    </div>
+  )
+}
+
+// ── HISTORY VIEW ───────────────────────────────────────────────
+function PromotionHistory({ classesData }: { classesData: any }) {
+  const [typeFilter, setTypeFilter] = useState('')
+  const [classFilter, setClassFilter] = useState('')
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['promotion-history', typeFilter, classFilter],
+    queryFn: () => studentsApi.promotions({
+      promotion_type: typeFilter || undefined,
+      class_id: classFilter || undefined,
+      limit: 100,
+    }).then(r => r.data),
+  })
+  const records = data ?? []
+
+  const TYPE_STYLES: Record<string, string> = {
+    promoted: 'bg-emerald-100 text-emerald-700',
+    transferred: 'bg-indigo-100 text-indigo-700',
+    detained: 'bg-amber-100 text-amber-700',
+    withdrawn: 'bg-red-100 text-red-700',
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl border border-gray-200 p-5 flex flex-wrap gap-3">
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+          className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-w-[160px]">
+          <option value="">All types</option>
+          {PROMOTION_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+        </select>
+        <select value={classFilter} onChange={e => setClassFilter(e.target.value)}
+          className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-w-[160px]">
+          <option value="">All classes (from or to)</option>
+          {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+        {isLoading ? (
+          <div className="p-12 text-center text-gray-400">Loading history...</div>
+        ) : records.length === 0 ? (
+          <div className="p-12 text-center text-gray-400">
+            <History className="w-10 h-10 mx-auto mb-2 text-gray-200" />
+            <p className="font-medium text-sm">No promotions or transfers recorded yet</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                  <th className="px-6 py-3 font-semibold">Student</th>
+                  <th className="px-3 py-3 font-semibold">Type</th>
+                  <th className="px-3 py-3 font-semibold">From</th>
+                  <th className="px-3 py-3 font-semibold">To</th>
+                  <th className="px-3 py-3 font-semibold">By</th>
+                  <th className="px-6 py-3 font-semibold text-right">Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {records.map((r: any) => (
+                  <tr key={r.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-3">
+                      <p className="font-medium text-gray-900">{r.students?.first_name} {r.students?.last_name}</p>
+                      <p className="text-xs text-gray-400">#{r.students?.admission_number ?? '—'}</p>
+                    </td>
+                    <td className="px-3 py-3">
+                      <span className={cn('px-2 py-0.5 rounded-full text-xs font-semibold capitalize', TYPE_STYLES[r.promotion_type] ?? 'bg-gray-100 text-gray-600')}>
+                        {r.promotion_type}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3 text-gray-500">
+                      {r.from_class?.name ?? '—'}{r.from_section?.name ? ` · ${r.from_section.name}` : ''}
+                      {r.from_year?.name && <span className="text-gray-300"> ({r.from_year.name})</span>}
+                    </td>
+                    <td className="px-3 py-3 text-gray-900 font-medium">
+                      {r.to_class?.name ?? '—'}{r.to_section?.name ? ` · ${r.to_section.name}` : ''}
+                      {r.to_year?.name && <span className="text-gray-400 font-normal"> ({r.to_year.name})</span>}
+                    </td>
+                    <td className="px-3 py-3 text-gray-500">{r.promoter?.full_name ?? '—'}</td>
+                    <td className="px-6 py-3 text-right text-xs text-gray-400">{formatDate(r.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

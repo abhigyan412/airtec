@@ -7,6 +7,8 @@ import { cn } from '@/lib/utils'
 import { CheckCircle, XCircle, Clock, Save, Loader2, ChevronLeft, ChevronRight, Calendar, ShieldOff, ClipboardList, BarChart3, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
 import { usePermissions } from '@/lib/usePermissions'
+import { useAuth } from '@/lib/auth'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
 
 type AttendanceStatus = 'present' | 'absent' | 'late' | 'leave'
 type Tab = 'mark' | 'report'
@@ -124,6 +126,92 @@ export default function AttendancePage() {
   )
 }
 
+// ── CLASS-WISE DAILY CHART — how every class is doing on the
+// currently-selected date, not just the one class being marked.
+// Principal/School Admin only: a school-wide comparison across every
+// class isn't something a teacher or student needs on this page.
+//
+// Only classes that have actually been marked get a bar — a fully
+// "not marked yet" class plotted as a full-width grey bar reads as
+// noise next to real data, not information. Those instead collapse
+// into a short chip line ("Not marked yet: Class 7, Class 9 …") —
+// same fact, one glance instead of a wall of identical grey bars.
+// Each bar also carries its own present/absent count as a direct
+// label, so the number is visible without hovering.
+function ClassWiseAttendanceChart({ date }: { date: string }) {
+  const { isRole } = useAuth()
+  const { data, isLoading } = useQuery({
+    queryKey: ['attendance-class-summary', date],
+    queryFn: () => studentsApi.attendanceClassSummary(date).then(r => r.data),
+    enabled: isRole('principal', 'school_admin'),
+  })
+
+  if (!isRole('principal', 'school_admin')) return null
+
+  const allClasses = data?.classes ?? []
+  const markedClasses = allClasses.filter((c: any) => c.present + c.absent + c.late + c.leave > 0)
+  const unmarkedClasses = allClasses.filter((c: any) => c.present + c.absent + c.late + c.leave === 0)
+  const dateLabel = new Date(date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+
+  if (isLoading) {
+    return <div className="bg-white rounded-2xl border border-gray-200 p-6 h-64 animate-pulse" />
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 p-6">
+      <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-1">
+        <BarChart3 className="w-4 h-4 text-gray-400" /> Attendance by Class
+      </h3>
+      <p className="text-xs text-gray-400 mb-4">{dateLabel}</p>
+
+      {!data?.is_working_day ? (
+        <div className="h-[140px] flex flex-col items-center justify-center text-gray-300">
+          <Calendar className="w-10 h-10 mb-2" />
+          <p className="text-sm text-gray-400">No school on this date</p>
+        </div>
+      ) : !allClasses.length ? (
+        <div className="h-[140px] flex flex-col items-center justify-center text-gray-300">
+          <BarChart3 className="w-10 h-10 mb-2" />
+          <p className="text-sm text-gray-400">No students found</p>
+        </div>
+      ) : !markedClasses.length ? (
+        <div className="h-[140px] flex flex-col items-center justify-center text-gray-300">
+          <ClipboardList className="w-10 h-10 mb-2" />
+          <p className="text-sm text-gray-400">No class has been marked yet for this date</p>
+        </div>
+      ) : (
+        <>
+          <ResponsiveContainer width="100%" height={Math.max(140, markedClasses.length * 40)}>
+            <BarChart data={markedClasses} layout="vertical" margin={{ left: 8, right: 32 }} barGap={2}>
+              <CartesianGrid horizontal={false} stroke="#f3f4f6" />
+              <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} />
+              <YAxis type="category" dataKey="class_name" tick={{ fontSize: 13, fill: '#374151', fontWeight: 600 }} tickLine={false} axisLine={false} width={70} />
+              <Tooltip
+                contentStyle={{ border: '1px solid #e5e7eb', borderRadius: 10, fontSize: 13, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)' }}
+                cursor={{ fill: '#f9fafb' }}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="present" name="Present" fill="#22c55e" radius={[0, 4, 4, 0]} maxBarSize={16} label={{ position: 'right', fontSize: 11, fill: '#16a34a', fontWeight: 600 }} />
+              <Bar dataKey="absent" name="Absent" fill="#ef4444" radius={[0, 4, 4, 0]} maxBarSize={16} label={{ position: 'right', fontSize: 11, fill: '#dc2626', fontWeight: 600 }} />
+            </BarChart>
+          </ResponsiveContainer>
+
+          {unmarkedClasses.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-medium text-gray-400">Not marked yet:</span>
+              {unmarkedClasses.map((c: any) => (
+                <span key={c.class_id} className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                  {c.class_name}
+                </span>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── MARK TAB — daily marking sheet (unchanged behavior) ────────
 function MarkTab({ classId, sectionId, className, canManage }: {
   classId: string; sectionId: string; className?: string; canManage: boolean
@@ -185,6 +273,7 @@ function MarkTab({ classId, sectionId, className, canManage }: {
       qc.invalidateQueries({ queryKey: ['attendance-sheet'] })
       qc.invalidateQueries({ queryKey: ['attendance-report'] })
       qc.invalidateQueries({ queryKey: ['attendance-report-range'] })
+      qc.invalidateQueries({ queryKey: ['attendance-class-summary'] })
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to save'),
   })
@@ -275,6 +364,8 @@ function MarkTab({ classId, sectionId, className, canManage }: {
           ))}
         </div>
       )}
+
+      <ClassWiseAttendanceChart date={selectedDate} />
 
       {!classId ? (
         <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">

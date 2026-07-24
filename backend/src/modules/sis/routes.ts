@@ -4,7 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
-import { getNonWorkingDaySets, isWorkingDate } from '../../shared/utils/academicCalendar'
+import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
 
 const router = Router()
 router.use(authenticate)
@@ -86,6 +86,120 @@ router.get('/stats/dashboard', asyncHandler(async (req: AuthRequest, res: Respon
     supabase.from('students').select('class_id, classes(name, numeric_level)', { count: 'exact' }).eq('school_id', school_id).eq('status', 'active'),
   ])
   res.json({ success: true, data: { total_students: total ?? 0, active_students: active ?? 0, new_this_month: newThisMonth ?? 0, class_breakdown: classBreakdown.data ?? [] } })
+}))
+
+// ── GET /students/attendance/today — school-wide today's status for the
+// "Needs Attention Today" dashboard widget. Deliberately separate from
+// GET /attendance/report (which requires class_id and returns per-student
+// rows) — this is a single school-wide snapshot, not a class report.
+// is_working_day lets the frontend show "No school today" instead of a
+// misleading 0% on a holiday/weekly-off day with nothing marked.
+//
+// percentage is present ÷ ALL active students, not ÷ however many happen
+// to be marked so far — marking 2 of 26 students present and calling
+// that "100%" is exactly the kind of number that hides the real problem
+// (24 students not marked at all) instead of surfacing it. Section
+// membership for "who hasn't marked" is derived from the students table
+// itself, not from attendance.section_id — a teacher marking a whole
+// class at once (no section filter) leaves that column null, which would
+// undercount if trusted directly.
+router.get('/attendance/today', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const today = toLocalDateStr(new Date())
+
+  const nonWorkingSets = await getNonWorkingDaySets(school_id, today, today)
+  const is_working_day = isWorkingDate(today, nonWorkingSets)
+
+  const [{ data: students, error: studentsErr }, { data: records, error: attErr }] = await Promise.all([
+    supabase.from('students')
+      .select('id, class_id, section_id, classes(name), sections(name)')
+      .eq('school_id', school_id).eq('status', 'active'),
+    supabase.from('attendance').select('student_id, status').eq('school_id', school_id).eq('date', today),
+  ])
+  if (studentsErr) return res.status(500).json({ success: false, error: studentsErr.message })
+  if (attErr) return res.status(500).json({ success: false, error: attErr.message })
+
+  const statusByStudent = new Map((records ?? []).map(r => [r.student_id, r.status]))
+  const present = (records ?? []).filter(r => r.status === 'present').length
+  const total_marked = (records ?? []).length
+  const total_active_students = (students ?? []).length
+  const percentage = total_active_students > 0 ? Math.round((present / total_active_students) * 100) : 0
+
+  const sectionGroups = new Map<string, { class_id: string; class_name: string; section_id: string | null; section_name: string | null; total: number; marked: number }>()
+  for (const s of students ?? []) {
+    const key = `${s.class_id}::${s.section_id ?? 'none'}`
+    if (!sectionGroups.has(key)) {
+      sectionGroups.set(key, {
+        class_id: s.class_id, class_name: (s as any).classes?.name ?? '—',
+        section_id: s.section_id, section_name: (s as any).sections?.name ?? null,
+        total: 0, marked: 0,
+      })
+    }
+    const group = sectionGroups.get(key)!
+    group.total++
+    if (statusByStudent.has(s.id)) group.marked++
+  }
+
+  const allSections = [...sectionGroups.values()]
+  const unmarked_sections = allSections.filter(g => g.marked === 0)
+    .map(g => ({ class_id: g.class_id, class_name: g.class_name, section_id: g.section_id, section_name: g.section_name, student_count: g.total }))
+
+  res.json({
+    success: true,
+    data: {
+      date: today, is_working_day, present, total_marked, total_active_students, percentage,
+      sections_total: allSections.length, sections_marked: allSections.length - unmarked_sections.length,
+      unmarked_sections,
+    },
+  })
+}))
+
+// ── GET /students/attendance/class-summary — per-class present vs
+// absent breakdown for one date, for the Attendance page's daily chart.
+// Separate from /attendance/today (which is always "today" and groups
+// by section for the dashboard's "unmarked sections" list) — this
+// accepts any date and rolls sections up to class level, since the
+// chart's job is "how is each class doing today," not per-section detail.
+router.get('/attendance/class-summary', requireRole('school_admin', 'principal'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const date = (req.query.date as string) || toLocalDateStr(new Date())
+
+  const nonWorkingSets = await getNonWorkingDaySets(school_id, date, date)
+  const is_working_day = isWorkingDate(date, nonWorkingSets)
+
+  const [{ data: students, error: studentsErr }, { data: records, error: attErr }] = await Promise.all([
+    supabase.from('students')
+      .select('id, class_id, classes(name)')
+      .eq('school_id', school_id).eq('status', 'active'),
+    supabase.from('attendance').select('student_id, status').eq('school_id', school_id).eq('date', date),
+  ])
+  if (studentsErr) return res.status(500).json({ success: false, error: studentsErr.message })
+  if (attErr) return res.status(500).json({ success: false, error: attErr.message })
+
+  const statusByStudent = new Map((records ?? []).map(r => [r.student_id, r.status]))
+
+  const classGroups = new Map<string, { class_id: string; class_name: string; present: number; absent: number; late: number; leave: number; unmarked: number; total: number }>()
+  for (const s of students ?? []) {
+    if (!s.class_id) continue // student not yet assigned to a class — not part of any class's attendance picture
+    if (!classGroups.has(s.class_id)) {
+      classGroups.set(s.class_id, {
+        class_id: s.class_id, class_name: (s as any).classes?.name ?? '—',
+        present: 0, absent: 0, late: 0, leave: 0, unmarked: 0, total: 0,
+      })
+    }
+    const group = classGroups.get(s.class_id)!
+    group.total++
+    const status = statusByStudent.get(s.id)
+    if (status === 'present') group.present++
+    else if (status === 'absent') group.absent++
+    else if (status === 'late') group.late++
+    else if (status === 'leave') group.leave++
+    else group.unmarked++
+  }
+
+  const classes = [...classGroups.values()].sort((a, b) => a.class_name.localeCompare(b.class_name, undefined, { numeric: true }))
+
+  res.json({ success: true, data: { date, is_working_day, classes } })
 }))
 
 // ── GET /students/houses ────────────────────────────────────
@@ -419,7 +533,7 @@ router.post('/bulk/promote', requireRole('school_admin', 'principal'),
 // after the fact). Optional student_id narrows to one student's history
 // (used on their profile); omit it for a school-wide recent-activity feed.
 router.get('/promotions', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { student_id, limit = '50' } = req.query
+  const { student_id, promotion_type, class_id, limit = '50' } = req.query
   const school_id = req.user!.school_id
 
   let query = supabase
@@ -437,6 +551,11 @@ router.get('/promotions', asyncHandler(async (req: AuthRequest, res: Response) =
     .limit(Number(limit))
 
   if (student_id) query = query.eq('student_id', student_id as string)
+  // 'promoted' = migrated to a new academic year; 'transferred' = moved
+  // class/section within the same year; 'detained'/'withdrawn' are the
+  // other two recorded outcomes — all four share this one history table.
+  if (promotion_type) query = query.eq('promotion_type', promotion_type as string)
+  if (class_id) query = query.or(`from_class_id.eq.${class_id},to_class_id.eq.${class_id}`)
 
   const { data, error } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })
@@ -449,6 +568,185 @@ router.get('/timetable/teachers', asyncHandler(async (req: AuthRequest, res: Res
     .eq('school_id', req.user!.school_id)
     .in('role', ['teacher', 'school_admin', 'principal'])
     .order('full_name')
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data })
+}))
+
+// ── GET /students/timetable/free-faculty — who's free at a given
+// day_of_week + period, for finding a substitute. Principal/Admin only.
+//
+// There's no separate "subjects a teacher is qualified for" table in
+// this schema, so a teacher's subjects/classes are derived from their
+// own weekly timetable (every distinct subject_name / class+section
+// they're already scheduled to teach) — the same single source of
+// truth the rest of the timetable page already uses, not a new list
+// that could drift out of sync with reality.
+router.get('/timetable/free-faculty', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const day_of_week = Number(req.query.day_of_week)
+    const period_number = req.query.period_number ? Number(req.query.period_number) : undefined
+
+    if (!day_of_week || day_of_week < 1 || day_of_week > 6) {
+      return res.status(400).json({ success: false, error: 'day_of_week (1-6) is required' })
+    }
+
+    const [{ data: teachers, error: teachersErr }, { data: dayPeriods, error: periodsErr }] = await Promise.all([
+      supabase.from('users').select('id, full_name, role')
+        .eq('school_id', school_id).in('role', ['teacher', 'school_admin', 'principal']).order('full_name'),
+      supabase.from('timetable_periods')
+        .select('teacher_id, period_number, start_time, end_time, subject_name, room, is_break, classes(name), sections(name)')
+        .eq('school_id', school_id).eq('day_of_week', day_of_week),
+    ])
+    if (teachersErr) return res.status(500).json({ success: false, error: teachersErr.message })
+    if (periodsErr) return res.status(500).json({ success: false, error: periodsErr.message })
+
+    // Every distinct period slot offered that day, for the period picker —
+    // deduped by period_number, keeping the first start/end seen for it.
+    const periodMap = new Map<number, { period_number: number; start_time: string; end_time: string }>()
+    for (const p of dayPeriods ?? []) {
+      if (!periodMap.has(p.period_number)) {
+        periodMap.set(p.period_number, { period_number: p.period_number, start_time: p.start_time, end_time: p.end_time })
+      }
+    }
+    const available_periods = [...periodMap.values()].sort((a, b) => a.period_number - b.period_number)
+
+    // A teacher's subjects/classes across the WHOLE day (for context —
+    // "who else could plausibly cover this"), independent of the one
+    // period being checked.
+    const subjectsByTeacher = new Map<string, Set<string>>()
+    const classesByTeacher = new Map<string, Set<string>>()
+    for (const p of dayPeriods ?? []) {
+      if (!p.teacher_id || p.is_break) continue
+      if (!subjectsByTeacher.has(p.teacher_id)) subjectsByTeacher.set(p.teacher_id, new Set())
+      subjectsByTeacher.get(p.teacher_id)!.add(p.subject_name)
+      const className = (p as any).classes?.name
+      if (className) {
+        const label = (p as any).sections?.name ? `${className} - ${(p as any).sections.name}` : className
+        if (!classesByTeacher.has(p.teacher_id)) classesByTeacher.set(p.teacher_id, new Set())
+        classesByTeacher.get(p.teacher_id)!.add(label)
+      }
+    }
+
+    let free = teachers ?? []
+    let busy: any[] = []
+
+    if (period_number) {
+      const busyThisPeriod = (dayPeriods ?? []).filter(p => p.teacher_id && p.period_number === period_number && !p.is_break)
+      const busyTeacherIds = new Set(busyThisPeriod.map(p => p.teacher_id))
+      free = (teachers ?? []).filter(t => !busyTeacherIds.has(t.id))
+      busy = busyThisPeriod.map(p => {
+        const t = (teachers ?? []).find(x => x.id === p.teacher_id)
+        return {
+          teacher_id: p.teacher_id, full_name: t?.full_name ?? 'Unknown', subject_name: p.subject_name,
+          class_name: (p as any).classes?.name, section_name: (p as any).sections?.name, room: p.room,
+        }
+      })
+    }
+
+    const decorate = (t: any) => ({
+      id: t.id, full_name: t.full_name, role: t.role,
+      subjects_today: [...(subjectsByTeacher.get(t.id) ?? [])].sort(),
+      classes_today: [...(classesByTeacher.get(t.id) ?? [])].sort(),
+    })
+
+    res.json({
+      success: true,
+      data: {
+        day_of_week, period_number: period_number ?? null,
+        available_periods,
+        free: free.map(decorate),
+        busy,
+      },
+    })
+  })
+)
+
+// ── GET /students/timetable/attention-required — periods happening
+// RIGHT NOW where the assigned teacher's check-in doesn't line up with
+// showing up: no attendance recorded yet, marked absent/on leave, or
+// checked in after the period had already started. This is the piece
+// that didn't exist before — the weekly timetable (who's SUPPOSED to
+// teach when) and staff_attendance (who's ACTUALLY checked in, and
+// when) never talked to each other; this cross-references them live.
+router.get('/timetable/attention-required', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const now = new Date()
+    const jsDay = now.getDay() // 0=Sun..6=Sat; timetable's day_of_week is 1=Mon..6=Sat, so Sunday has none
+    const nowTime = now.toTimeString().slice(0, 8)
+    const todayDate = toLocalDateStr(now)
+
+    if (jsDay === 0) {
+      return res.json({ success: true, data: { date: todayDate, day_of_week: null, flagged: [] } })
+    }
+    const day_of_week = jsDay
+
+    const [{ data: periods, error: periodsErr }, { data: attendanceRows, error: attErr }] = await Promise.all([
+      supabase.from('timetable_periods')
+        .select('id, teacher_id, period_number, start_time, end_time, subject_name, room, classes(name), sections(name)')
+        .eq('school_id', school_id).eq('day_of_week', day_of_week).eq('is_break', false)
+        .lte('start_time', nowTime).gte('end_time', nowTime),
+      supabase.from('staff_attendance').select('user_id, status, check_in').eq('school_id', school_id).eq('date', todayDate),
+    ])
+    if (periodsErr) return res.status(500).json({ success: false, error: periodsErr.message })
+    if (attErr) return res.status(500).json({ success: false, error: attErr.message })
+
+    const attendanceByUser = new Map((attendanceRows ?? []).map(a => [a.user_id, a]))
+
+    const REASON_LABELS: Record<string, string> = {
+      not_checked_in: 'Not checked in yet',
+      absent: 'Marked absent today',
+      on_leave: 'On approved leave',
+      no_checkin_time: 'Present, but no check-in time recorded',
+      checked_in_late: 'Checked in after this period started',
+    }
+
+    const flagged = (periods ?? [])
+      .filter(p => p.teacher_id)
+      .map(p => {
+        const att = attendanceByUser.get(p.teacher_id as string)
+        let reason: string | null = null
+        if (!att) reason = 'not_checked_in'
+        else if (att.status === 'absent') reason = 'absent'
+        else if (att.status === 'on_leave') reason = 'on_leave'
+        else if (!att.check_in) reason = 'no_checkin_time'
+        else if (att.check_in > p.start_time) reason = 'checked_in_late'
+        return reason ? { ...p, reason } : null
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null)
+
+    const teacherIds = [...new Set(flagged.map(f => f.teacher_id as string))]
+    const { data: teacherRows } = teacherIds.length
+      ? await supabase.from('users').select('id, full_name').in('id', teacherIds)
+      : { data: [] }
+    const nameById = new Map((teacherRows ?? []).map(t => [t.id, t.full_name]))
+
+    const result = flagged.map(f => ({
+      period_id: f.id, period_number: f.period_number,
+      start_time: f.start_time, end_time: f.end_time,
+      subject_name: f.subject_name, room: f.room,
+      class_name: (f as any).classes?.name, section_name: (f as any).sections?.name,
+      teacher_id: f.teacher_id, teacher_name: nameById.get(f.teacher_id as string) ?? 'Unknown',
+      reason: f.reason, reason_label: REASON_LABELS[f.reason as string],
+    }))
+
+    const teacherPeriodsInProgress = (periods ?? []).filter(p => p.teacher_id).length
+    res.json({ success: true, data: { date: todayDate, day_of_week, periods_in_progress: teacherPeriodsInProgress, flagged: result } })
+  })
+)
+
+// ── GET /students/tc-requests/pending — school-wide pending Transfer
+// Certificate requests, for the "Needs Attention Today" dashboard widget.
+// Every other TC route is nested under /:id (one student's own TCs) —
+// nothing school-wide existed before this.
+router.get('/tc-requests/pending', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { data, error } = await supabase
+    .from('transfer_certificates')
+    .select('id, tc_number, issue_date, reason, created_at, students(id, first_name, last_name, admission_number, classes(name))')
+    .eq('school_id', req.user!.school_id)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true })
   if (error) return res.status(500).json({ success: false, error: error.message })
   res.json({ success: true, data })
 }))

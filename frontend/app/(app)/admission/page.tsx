@@ -6,6 +6,7 @@ import { admissionApi } from '@/lib/api'
 import { cn, STATUS_COLORS, formatDate } from '@/lib/utils'
 import { toast } from 'sonner'
 import Link from 'next/link'
+import { PipelineCharts } from '@/components/admission/PipelineCharts'
 
 const PIPELINE_STAGES = [
   { key: 'new',                  label: 'New',           color: 'bg-blue-100 text-blue-700' },
@@ -100,6 +101,9 @@ export default function AdmissionPage() {
 
       {tab === 'inquiries' ? (
         <>
+          {/* Visual pipeline + source breakdown */}
+          <PipelineCharts stats={stats} />
+
           {/* Pipeline stats */}
           <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
             {PIPELINE_STAGES.map(stage => {
@@ -293,10 +297,28 @@ function NewInquiryModal({ classes, onClose }: { classes: any[], onClose: () => 
     budget_range: '', source_id: '',
   })
 
+  // Was previously a dead stub — called the unrelated inquiries list
+  // endpoint, threw the result away, and always resolved to []. No
+  // Source field was ever rendered for it either, so every inquiry
+  // created through this form got source_id: null regardless of what a
+  // counselor might have picked, forever.
   const { data: sourcesData } = useQuery({
     queryKey: ['inquiry-sources'],
-    queryFn: () => admissionApi.inquiries.list({ limit: 1 }).then(() => []).catch(() => []),
+    queryFn: () => admissionApi.inquiries.sources.list().then(r => r.data),
   })
+  const [addingSource, setAddingSource] = useState(false)
+  const [newSourceName, setNewSourceName] = useState('')
+  const addSourceMutation = useMutation({
+    mutationFn: (name: string) => admissionApi.inquiries.sources.create(name),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['inquiry-sources'] })
+      setForm(f => ({ ...f, source_id: res.data.id }))
+      setAddingSource(false)
+      setNewSourceName('')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to add source'),
+  })
+  const addSource = () => newSourceName.trim() && addSourceMutation.mutate(newSourceName.trim())
 
   const mutation = useMutation({
     mutationFn: (data: any) => admissionApi.inquiries.create(data),
@@ -377,6 +399,32 @@ function NewInquiryModal({ classes, onClose }: { classes: any[], onClose: () => 
                 <option value="1L-2L">₹1,00,000 - ₹2,00,000/yr</option>
                 <option value="Above 2L">Above ₹2,00,000/yr</option>
               </select>
+            </Field>
+            <Field label="How did they hear about us?">
+              {addingSource ? (
+                <div className="flex gap-2">
+                  <input className={inputCls} value={newSourceName} autoFocus
+                    onChange={e => setNewSourceName(e.target.value)}
+                    placeholder="e.g. Newspaper Ad"
+                    onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addSource())} />
+                  <button type="button" onClick={addSource} disabled={addSourceMutation.isPending || !newSourceName.trim()}
+                    className="px-3 text-sm font-semibold text-indigo-600 hover:text-indigo-700 disabled:opacity-50 whitespace-nowrap">
+                    {addSourceMutation.isPending ? '...' : 'Save'}
+                  </button>
+                  <button type="button" onClick={() => { setAddingSource(false); setNewSourceName('') }}
+                    className="px-2 text-sm text-gray-400 hover:text-gray-600">✕</button>
+                </div>
+              ) : (
+                <select className={inputCls} value={form.source_id}
+                  onChange={e => {
+                    if (e.target.value === '__add_new__') { setAddingSource(true); return }
+                    setForm(f => ({ ...f, source_id: e.target.value }))
+                  }}>
+                  <option value="">Select source</option>
+                  {(sourcesData ?? []).map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  <option value="__add_new__">+ Add new source...</option>
+                </select>
+              )}
             </Field>
             <Field label="Notes" span={2}>
               <textarea rows={3} className={inputCls + ' resize-none'} value={form.notes}

@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { feeApi, admissionApi } from '@/lib/api'
+import { feeApi, academicYearsApi } from '@/lib/api'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { ArrowLeft, Loader2, ArrowRightLeft, Check, X, Plus } from 'lucide-react'
 import Link from 'next/link'
@@ -86,7 +86,8 @@ export default function ArrearsPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {(arrears ?? []).map((a: any) => {
-                const remaining = Number(a.amount) - Number(a.amount_paid)
+                const isSettled = a.status === 'cleared' || a.status === 'waived'
+                const remaining = isSettled ? 0 : Number(a.amount) - Number(a.amount_paid)
                 const canAct = a.status === 'pending' || a.status === 'partial'
                 return (
                   <tr key={a.id} className="hover:bg-gray-50/80">
@@ -148,7 +149,7 @@ function CarryForwardModal({ onClose }: { onClose: () => void }) {
 
   const { data: years } = useQuery({
     queryKey: ['academic-years'],
-    queryFn: () => admissionApi.academicYears?.() ? admissionApi.academicYears().then((r: any) => r.data) : Promise.resolve([]),
+    queryFn: () => academicYearsApi.list().then((r: any) => r.data),
   })
 
   const handleSubmit = async () => {
@@ -230,6 +231,7 @@ function RecordPaymentModal({ arrear, onClose }: { arrear: any, onClose: () => v
   const handleSubmit = async () => {
     const amt = Number(amount)
     if (!amt || amt <= 0) return toast.error('Enter a valid amount')
+    if (amt > remaining) return toast.error(`Amount can't exceed the remaining balance of ${formatCurrency(remaining)}`)
     setLoading(true)
     try {
       await feeApi.arrears.recordPayment(arrear.id, { amount: amt, payment_mode: paymentMode })
@@ -257,7 +259,7 @@ function RecordPaymentModal({ arrear, onClose }: { arrear: any, onClose: () => v
           </p>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount *</label>
-            <input type="number" className={inputCls} value={amount} onChange={e => setAmount(e.target.value)} />
+            <input type="number" max={remaining} className={inputCls} value={amount} onChange={e => setAmount(e.target.value)} />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Payment Mode</label>

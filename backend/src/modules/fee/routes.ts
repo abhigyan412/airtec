@@ -4,6 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
+import { toLocalDateStr } from '../../shared/utils/academicCalendar'
 
 const router = Router()
 router.use(authenticate)
@@ -225,6 +226,33 @@ router.post(
       .select().single()
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.status(201).json({ success: true, data })
+  })
+)
+
+const UpdateFeeStructureSchema = z.object({
+  amount: z.number().positive().optional(),
+  frequency: z.enum(['monthly', 'quarterly', 'half_yearly', 'annually', 'one_time']).optional(),
+  due_day: z.number().min(1).max(31).optional(),
+  late_fine_per_day: z.number().min(0).optional(),
+  is_optional: z.boolean().optional(),
+})
+
+router.patch(
+  '/structures/:id',
+  requireRole('school_admin', 'accountant'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const body = UpdateFeeStructureSchema.parse(req.body)
+    const { data, error } = await supabase
+      .from('fee_structures')
+      .update(body)
+      .eq('id', id)
+      .eq('school_id', req.user!.school_id)
+      .select('*, fee_heads(id, name), classes(id, name), academic_years(id, name)')
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    if (!data) return res.status(404).json({ success: false, error: 'Fee structure not found' })
+    res.json({ success: true, data })
   })
 )
 
@@ -745,6 +773,40 @@ router.get('/stats', asyncHandler(async (req: AuthRequest, res: Response) => {
   })
 }))
 
+// GET /fees/collection-trend — month-over-month collected amount, for the
+// dashboard's fee trend chart. No such grouping existed anywhere before
+// this. Months are bucketed by LOCAL calendar month (via toLocalDateStr),
+// not a raw slice of the payment_date ISO string — that string is UTC,
+// and slicing it directly would misfile any payment made in the first
+// ~5.5 hours of a new local-calendar month (IST) into the previous month.
+router.get('/collection-trend', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const months = Math.min(24, Math.max(1, Number(req.query.months) || 6))
+  const school_id = req.user!.school_id
+  const now = new Date()
+
+  const buckets = Array.from({ length: months }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (months - 1 - i), 1)
+    return { key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, label: d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }) }
+  })
+
+  const rangeStart = `${buckets[0].key}-01T00:00:00`
+  const { data: payments, error } = await supabase
+    .from('fee_payments')
+    .select('amount_paid, payment_date')
+    .eq('school_id', school_id)
+    .gte('payment_date', rangeStart)
+  if (error) return res.status(500).json({ success: false, error: error.message })
+
+  const sumByMonth = new Map<string, number>()
+  for (const p of payments ?? []) {
+    const key = toLocalDateStr(new Date(p.payment_date)).slice(0, 7)
+    sumByMonth.set(key, (sumByMonth.get(key) ?? 0) + Number(p.amount_paid))
+  }
+
+  const data = buckets.map(b => ({ month: b.key, label: b.label, collected: sumByMonth.get(b.key) ?? 0 }))
+  res.json({ success: true, data })
+}))
+
 
 
 // ── GET /fees/adhoc ───────────────────────────────────────────
@@ -1074,6 +1136,14 @@ router.post('/arrears/:id/payment', requireRole('school_admin', 'principal', 'ac
 
     const { data: arrear } = await supabase.from('fee_arrears').select('*').eq('id', id).eq('school_id', school_id).single()
     if (!arrear) return res.status(404).json({ success: false, error: 'Arrear not found' })
+    if (arrear.status === 'cleared' || arrear.status === 'waived') {
+      return res.status(400).json({ success: false, error: `This arrear is already ${arrear.status}` })
+    }
+
+    const remaining = Number(arrear.amount) - Number(arrear.amount_paid)
+    if (Number(amount) > remaining) {
+      return res.status(400).json({ success: false, error: `Amount exceeds the remaining balance of ${remaining}` })
+    }
 
     const newAmountPaid = Number(arrear.amount_paid) + Number(amount)
     const newStatus = newAmountPaid >= Number(arrear.amount) ? 'cleared' : 'partial'

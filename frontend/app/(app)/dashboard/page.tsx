@@ -7,6 +7,11 @@ import { usePermissions } from '@/lib/usePermissions'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import Link from 'next/link'
+import { NeedsAttentionToday } from '@/components/dashboard/NeedsAttentionToday'
+import { UpcomingExams } from '@/components/dashboard/UpcomingExams'
+import { ClassStrength } from '@/components/dashboard/ClassStrength'
+import { UpcomingEvents } from '@/components/dashboard/UpcomingEvents'
+import { FeeCollectionTrend } from '@/components/dashboard/FeeCollectionTrend'
 
 export default function DashboardPage() {
   const { user } = useAuth()
@@ -132,6 +137,9 @@ export default function DashboardPage() {
           <p className="text-xs text-gray-400">{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
         </div>
       </div>
+
+      {/* Needs Attention Today */}
+      <NeedsAttentionToday />
 
       {/* KPI Cards */}
       {cards.length > 0 && (
@@ -267,6 +275,16 @@ export default function DashboardPage() {
           )}
         </div>
       )}
+
+      {/* Academic snapshot + class strength + upcoming events */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <UpcomingExams />
+        <ClassStrength />
+        <UpcomingEvents />
+      </div>
+
+      {/* Fee collection trend */}
+      <FeeCollectionTrend />
     </div>
   )
 }

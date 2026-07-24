@@ -1,7 +1,7 @@
 import { Router, Response, Request } from 'express'
 import { supabase } from '../../shared/db/client'
-import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
-import { asyncHandler } from '../../shared/utils/helpers'
+import { authenticateFlexible, requireRole, AuthRequest } from '../../shared/middleware/auth'
+import { asyncHandler, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 
 const router = Router()
 
@@ -45,22 +45,18 @@ router.get('/verify/certificate/:cert_number', asyncHandler(async (req: Request,
   </div></body></html>`)
 }))
 
-router.get('/certificate/:cert_number', asyncHandler(async (req: Request, res: Response) => {
+// ── AUTH WALL — everything below requires a valid session, via either
+// the Authorization header (normal API calls) or ?token= (plain links
+// opened in a new tab, since those can't carry a custom header).
+router.use(authenticateFlexible)
+
+router.get('/certificate/:cert_number', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { cert_number } = req.params
-  const { token } = req.query
-  if (token) {
-    const { data: { user } } = await supabase.auth.getUser(token as string)
-    if (!user) return res.status(401).send('<h2>Unauthorized</h2>')
-  } else {
-    const authHeader = req.headers.authorization
-    if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('<h2>Unauthorized</h2>')
-    const { data: { user } } = await supabase.auth.getUser(authHeader.slice(7))
-    if (!user) return res.status(401).send('<h2>Unauthorized</h2>')
-  }
   const { data: cert } = await supabase
     .from('issued_certificates')
     .select('*, students(*, classes(name), schools(name, city, affiliation_board, phone, logo_url)), certificate_templates(name, content), users:issued_by(full_name)')
     .eq('certificate_number', cert_number)
+    .eq('school_id', req.user!.school_id)
     .single()
   if (!cert) return res.status(404).send('<h2>Certificate not found</h2>')
   const student = cert.students as any
@@ -107,25 +103,16 @@ router.get('/certificate/:cert_number', asyncHandler(async (req: Request, res: R
   res.send(html)
 }))
 
-router.get('/admit-card/:exam_id/:student_id', asyncHandler(async (req: Request, res: Response) => {
+router.get('/admit-card/:exam_id/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { exam_id, student_id } = req.params
-  const { token } = req.query
-  if (token) {
-    const { data: { user } } = await supabase.auth.getUser(token as string)
-    if (!user) return res.status(401).send('<h2>Unauthorized</h2>')
-  } else {
-    const authHeader = req.headers.authorization
-    if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('<h2>Unauthorized</h2>')
-    const { data: { user } } = await supabase.auth.getUser(authHeader.slice(7))
-    if (!user) return res.status(401).send('<h2>Unauthorized</h2>')
-  }
   const { data: student } = await supabase
     .from('students')
     .select('*, classes(name), sections(name), schools(name, city, affiliation_board, phone), academic_years(name)')
     .eq('id', student_id)
+    .eq('school_id', req.user!.school_id)
     .single()
   if (!student) return res.status(404).send('<h2>Student not found</h2>')
-  const { data: exam } = await supabase.from('exams').select('*, academic_years(name)').eq('id', exam_id).single()
+  const { data: exam } = await supabase.from('exams').select('*, academic_years(name)').eq('id', exam_id).eq('school_id', req.user!.school_id).single()
   if (!exam) return res.status(404).send('<h2>Exam not found</h2>')
   const { data: subjects } = await supabase.from('exam_subjects').select('*').eq('exam_id', exam_id).eq('class_id', student.class_id).order('exam_date')
   const school = student.schools as any
@@ -186,23 +173,15 @@ router.get('/admit-card/:exam_id/:student_id', asyncHandler(async (req: Request,
   </div></body></html>`)
 }))
 
-router.get('/admit-cards/bulk/:exam_id', asyncHandler(async (req: Request, res: Response) => {
+router.get('/admit-cards/bulk/:exam_id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { exam_id } = req.params
-  const { token, class_id } = req.query
-  if (token) {
-    const { data: { user } } = await supabase.auth.getUser(token as string)
-    if (!user) return res.status(401).send('<h2>Unauthorized</h2>')
-  } else {
-    const authHeader = req.headers.authorization
-    if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('<h2>Unauthorized</h2>')
-    const { data: { user } } = await supabase.auth.getUser(authHeader.slice(7))
-    if (!user) return res.status(401).send('<h2>Unauthorized</h2>')
-  }
-  const { data: exam } = await supabase.from('exams').select('*, academic_years(name)').eq('id', exam_id).single()
+  const { class_id } = req.query
+  const { data: exam } = await supabase.from('exams').select('*, academic_years(name)').eq('id', exam_id).eq('school_id', req.user!.school_id).single()
   if (!exam) return res.status(404).send('<h2>Exam not found</h2>')
   let studentsQuery = supabase
     .from('students')
     .select('*, classes(name), sections(name), schools(name, city, affiliation_board, phone)')
+    .eq('school_id', req.user!.school_id)
     .eq('status', 'active')
   if (class_id) studentsQuery = studentsQuery.eq('class_id', class_id as string)
   const { data: students } = await studentsQuery.order('roll_number')
@@ -257,11 +236,6 @@ router.get('/admit-cards/bulk/:exam_id', asyncHandler(async (req: Request, res: 
   ${cards}</body></html>`)
 }))
 
-// ── AUTH WALL ─────────────────────────────────────────────────
-router.use(authenticate)
-
-// ── AUTHENTICATED ROUTES ──────────────────────────────────────
-
 router.get('/id-card/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { student_id } = req.params
   const { data: student } = await supabase
@@ -314,12 +288,26 @@ router.get('/tc/:student_id', asyncHandler(async (req: AuthRequest, res: Respons
 }))
 
 router.get('/report-card/:exam_id/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { exam_id, student_id } = req.params
+  const { exam_id } = req.params
+  let { student_id } = req.params
+  const school_id = req.user!.school_id
+
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    const { data: exam } = await supabase.from('exams').select('status').eq('id', exam_id).eq('school_id', school_id).single()
+    if (!exam || exam.status !== 'result_published') {
+      return res.status(404).send('<h2>Results have not been published yet</h2>')
+    }
+    const ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+    if (!ownStudentId) return res.status(404).send('<h2>Report card not found</h2>')
+    student_id = ownStudentId
+  }
+
   const { data: rc } = await supabase
     .from('report_cards')
     .select('*, students(*, classes(name), sections(name), houses(name), schools(name, affiliation_board, city, phone, logo_url)), exams(name, exam_type)')
     .eq('exam_id', exam_id)
     .eq('student_id', student_id)
+    .eq('school_id', school_id)
     .single()
   if (!rc) return res.status(404).json({ success: false, error: 'Report card not found' })
   const { data: marks } = await supabase

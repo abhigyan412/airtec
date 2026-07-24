@@ -61,6 +61,54 @@ export const authenticate = async (
   }
 }
 
+// Same as authenticate, but also accepts the token via ?token= query
+// param, not just the Authorization header. For printable documents
+// (ID cards, report cards, certificates, admit cards) opened via a plain
+// `<a href target="_blank">` — the browser can't attach a custom header
+// to that navigation, so the frontend passes the token in the URL
+// instead. Query-param tokens are inherently a bit more exposed (browser
+// history, server access logs, Referer headers) than an Authorization
+// header, which is the tradeoff for supporting plain-link "open in new
+// tab" downloads; every route using this should be a read-only,
+// low-sensitivity document view, not anything that mutates data.
+export const authenticateFlexible = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  const queryToken = typeof req.query.token === 'string' ? req.query.token : null
+  const headerToken = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null
+  const token = queryToken || headerToken
+
+  if (!token) {
+    return res.status(401).send('<h2>Unauthorized</h2>')
+  }
+
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token)
+    if (error || !user) return res.status(401).send('<h2>Unauthorized — invalid or expired link</h2>')
+
+    const { data: profile, error: profileError } = await supabase
+      .from('users')
+      .select('id, full_name, email, school_id, role, is_active')
+      .eq('id', user.id)
+      .single()
+    if (profileError || !profile) return res.status(401).send('<h2>Unauthorized</h2>')
+    if (!profile.is_active) return res.status(403).send('<h2>Account is deactivated</h2>')
+
+    req.user = {
+      id: profile.id,
+      email: profile.email,
+      school_id: profile.school_id,
+      role: profile.role,
+      full_name: profile.full_name,
+    }
+    next()
+  } catch {
+    return res.status(500).send('<h2>Authentication failed</h2>')
+  }
+}
+
 // Role-based access control middleware factory
 export const requireRole = (...roles: string[]) => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {

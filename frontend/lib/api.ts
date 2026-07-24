@@ -69,6 +69,21 @@ export const admitCardApi = {
   },
 }
 
+// Printable pages opened via a plain `<a href target="_blank">` — the
+// browser can't attach an Authorization header to that navigation, so
+// the token has to travel as a query param instead (backend accepts
+// both via authenticateFlexible).
+export const documentsApi = {
+  idCard: (studentId: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
+    return `${API_BASE}/documents/id-card/${studentId}?token=${token}`
+  },
+  reportCard: (examId: string, studentId: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
+    return `${API_BASE}/documents/report-card/${examId}/${studentId}?token=${token}`
+  },
+}
+
 export const studentsApi = {
   list: (params?: Record<string, any>) =>
     api.get('/students', { params }).then(r => r.data),
@@ -80,9 +95,15 @@ export const studentsApi = {
     api.patch(`/students/${id}`, data).then(r => r.data),
   stats: () =>
     api.get('/students/stats/dashboard').then(r => r.data),
+  attendanceToday: () =>
+    api.get('/students/attendance/today').then(r => r.data),
+  attendanceClassSummary: (date?: string) =>
+    api.get('/students/attendance/class-summary', { params: { date } }).then(r => r.data),
+  pendingTcRequests: () =>
+    api.get('/students/tc-requests/pending').then(r => r.data),
   bulkPromote: (data: any) =>
     api.post('/students/bulk/promote', data).then(r => r.data),
-  promotions: (params?: { student_id?: string; limit?: number }) =>
+  promotions: (params?: { student_id?: string; promotion_type?: string; class_id?: string; limit?: number }) =>
     api.get('/students/promotions', { params }).then(r => r.data),
   issueTC: (id: string, data: any) =>
     api.post(`/students/${id}/tc`, data).then(r => r.data),
@@ -136,6 +157,10 @@ export const admissionApi = {
     convertToApplication: (id: string) =>
       api.post(`/admission/inquiries/${id}/convert-to-application`).then(r => r.data),
     academicYears: () => api.get('/admission/academic-years').then(r => r.data),
+    sources: {
+      list: () => api.get('/admission/inquiry-sources').then(r => r.data),
+      create: (name: string) => api.post('/admission/inquiry-sources', { name }).then(r => r.data),
+    },
 
   },
   applications: {
@@ -154,6 +179,7 @@ export const admissionApi = {
 
 export const classesApi = {
   list: () => api.get('/admission/classes').then(r => r.data),
+  strength: () => api.get('/admission/classes/strength').then(r => r.data),
   create: (data: { name: string; numeric_level?: number; stream?: string }) =>
     api.post('/admission/classes', data).then(r => r.data),
   update: (id: string, data: { name?: string; numeric_level?: number; stream?: string }) =>
@@ -177,6 +203,7 @@ export const classesApi = {
 export const calendarApi = {
   holidays: {
     list: (year?: number) => api.get('/admission/holidays', { params: { year } }).then(r => r.data),
+    upcoming: (from: string, to: string) => api.get('/admission/holidays', { params: { from, to } }).then(r => r.data),
     create: (data: { date: string; name: string }) =>
       api.post('/admission/holidays', data).then(r => r.data),
     delete: (id: string) => api.delete(`/admission/holidays/${id}`).then(r => r.data),
@@ -198,6 +225,8 @@ export const feeApi = {
       api.get('/fees/structures', { params }).then(r => r.data),
     create: (data: any) =>
       api.post('/fees/structures', data).then(r => r.data),
+    update: (id: string, data: any) =>
+      api.patch(`/fees/structures/${id}`, data).then(r => r.data),
   },
   invoices: {
     list: (params?: Record<string, any>) =>
@@ -211,6 +240,21 @@ export const feeApi = {
   },
   dues: (params?: Record<string, any>) =>
     api.get('/fees/dues', { params }).then(r => r.data),
+  collectionTrend: (months?: number) =>
+    api.get('/fees/collection-trend', { params: { months } }).then(r => r.data),
+  arrears: {
+    list: (params?: Record<string, any>) =>
+      api.get('/fees/arrears', { params }).then(r => r.data),
+    carryForward: (fromAcademicYearId: string, toAcademicYearId: string) =>
+      api.post('/fees/arrears/carry-forward', {
+        from_academic_year_id: fromAcademicYearId,
+        to_academic_year_id: toAcademicYearId,
+      }).then(r => r.data),
+    recordPayment: (id: string, data: any) =>
+      api.post(`/fees/arrears/${id}/payment`, data).then(r => r.data),
+    waive: (id: string, reason: string) =>
+      api.patch(`/fees/arrears/${id}/waive`, { reason }).then(r => r.data),
+  },
    discounts: {
     list: (params?: Record<string, any>) =>
       api.get('/fees/discounts', { params }).then(r => r.data),
@@ -258,6 +302,10 @@ export const timetableApi = {
   get: (params?: any) => api.get('/students/timetable', { params }).then(r => r.data),
   save: (periods: any[]) => api.post('/students/timetable', { periods }).then(r => r.data),
   delete: (id: string) => api.delete(`/students/timetable/${id}`).then(r => r.data),
+  freeFaculty: (dayOfWeek: number, periodNumber?: number) =>
+    api.get('/students/timetable/free-faculty', { params: { day_of_week: dayOfWeek, period_number: periodNumber } }).then(r => r.data),
+  attentionRequired: () =>
+    api.get('/students/timetable/attention-required').then(r => r.data),
 }
 
 export const resourcesApi = {
