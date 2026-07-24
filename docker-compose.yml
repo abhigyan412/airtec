@@ -8,10 +8,12 @@
 # public domain and there is no CORS to configure.
 #
 # No host `ports:` are published — Dokploy/Traefik routes to the container
-# via the exposed port + the domain you assign, and publishing a host port
-# collides with other apps on the shared host ("port is already allocated").
-# For LOCAL testing with host access, use docker-compose.override.yml (see
-# that file) which adds a port mapping.
+# via the exposed port + the domain you assign (set the domain's target
+# Port to 3000, the container port). Publishing a host port collides with
+# other apps on the shared host ("port is already allocated").
+#
+# For LOCAL browser access, add the (non-auto-merged) local override file:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
 # ─────────────────────────────────────────────────────────────────────
 services:
   backend:
