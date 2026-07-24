@@ -4,7 +4,10 @@ import Link from 'next/link'
 import { calendarApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { formatDate } from '@/lib/utils'
-import { PartyPopper, CalendarDays } from 'lucide-react'
+import { PartyPopper, CalendarDays, ArrowRight } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Skeleton } from '@/components/ui/skeleton'
 
 const todayStr = (() => {
   const d = new Date()
@@ -33,30 +36,41 @@ export function UpcomingEvents() {
   const holidays = data ?? []
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-          <CalendarDays className="w-4 h-4 text-gray-400" /> Upcoming Events
-        </h3>
-        <Link href="/settings/calendar" className="text-xs text-indigo-600 font-medium hover:text-indigo-700">Manage →</Link>
-      </div>
-      {isLoading ? (
-        <div className="h-24 bg-gray-50 rounded-xl animate-pulse" />
-      ) : holidays.length === 0 ? (
-        <div className="py-8 text-center text-gray-300">
-          <PartyPopper className="w-8 h-8 mx-auto mb-2" />
-          <p className="text-sm text-gray-400">No holidays in the next 30 days</p>
-        </div>
-      ) : (
-        <div className="space-y-2.5">
-          {holidays.slice(0, 6).map((h: any) => (
-            <div key={h.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl border border-gray-50">
-              <p className="text-sm font-medium text-gray-900 truncate">{h.name}</p>
-              <span className="text-xs font-semibold text-emerald-600 flex-shrink-0 ml-3">{formatDate(h.date)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <CardTitle className="flex items-center gap-2">
+          <CalendarDays className="h-4 w-4 text-muted-foreground" /> Upcoming Events
+        </CardTitle>
+        <Link
+          href="/settings/calendar"
+          className="inline-flex items-center gap-1 text-xs font-medium text-primary transition-colors hover:text-primary/80"
+        >
+          Manage <ArrowRight className="h-3 w-3" />
+        </Link>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-2.5">
+            <Skeleton className="h-11 w-full rounded-xl" />
+            <Skeleton className="h-11 w-full rounded-xl" />
+            <Skeleton className="h-11 w-full rounded-xl" />
+          </div>
+        ) : holidays.length === 0 ? (
+          <EmptyState icon={PartyPopper} title="No holidays in the next 30 days" className="py-10" />
+        ) : (
+          <div className="space-y-2.5">
+            {holidays.slice(0, 6).map((h: any) => (
+              <div
+                key={h.id}
+                className="flex items-center justify-between rounded-xl border border-border px-3 py-2.5"
+              >
+                <p className="truncate text-sm font-medium text-foreground">{h.name}</p>
+                <span className="ml-3 flex-shrink-0 text-xs font-semibold text-success">{formatDate(h.date)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }

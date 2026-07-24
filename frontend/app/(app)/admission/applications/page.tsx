@@ -1,14 +1,20 @@
 'use client'
 import { useQuery } from '@tanstack/react-query'
 import { admissionApi } from '@/lib/api'
-import { cn, formatDate } from '@/lib/utils'
+import { formatDate } from '@/lib/utils'
 import { ArrowLeft, FileText, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import { EmptyState } from '@/components/shared/EmptyState'
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-amber-100 text-amber-700',
-  approved: 'bg-emerald-100 text-emerald-700',
-  rejected: 'bg-red-100 text-red-700',
+const STATUS_VARIANTS: Record<string, 'warning' | 'success' | 'destructive' | 'secondary'> = {
+  pending: 'warning',
+  approved: 'success',
+  rejected: 'destructive',
 }
 
 export default function ApplicationsListPage() {
@@ -19,58 +25,56 @@ export default function ApplicationsListPage() {
 
   return (
     <div className="max-w-5xl space-y-6">
-      <div className="flex items-start gap-4">
-        <Link href="/admission" className="p-2 hover:bg-gray-100 rounded-xl transition-colors mt-1">
-          <ArrowLeft className="w-5 h-5 text-gray-500" />
-        </Link>
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="icon" asChild className="mt-1">
+          <Link href="/admission" aria-label="Back to CRM">
+            <ArrowLeft className="w-5 h-5" />
+          </Link>
+        </Button>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Admission Applications</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Applications going through the approval workflow</p>
+          <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Admission Applications</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">Applications going through the approval workflow</p>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+      <Card className="overflow-hidden">
         {isLoading ? (
-          <div className="p-12 text-center"><div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" /></div>
-        ) : (data ?? []).length === 0 ? (
-          <div className="p-12 text-center text-gray-400">
-            <FileText className="w-10 h-10 mx-auto mb-2 text-gray-200" />
-            <p className="font-medium">No applications yet</p>
+          <div className="p-6 space-y-3">
+            {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
           </div>
+        ) : (data ?? []).length === 0 ? (
+          <EmptyState icon={FileText} title="No applications yet" className="py-16" />
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Application #</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Student</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Parent Phone</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Status</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Created</th>
-                <th className="px-5 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="uppercase text-xs">Application #</TableHead>
+                <TableHead className="uppercase text-xs">Student</TableHead>
+                <TableHead className="uppercase text-xs">Parent Phone</TableHead>
+                <TableHead className="uppercase text-xs">Status</TableHead>
+                <TableHead className="uppercase text-xs">Created</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {(data ?? []).map((app: any) => (
-                <tr key={app.id} onClick={() => window.location.href = `/admission/applications/${app.id}`}
-                  className="hover:bg-gray-50/80 transition-colors cursor-pointer">
-                  <td className="px-5 py-3.5 font-mono text-xs text-gray-500">{app.application_number}</td>
-                  <td className="px-5 py-3.5 font-semibold text-gray-900">{app.student_first_name} {app.student_last_name}</td>
-                  <td className="px-5 py-3.5 text-gray-600">{app.father_phone}</td>
-                  <td className="px-5 py-3.5">
-                    <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize', STATUS_COLORS[app.status] ?? 'bg-gray-100 text-gray-600')}>
-                      {app.status}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5 text-gray-400 text-xs">{formatDate(app.created_at)}</td>
-                  <td className="px-5 py-3.5 text-right">
-                    <ChevronRight className="w-4 h-4 text-gray-300 inline" />
-                  </td>
-                </tr>
+                <TableRow key={app.id} onClick={() => window.location.href = `/admission/applications/${app.id}`}>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{app.application_number}</TableCell>
+                  <TableCell className="font-semibold text-foreground">{app.student_first_name} {app.student_last_name}</TableCell>
+                  <TableCell className="text-muted-foreground">{app.father_phone}</TableCell>
+                  <TableCell>
+                    <Badge variant={STATUS_VARIANTS[app.status] ?? 'secondary'} className="capitalize">{app.status}</Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-xs">{formatDate(app.created_at)}</TableCell>
+                  <TableCell className="text-right">
+                    <ChevronRight className="w-4 h-4 text-muted-foreground inline" />
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
-      </div>
+      </Card>
     </div>
   )
 }

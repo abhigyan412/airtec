@@ -1,6 +1,7 @@
 'use client'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 export type CalendarEvent = { id: string; label: string; color: string }
 
@@ -33,30 +34,30 @@ export function MonthCalendar({
   })
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
-        <h3 className="font-semibold text-gray-900 text-sm">
+    <div className="bg-card rounded-2xl border border-border overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-border">
+        <h3 className="font-semibold text-foreground text-sm">
           {month.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
         </h3>
         <div className="flex items-center gap-1">
-          <button onClick={() => onMonthChange(new Date(year, monthIdx - 1, 1))}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-50 transition-colors">
+          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Previous month"
+            onClick={() => onMonthChange(new Date(year, monthIdx - 1, 1))}>
             <ChevronLeft className="w-4 h-4" />
-          </button>
-          <button onClick={() => onMonthChange(new Date())}
-            className="px-2.5 py-1 rounded-lg text-xs font-semibold text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors">
+          </Button>
+          <Button variant="ghost" size="sm" className="h-8"
+            onClick={() => onMonthChange(new Date())}>
             Today
-          </button>
-          <button onClick={() => onMonthChange(new Date(year, monthIdx + 1, 1))}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-50 transition-colors">
+          </Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Next month"
+            onClick={() => onMonthChange(new Date(year, monthIdx + 1, 1))}>
             <ChevronRight className="w-4 h-4" />
-          </button>
+          </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-7 border-b border-gray-100">
+      <div className="grid grid-cols-7 border-b border-border">
         {WEEKDAYS.map(w => (
-          <div key={w} className="px-2 py-2 text-center text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+          <div key={w} className="px-2 py-2 text-center text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
             {w}
           </div>
         ))}
@@ -77,15 +78,15 @@ export function MonthCalendar({
               key={i}
               onClick={() => onSelectDate(key)}
               className={cn(
-                'min-h-[76px] p-1.5 border-b border-r border-gray-50 text-left align-top flex flex-col gap-1 transition-colors',
+                'min-h-[76px] p-1.5 border-b border-r border-border/60 text-left align-top flex flex-col gap-1 transition-colors',
                 (i + 1) % 7 === 0 && 'border-r-0',
-                !inMonth && 'bg-gray-50/50',
-                isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'
+                !inMonth && 'bg-muted/30',
+                isSelected ? 'bg-primary/10' : 'hover:bg-muted/50'
               )}
             >
               <span className={cn(
                 'inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-medium flex-shrink-0',
-                !inMonth ? 'text-gray-300' : isToday ? 'bg-indigo-600 text-white' : isSelected ? 'text-indigo-700 font-semibold' : 'text-gray-600'
+                !inMonth ? 'text-muted-foreground/40' : isToday ? 'bg-primary text-primary-foreground' : isSelected ? 'text-primary font-semibold' : 'text-foreground'
               )}>
                 {d.getDate()}
               </span>
@@ -95,7 +96,7 @@ export function MonthCalendar({
                     {ev.label}
                   </span>
                 ))}
-                {extra > 0 && <span className="text-[10px] text-gray-400 px-1.5">+{extra} more</span>}
+                {extra > 0 && <span className="text-[10px] text-muted-foreground px-1.5">+{extra} more</span>}
               </div>
             </button>
           )

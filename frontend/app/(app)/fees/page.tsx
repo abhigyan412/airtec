@@ -10,6 +10,19 @@ import Link from 'next/link'
 import { ArrowRightLeft } from 'lucide-react'
 import { FeeAnalytics } from '@/components/fees/FeeAnalytics'
 import { FeeCollectionTrend } from '@/components/dashboard/FeeCollectionTrend'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import {
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import { StatCard } from '@/components/shared/StatCard'
+import { EmptyState } from '@/components/shared/EmptyState'
 
 export default function FeesPage() {
   const [tab, setTab] = useState<'invoices' | 'dues' | 'structures' | 'discounts'>('invoices')
@@ -32,40 +45,28 @@ export default function FeesPage() {
   })
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="animate-fade-in space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Fee Management</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Track collections, invoices, and dues</p>
+          <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Fee Management</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">Track collections, invoices, and dues</p>
         </div>
-        <div className="flex items-center gap-3">
-          <Link href="/fees/arrears"
-            className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors">
-            <ArrowRightLeft className="w-4 h-4" /> Arrears
-          </Link>
-          <Link href="/fees/collections"
-            className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors">
-            <AlertTriangle className="w-4 h-4" /> Collections & Dues
-          </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="outline">
+            <Link href="/fees/arrears"><ArrowRightLeft className="h-4 w-4" /> Arrears</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/fees/collections"><AlertTriangle className="h-4 w-4" /> Collections &amp; Dues</Link>
+          </Button>
         </div>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { label: 'Total Billed', value: formatCurrency(stats?.total_billed ?? 0), icon: CreditCard, color: 'text-brand-600 bg-brand-50' },
-          { label: 'Collected', value: formatCurrency(stats?.total_collected ?? 0), icon: CheckCircle, color: 'text-emerald-600 bg-emerald-50' },
-          { label: 'Due', value: formatCurrency(stats?.total_due ?? 0), icon: AlertCircle, color: 'text-rose-600 bg-rose-50' },
-          { label: 'Partial Paid', value: stats?.partial_invoices ?? 0, icon: Clock, color: 'text-amber-600 bg-amber-50' },
-        ].map(s => (
-          <div key={s.label} className="bg-white rounded-xl border border-gray-200 p-5">
-            <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center mb-3', s.color.split(' ')[1])}>
-              <s.icon className={cn('w-5 h-5', s.color.split(' ')[0])} />
-            </div>
-            <p className="text-2xl font-bold text-gray-900">{s.value}</p>
-            <p className="text-sm text-gray-500 mt-0.5">{s.label}</p>
-          </div>
-        ))}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard label="Total Billed" value={formatCurrency(stats?.total_billed ?? 0)} icon={CreditCard} accent="primary" />
+        <StatCard label="Collected" value={formatCurrency(stats?.total_collected ?? 0)} icon={CheckCircle} accent="success" />
+        <StatCard label="Due" value={formatCurrency(stats?.total_due ?? 0)} icon={AlertCircle} accent="destructive" />
+        <StatCard label="Partial Paid" value={stats?.partial_invoices ?? 0} icon={Clock} accent="warning" />
       </div>
 
       {/* Analytics */}
@@ -73,39 +74,27 @@ export default function FeesPage() {
       <FeeCollectionTrend />
 
       {/* Tabs */}
-      <div className="bg-white rounded-xl border border-gray-200">
-        <div className="flex border-b border-gray-200 px-4">
-          {(['invoices', 'dues', 'structures', 'discounts'] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={cn(
-                'px-4 py-3 text-sm font-medium border-b-2 transition-colors capitalize',
-                tab === t
-                  ? 'border-brand-600 text-brand-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              )}
-            >
-              {t === 'dues' ? 'Pending Dues' : t === 'structures' ? 'Fee Structure' : t === 'discounts' ? 'Discounts' : 'Invoices'}
-            </button>
-          ))}
-        </div>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+        <TabsList>
+          <TabsTrigger value="invoices">Invoices</TabsTrigger>
+          <TabsTrigger value="dues">Pending Dues</TabsTrigger>
+          <TabsTrigger value="structures">Fee Structure</TabsTrigger>
+          <TabsTrigger value="discounts">Discounts</TabsTrigger>
+        </TabsList>
 
-        <div className="p-4">
-          {tab === 'invoices' && (
-            <InvoicesTable data={invoices?.data ?? []} />
-          )}
-          {tab === 'dues' && (
-            <DuesTable data={dues?.data ?? []} />
-          )}
-          {tab === 'structures' && (
-            <FeeStructures />
-          )}
-          {tab === 'discounts' && (
-            <DiscountsTab />
-          )}
-        </div>
-      </div>
+        <TabsContent value="invoices">
+          <InvoicesTable data={invoices?.data ?? []} />
+        </TabsContent>
+        <TabsContent value="dues">
+          <DuesTable data={dues?.data ?? []} />
+        </TabsContent>
+        <TabsContent value="structures">
+          <Card><CardContent className="p-4"><FeeStructures /></CardContent></Card>
+        </TabsContent>
+        <TabsContent value="discounts">
+          <Card><CardContent className="p-4"><DiscountsTab /></CardContent></Card>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -154,135 +143,143 @@ function RecordInvoicePaymentModal({ invoice, onClose }: { invoice: any, onClose
     mutation.mutate()
   }
 
-  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Record Payment</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <p className="text-sm text-gray-500">
-            {invoice.students?.first_name} {invoice.students?.last_name} · {invoice.invoice_number}
-            <br />Outstanding: <span className="font-semibold text-rose-600">{formatCurrency(invoice.amount_due)}</span>
-          </p>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount *</label>
-            <input type="number" max={invoice.amount_due} className={inputCls} value={amount} onChange={e => setAmount(e.target.value)} />
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Record Payment</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          {invoice.students?.first_name} {invoice.students?.last_name} · {invoice.invoice_number}
+          <br />Outstanding: <span className="font-semibold text-destructive">{formatCurrency(invoice.amount_due)}</span>
+        </p>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="pay-amount">Amount *</Label>
+            <Input id="pay-amount" type="number" max={invoice.amount_due} value={amount} onChange={e => setAmount(e.target.value)} />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Payment Mode</label>
-            <select className={inputCls} value={paymentMode} onChange={e => setPaymentMode(e.target.value as any)}>
-              {PAYMENT_MODES.map(m => <option key={m} value={m}>{m === 'neft' ? 'NEFT' : m === 'upi' ? 'UPI' : m[0].toUpperCase() + m.slice(1)}</option>)}
-            </select>
+          <div className="space-y-1.5">
+            <Label>Payment Mode</Label>
+            <Select value={paymentMode} onValueChange={(v) => setPaymentMode(v as any)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {PAYMENT_MODES.map(m => (
+                  <SelectItem key={m} value={m}>{m === 'neft' ? 'NEFT' : m === 'upi' ? 'UPI' : m[0].toUpperCase() + m.slice(1)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           {paymentMode === 'cheque' ? (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Cheque Number</label>
-              <input className={inputCls} value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
+            <div className="space-y-1.5">
+              <Label htmlFor="cheque-number">Cheque Number</Label>
+              <Input id="cheque-number" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
             </div>
           ) : paymentMode !== 'cash' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Transaction Reference</label>
-              <input className={inputCls} value={transactionReference} onChange={e => setTransactionReference(e.target.value)} placeholder="UTR / reference number" />
+            <div className="space-y-1.5">
+              <Label htmlFor="txn-ref">Transaction Reference</Label>
+              <Input id="txn-ref" value={transactionReference} onChange={e => setTransactionReference(e.target.value)} placeholder="UTR / reference number" />
             </div>
           )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes</label>
-            <input className={inputCls} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional" />
+          <div className="space-y-1.5">
+            <Label htmlFor="pay-notes">Notes</Label>
+            <Input id="pay-notes" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional" />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSubmit} disabled={mutation.isPending}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {mutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} Record
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={mutation.isPending}>
+            {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Record
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
 function InvoicesTable({ data }: { data: any[] }) {
-  if (!data.length) return <Empty message="No invoices yet" />
+  if (!data.length) return <Card><EmptyState icon={CreditCard} title="No invoices yet" /></Card>
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="border-b border-gray-100">
-          <th className="pb-3 text-left font-medium text-gray-500">Invoice</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Student</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Amount</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Due Date</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Status</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-gray-50">
-        {data.map((inv: any) => (
-          <tr key={inv.id} className="hover:bg-gray-50">
-            <td className="py-3 font-mono text-xs text-gray-500">{inv.invoice_number}</td>
-            <td className="py-3">
-              <p className="font-medium text-gray-900">
-                {inv.students?.first_name} {inv.students?.last_name}
-              </p>
-              <p className="text-xs text-gray-400">{inv.students?.classes?.name}</p>
-            </td>
-            <td className="py-3 font-semibold text-gray-900">{formatCurrency(inv.total_amount)}</td>
-            <td className="py-3 text-gray-500">{inv.due_date ? formatDate(inv.due_date) : '—'}</td>
-            <td className="py-3">
-              <span className={cn('px-2 py-1 rounded-full text-xs font-medium', STATUS_COLORS[inv.status])}>
-                {inv.status}
-              </span>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <Card>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Invoice</TableHead>
+              <TableHead>Student</TableHead>
+              <TableHead>Amount</TableHead>
+              <TableHead>Due Date</TableHead>
+              <TableHead>Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.map((inv: any) => (
+              <TableRow key={inv.id} className="cursor-default">
+                <TableCell className="font-mono text-xs text-muted-foreground">{inv.invoice_number}</TableCell>
+                <TableCell>
+                  <p className="font-medium text-foreground">
+                    {inv.students?.first_name} {inv.students?.last_name}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{inv.students?.classes?.name}</p>
+                </TableCell>
+                <TableCell className="font-semibold text-foreground">{formatCurrency(inv.total_amount)}</TableCell>
+                <TableCell className="text-muted-foreground">{inv.due_date ? formatDate(inv.due_date) : '—'}</TableCell>
+                <TableCell>
+                  <span className={cn('rounded-full px-2 py-1 text-xs font-medium', STATUS_COLORS[inv.status])}>
+                    {inv.status}
+                  </span>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   )
 }
 
 function DuesTable({ data }: { data: any[] }) {
   const [payTarget, setPayTarget] = useState<any>(null)
-  if (!data.length) return <Empty message="No pending dues 🎉" />
+  if (!data.length) return <Card><EmptyState icon={CheckCircle} title="No pending dues 🎉" /></Card>
   return (
     <>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-gray-100">
-            <th className="pb-3 text-left font-medium text-gray-500">Student</th>
-            <th className="pb-3 text-left font-medium text-gray-500">Class</th>
-            <th className="pb-3 text-left font-medium text-gray-500">Amount Due</th>
-            <th className="pb-3 text-left font-medium text-gray-500">Invoice</th>
-            <th className="pb-3 text-left font-medium text-gray-500">Status</th>
-            <th className="pb-3" />
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-50">
-          {data.map((inv: any) => (
-            <tr key={inv.id} className="hover:bg-gray-50">
-              <td className="py-3 font-medium text-gray-900">
-                {inv.students?.first_name} {inv.students?.last_name}
-              </td>
-              <td className="py-3 text-gray-500">{inv.students?.classes?.name}</td>
-              <td className="py-3 font-semibold text-rose-600">{formatCurrency(inv.amount_due)}</td>
-              <td className="py-3 font-mono text-xs text-gray-400">{inv.invoice_number}</td>
-              <td className="py-3">
-                <span className={cn('px-2 py-1 rounded-full text-xs font-medium', STATUS_COLORS[inv.status])}>
-                  {inv.status}
-                </span>
-              </td>
-              <td className="py-3 text-right">
-                <button onClick={() => setPayTarget(inv)}
-                  className="px-3 py-1.5 bg-indigo-50 text-indigo-700 text-xs font-semibold rounded-lg hover:bg-indigo-100">
-                  Record Payment
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Student</TableHead>
+                <TableHead>Class</TableHead>
+                <TableHead>Amount Due</TableHead>
+                <TableHead>Invoice</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.map((inv: any) => (
+                <TableRow key={inv.id} className="cursor-default">
+                  <TableCell className="font-medium text-foreground">
+                    {inv.students?.first_name} {inv.students?.last_name}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{inv.students?.classes?.name}</TableCell>
+                  <TableCell className="font-semibold text-destructive">{formatCurrency(inv.amount_due)}</TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{inv.invoice_number}</TableCell>
+                  <TableCell>
+                    <span className={cn('rounded-full px-2 py-1 text-xs font-medium', STATUS_COLORS[inv.status])}>
+                      {inv.status}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button size="sm" variant="secondary" onClick={() => setPayTarget(inv)}>
+                      Record Payment
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
       {payTarget && <RecordInvoicePaymentModal invoice={payTarget} onClose={() => setPayTarget(null)} />}
     </>
   )
@@ -358,100 +355,101 @@ function FeeStructures() {
     updateMutation.mutate({ amount: amt, frequency: editFrequency, is_optional: editOptional })
   }
 
-  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
   const selectedHeadName = (heads ?? []).find((h: any) => h.id === selectedHeadId)?.name
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <label className="text-xs text-gray-500 font-medium">Category</label>
-          <select value={selectedHeadId} onChange={e => setSelectedHeadId(e.target.value)}
-            className="px-3 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-w-[180px]">
-            <option value="">All Categories</option>
-            {(heads ?? []).map((h: any) => <option key={h.id} value={h.id}>{h.name}</option>)}
-          </select>
+          <Label className="text-xs text-muted-foreground">Category</Label>
+          <Select value={selectedHeadId || 'all'} onValueChange={v => setSelectedHeadId(v === 'all' ? '' : v)}>
+            <SelectTrigger className="min-w-[180px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Categories</SelectItem>
+              {(heads ?? []).map((h: any) => <SelectItem key={h.id} value={h.id}>{h.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowAddCategory(true)}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50">
-            <Plus className="w-4 h-4" /> Add Category
-          </button>
-          <button onClick={() => setShowAddAmount(true)}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-indigo-700">
-            <Plus className="w-4 h-4" /> Add Class Amount
-          </button>
+          <Button variant="outline" onClick={() => setShowAddCategory(true)}>
+            <Plus className="h-4 w-4" /> Add Category
+          </Button>
+          <Button onClick={() => setShowAddAmount(true)}>
+            <Plus className="h-4 w-4" /> Add Class Amount
+          </Button>
         </div>
       </div>
 
       {(headsLoading || structuresLoading) ? (
-        <div className="py-12 text-center"><div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" /></div>
+        <div className="py-12 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" /></div>
       ) : !(heads ?? []).length ? (
-        <Empty message="No fee categories configured yet — add one to get started" />
+        <EmptyState icon={Tag} title="No fee categories configured yet — add one to get started" />
       ) : !rows.length ? (
-        <Empty message={selectedHeadName ? `No classes configured under ${selectedHeadName} yet` : 'No fee structures configured yet'} />
+        <EmptyState icon={Tag} title={selectedHeadName ? `No classes configured under ${selectedHeadName} yet` : 'No fee structures configured yet'} />
       ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100">
-              {!selectedHeadId && <th className="pb-3 text-left font-medium text-gray-500">Category</th>}
-              <th className="pb-3 text-left font-medium text-gray-500">Class</th>
-              <th className="pb-3 text-left font-medium text-gray-500">Amount</th>
-              <th className="pb-3 text-left font-medium text-gray-500">Frequency</th>
-              <th className="pb-3 text-left font-medium text-gray-500">Academic Year</th>
-              <th className="pb-3" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              {!selectedHeadId && <TableHead>Category</TableHead>}
+              <TableHead>Class</TableHead>
+              <TableHead>Amount</TableHead>
+              <TableHead>Frequency</TableHead>
+              <TableHead>Academic Year</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((s: any) => {
               const isEditing = editingId === s.id
               return (
-                <tr key={s.id} className="hover:bg-gray-50">
-                  {!selectedHeadId && <td className="py-3 text-gray-600">{s.fee_heads?.name}</td>}
-                  <td className="py-3 font-medium text-gray-900">{s.classes?.name}</td>
-                  <td className="py-3">
+                <TableRow key={s.id} className="cursor-default">
+                  {!selectedHeadId && <TableCell className="text-muted-foreground">{s.fee_heads?.name}</TableCell>}
+                  <TableCell className="font-medium text-foreground">{s.classes?.name}</TableCell>
+                  <TableCell>
                     {isEditing ? (
-                      <input type="number" autoFocus className="w-28 px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      <Input type="number" autoFocus className="h-8 w-28"
                         value={editAmount} onChange={e => setEditAmount(e.target.value)} />
                     ) : (
-                      <span className="font-semibold text-gray-900">
-                        {formatCurrency(s.amount)}{s.is_optional && <span className="ml-1.5 text-xs font-normal text-gray-400">(optional)</span>}
+                      <span className="font-semibold text-foreground">
+                        {formatCurrency(s.amount)}{s.is_optional && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(optional)</span>}
                       </span>
                     )}
-                  </td>
-                  <td className="py-3 text-gray-500">
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
                     {isEditing ? (
-                      <select value={editFrequency} onChange={e => setEditFrequency(e.target.value)}
-                        className="px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-                        {Object.entries(FREQUENCY_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                      </select>
+                      <Select value={editFrequency} onValueChange={setEditFrequency}>
+                        <SelectTrigger className="h-8 w-[150px]"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(FREQUENCY_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
                     ) : (
                       FREQUENCY_LABELS[s.frequency] ?? s.frequency
                     )}
-                  </td>
-                  <td className="py-3 text-gray-400 text-xs">{s.academic_years?.name}</td>
-                  <td className="py-3 text-right">
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{s.academic_years?.name}</TableCell>
+                  <TableCell className="text-right">
                     {isEditing ? (
                       <div className="flex justify-end gap-1.5">
-                        <button onClick={saveEdit} disabled={updateMutation.isPending}
-                          className="p-1.5 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 disabled:opacity-50">
-                          {updateMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                        </button>
-                        <button onClick={() => setEditingId(null)} className="p-1.5 bg-gray-50 text-gray-500 rounded-lg hover:bg-gray-100">
-                          <X className="w-3.5 h-3.5" />
-                        </button>
+                        <Button size="icon" className="h-8 w-8 bg-success text-success-foreground hover:bg-success/90"
+                          onClick={saveEdit} disabled={updateMutation.isPending} aria-label="Save">
+                          {updateMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                        </Button>
+                        <Button size="icon" variant="secondary" className="h-8 w-8" onClick={() => setEditingId(null)} aria-label="Cancel">
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
                     ) : (
-                      <button onClick={() => startEdit(s)} className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg">
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
+                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => startEdit(s)} aria-label="Edit">
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               )
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
 
       {showAddCategory && <AddCategoryModal onClose={() => { setShowAddCategory(false); invalidate() }} />}
@@ -468,8 +466,6 @@ function AddCategoryModal({ onClose }: { onClose: () => void }) {
   const [description, setDescription] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-
   const handleSubmit = async () => {
     if (!name.trim()) return toast.error('Category name is required')
     setLoading(true)
@@ -485,31 +481,29 @@ function AddCategoryModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Add Fee Category</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Category Name *</label>
-            <input className={inputCls} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Transport Fee, Lab Fee" autoFocus />
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Add Fee Category</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="cat-name">Category Name *</Label>
+            <Input id="cat-name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Transport Fee, Lab Fee" autoFocus />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Description</label>
-            <input className={inputCls} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional" />
+          <div className="space-y-1.5">
+            <Label htmlFor="cat-desc">Description</Label>
+            <Input id="cat-desc" value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional" />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSubmit} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Add Category
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Add Category
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -534,8 +528,6 @@ function AddStructureModal({ heads, initialHeadId, onClose }: { heads: any[], in
     if (current) setAcademicYearId(current.id)
   }
 
-  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-
   const handleSubmit = async () => {
     if (!headId || !classId || !academicYearId || !amount) return toast.error('Category, class, academic year, and amount are required')
     const amt = Number(amount)
@@ -556,60 +548,67 @@ function AddStructureModal({ heads, initialHeadId, onClose }: { heads: any[], in
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Add Class Amount</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Category *</label>
-            <select className={inputCls} value={headId} onChange={e => setHeadId(e.target.value)}>
-              <option value="">Select category</option>
-              {heads.map((h: any) => <option key={h.id} value={h.id}>{h.name}</option>)}
-            </select>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Add Class Amount</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Category *</Label>
+            <Select value={headId} onValueChange={setHeadId}>
+              <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
+              <SelectContent>
+                {heads.map((h: any) => <SelectItem key={h.id} value={h.id}>{h.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Class *</label>
-            <select className={inputCls} value={classId} onChange={e => setClassId(e.target.value)}>
-              <option value="">Select class</option>
-              {(classes ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+          <div className="space-y-1.5">
+            <Label>Class *</Label>
+            <Select value={classId} onValueChange={setClassId}>
+              <SelectTrigger><SelectValue placeholder="Select class" /></SelectTrigger>
+              <SelectContent>
+                {(classes ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Academic Year *</label>
-            <select className={inputCls} value={academicYearId} onChange={e => setAcademicYearId(e.target.value)}>
-              <option value="">Select year</option>
-              {(years ?? []).map((y: any) => <option key={y.id} value={y.id}>{y.name}</option>)}
-            </select>
+          <div className="space-y-1.5">
+            <Label>Academic Year *</Label>
+            <Select value={academicYearId} onValueChange={setAcademicYearId}>
+              <SelectTrigger><SelectValue placeholder="Select year" /></SelectTrigger>
+              <SelectContent>
+                {(years ?? []).map((y: any) => <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount *</label>
-              <input type="number" className={inputCls} value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 2500" />
+            <div className="space-y-1.5">
+              <Label htmlFor="struct-amount">Amount *</Label>
+              <Input id="struct-amount" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 2500" />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Frequency</label>
-              <select className={inputCls} value={frequency} onChange={e => setFrequency(e.target.value as any)}>
-                {Object.entries(FREQUENCY_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
+            <div className="space-y-1.5">
+              <Label>Frequency</Label>
+              <Select value={frequency} onValueChange={(v) => setFrequency(v as any)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(FREQUENCY_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <label className="flex items-center gap-2 text-sm text-gray-600">
-            <input type="checkbox" checked={isOptional} onChange={e => setIsOptional(e.target.checked)} className="rounded border-gray-300" />
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input type="checkbox" checked={isOptional} onChange={e => setIsOptional(e.target.checked)} className="rounded border-input" />
             Optional (not auto-included on every invoice)
           </label>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSubmit} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Add
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Add
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -625,9 +624,9 @@ function AddStructureModal({ heads, initialHeadId, onClose }: { heads: any[], in
 //   is "Principal"; School Admin always bypasses via actOnWorkflow).
 
 const APPROVAL_STYLES: Record<string, { label: string, className: string, icon: any }> = {
-  pending: { label: 'Pending Approval', className: 'bg-amber-100 text-amber-700', icon: Clock },
-  approved: { label: 'Approved', className: 'bg-emerald-100 text-emerald-700', icon: Check },
-  rejected: { label: 'Rejected', className: 'bg-red-100 text-red-700', icon: XCircle },
+  pending: { label: 'Pending Approval', className: 'bg-warning/10 text-warning', icon: Clock },
+  approved: { label: 'Approved', className: 'bg-success/10 text-success', icon: Check },
+  rejected: { label: 'Rejected', className: 'bg-destructive/10 text-destructive', icon: XCircle },
 }
 
 function DiscountsTab() {
@@ -654,72 +653,70 @@ function DiscountsTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">Discounts under ₹2,000 auto-approve. ₹2,000 and above need Principal approval.</p>
-        <button onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-indigo-700">
-          <Plus className="w-4 h-4" /> New Discount
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">Discounts under ₹2,000 auto-approve. ₹2,000 and above need Principal approval.</p>
+        <Button onClick={() => setShowCreate(true)}>
+          <Plus className="h-4 w-4" /> New Discount
+        </Button>
       </div>
 
       {isLoading ? (
-        <div className="py-12 text-center"><div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" /></div>
+        <div className="py-12 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" /></div>
       ) : !(discounts ?? []).length ? (
-        <Empty message="No discounts created yet" />
+        <EmptyState icon={Tag} title="No discounts created yet" />
       ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100">
-              <th className="pb-3 text-left font-medium text-gray-500">Student</th>
-              <th className="pb-3 text-left font-medium text-gray-500">Fee Head</th>
-              <th className="pb-3 text-left font-medium text-gray-500">Discount</th>
-              <th className="pb-3 text-left font-medium text-gray-500">Reason</th>
-              <th className="pb-3 text-left font-medium text-gray-500">Status</th>
-              <th className="pb-3 text-left font-medium text-gray-500">Created</th>
-              <th className="pb-3" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Student</TableHead>
+              <TableHead>Fee Head</TableHead>
+              <TableHead>Discount</TableHead>
+              <TableHead>Reason</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Created</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {(discounts ?? []).map((d: any) => {
               const style = APPROVAL_STYLES[d.approval_status] ?? APPROVAL_STYLES.pending
               const Icon = style.icon
               return (
-                <tr key={d.id} className="hover:bg-gray-50">
-                  <td className="py-3 font-medium text-gray-900">
+                <TableRow key={d.id} className="cursor-default">
+                  <TableCell className="font-medium text-foreground">
                     {d.students?.first_name} {d.students?.last_name}
-                  </td>
-                  <td className="py-3 text-gray-600">{d.fee_heads?.name ?? 'All fees'}</td>
-                  <td className="py-3 font-semibold text-gray-900">
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{d.fee_heads?.name ?? 'All fees'}</TableCell>
+                  <TableCell className="font-semibold text-foreground">
                     {d.discount_type === 'percentage' ? `${d.discount_value}%` : formatCurrency(d.discount_value)}
-                  </td>
-                  <td className="py-3 text-gray-500">{d.reason}</td>
-                  <td className="py-3">
-                    <span className={cn('px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1 w-fit', style.className)}>
-                      <Icon className="w-3 h-3" /> {style.label}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{d.reason}</TableCell>
+                  <TableCell>
+                    <span className={cn('flex w-fit items-center gap-1 rounded-full px-2 py-1 text-xs font-medium', style.className)}>
+                      <Icon className="h-3 w-3" /> {style.label}
                     </span>
-                  </td>
-                  <td className="py-3 text-gray-400 text-xs">{formatDate(d.created_at)}</td>
-                  <td className="py-3 text-right">
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{formatDate(d.created_at)}</TableCell>
+                  <TableCell className="text-right">
                     {d.approval_status === 'pending' && canApprove && (
                       <div className="flex justify-end gap-1.5">
-                        <button onClick={() => actionMutation.mutate({ id: d.id, status: 'approved' })}
+                        <Button size="sm" onClick={() => actionMutation.mutate({ id: d.id, status: 'approved' })}
                           disabled={actionMutation.isPending}
-                          className="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-lg hover:bg-emerald-100 disabled:opacity-50">
+                          className="bg-success text-success-foreground hover:bg-success/90">
                           Approve
-                        </button>
-                        <button onClick={() => actionMutation.mutate({ id: d.id, status: 'rejected' })}
-                          disabled={actionMutation.isPending}
-                          className="px-3 py-1.5 bg-red-50 text-red-700 text-xs font-semibold rounded-lg hover:bg-red-100 disabled:opacity-50">
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => actionMutation.mutate({ id: d.id, status: 'rejected' })}
+                          disabled={actionMutation.isPending}>
                           Reject
-                        </button>
+                        </Button>
                       </div>
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               )
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
 
       {showCreate && (
@@ -749,8 +746,6 @@ function CreateDiscountModal({ onClose }: { onClose: () => void }) {
     enabled: search.length > 1,
   })
 
-  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-gray-50 focus:bg-white"
-
   const handleSubmit = async () => {
     if (!form.student_id || !form.discount_value || !form.reason) {
       return toast.error('Please fill all required fields')
@@ -775,38 +770,37 @@ function CreateDiscountModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <Tag className="w-4 h-4 text-gray-400" /> New Fee Discount
-          </h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Student *</label>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Tag className="h-4 w-4 text-muted-foreground" /> New Fee Discount
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Student *</Label>
             {selectedStudent ? (
-              <div className="flex items-center justify-between px-4 py-2.5 bg-indigo-50 rounded-xl text-sm">
-                <span className="font-medium text-indigo-900">{selectedStudent.first_name} {selectedStudent.last_name} · {selectedStudent.classes?.name}</span>
-                <button onClick={() => { setForm(f => ({ ...f, student_id: '' })); setSelectedStudent(null); setSearch('') }} className="text-indigo-400 hover:text-indigo-600">
-                  <X className="w-4 h-4" />
+              <div className="flex items-center justify-between rounded-xl bg-primary/10 px-4 py-2.5 text-sm">
+                <span className="font-medium text-primary">{selectedStudent.first_name} {selectedStudent.last_name} · {selectedStudent.classes?.name}</span>
+                <button onClick={() => { setForm(f => ({ ...f, student_id: '' })); setSelectedStudent(null); setSearch('') }} className="text-primary/60 transition-colors hover:text-primary" aria-label="Clear student">
+                  <X className="h-4 w-4" />
                 </button>
               </div>
             ) : (
               <div className="relative">
-                <input className={inputCls} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search student by name..." autoComplete="off" />
+                <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search student by name..." autoComplete="off" />
                 {search.length > 1 && (
-                  <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-gray-200 shadow-lg rounded-xl divide-y divide-gray-50 max-h-48 overflow-y-auto">
+                  <div className="absolute left-0 right-0 z-50 mt-1 max-h-48 divide-y divide-border overflow-y-auto rounded-xl border border-border bg-popover shadow-lg">
                     {(students ?? []).length === 0 ? (
-                      <p className="px-4 py-3 text-sm text-gray-400">No students found</p>
+                      <p className="px-4 py-3 text-sm text-muted-foreground">No students found</p>
                     ) : (
                       (students ?? []).map((s: any) => (
                         <button key={s.id} type="button"
                           onClick={() => { setForm(f => ({ ...f, student_id: s.id })); setSelectedStudent(s); setSearch('') }}
-                          className="w-full text-left px-4 py-2.5 text-sm hover:bg-indigo-50 transition-colors">
-                          <span className="font-medium text-gray-900">{s.first_name} {s.last_name}</span>
-                          <span className="text-gray-400"> · {s.classes?.name}{s.sections?.name ? `-${s.sections.name}` : ''}</span>
+                          className="w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent">
+                          <span className="font-medium text-foreground">{s.first_name} {s.last_name}</span>
+                          <span className="text-muted-foreground"> · {s.classes?.name}{s.sections?.name ? `-${s.sections.name}` : ''}</span>
                         </button>
                       ))
                     )}
@@ -815,49 +809,40 @@ function CreateDiscountModal({ onClose }: { onClose: () => void }) {
               </div>
             )}
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Discount Type *</label>
+          <div className="space-y-1.5">
+            <Label>Discount Type *</Label>
             <div className="grid grid-cols-2 gap-2">
               {(['fixed', 'percentage'] as const).map(t => (
                 <button key={t} onClick={() => setForm(f => ({ ...f, discount_type: t }))}
-                  className={cn('px-3 py-2 rounded-xl border-2 text-sm font-medium capitalize transition-all',
-                    form.discount_type === t ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-500')}>
+                  className={cn('rounded-xl border-2 px-3 py-2 text-sm font-medium capitalize transition-all',
+                    form.discount_type === t ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground')}>
                   {t === 'fixed' ? 'Fixed (₹)' : 'Percentage (%)'}
                 </button>
               ))}
             </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Discount Value * {form.discount_type === 'fixed' && <span className="text-xs text-gray-400">(under ₹2,000 auto-approves)</span>}
-            </label>
-            <input type="number" className={inputCls} value={form.discount_value}
+          <div className="space-y-1.5">
+            <Label htmlFor="disc-value">
+              Discount Value * {form.discount_type === 'fixed' && <span className="text-xs font-normal text-muted-foreground">(under ₹2,000 auto-approves)</span>}
+            </Label>
+            <Input id="disc-value" type="number" value={form.discount_value}
               onChange={e => setForm(f => ({ ...f, discount_value: e.target.value }))}
               placeholder={form.discount_type === 'fixed' ? 'e.g. 1500' : 'e.g. 10'} />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Reason *</label>
-            <textarea rows={2} className={inputCls + ' resize-none'} value={form.reason}
+          <div className="space-y-1.5">
+            <Label htmlFor="disc-reason">Reason *</Label>
+            <Textarea id="disc-reason" rows={2} className="resize-none" value={form.reason}
               onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
               placeholder="e.g. Sibling discount, financial hardship..." />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSubmit} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Submit
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Empty({ message }: { message: string }) {
-  return (
-    <div className="py-12 text-center text-gray-400">
-      <p className="font-medium">{message}</p>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Submit
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

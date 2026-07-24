@@ -2,16 +2,27 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { feeApi, academicYearsApi } from '@/lib/api'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowLeft, Loader2, ArrowRightLeft, Check, X, Plus } from 'lucide-react'
+import { cn, formatCurrency } from '@/lib/utils'
+import { ArrowLeft, Loader2, ArrowRightLeft } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import { EmptyState } from '@/components/shared/EmptyState'
 
 const STATUS_STYLES: Record<string, string> = {
-  pending: 'bg-amber-100 text-amber-700',
-  partial: 'bg-orange-100 text-orange-700',
-  cleared: 'bg-emerald-100 text-emerald-700',
-  waived: 'bg-gray-100 text-gray-500',
+  pending: 'bg-warning/10 text-warning',
+  partial: 'bg-warning/15 text-warning',
+  cleared: 'bg-success/10 text-success',
+  waived: 'bg-muted text-muted-foreground',
 }
 
 export default function ArrearsPage() {
@@ -31,102 +42,105 @@ export default function ArrearsPage() {
     .reduce((s: number, a: any) => s + (Number(a.amount) - Number(a.amount_paid)), 0)
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-start gap-4">
-          <Link href="/fees" className="p-2 hover:bg-gray-100 rounded-xl transition-colors mt-1">
-            <ArrowLeft className="w-5 h-5 text-gray-500" />
-          </Link>
+    <div className="animate-fade-in space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <Button asChild variant="ghost" size="icon" className="mt-0.5" aria-label="Back to fees">
+            <Link href="/fees"><ArrowLeft className="h-5 w-5" /></Link>
+          </Button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Arrears</h1>
-            <p className="text-gray-500 text-sm mt-0.5">Carried-forward dues from previous academic years</p>
+            <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Arrears</h1>
+            <p className="mt-0.5 text-sm text-muted-foreground">Carried-forward dues from previous academic years</p>
           </div>
         </div>
-        <button onClick={() => setShowCarryForward(true)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700 shadow-sm shadow-indigo-200">
-          <ArrowRightLeft className="w-4 h-4" /> Carry Forward Dues
-        </button>
+        <Button onClick={() => setShowCarryForward(true)}>
+          <ArrowRightLeft className="h-4 w-4" /> Carry Forward Dues
+        </Button>
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
-        <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Total Outstanding Arrears</p>
-        <p className="text-2xl font-bold text-rose-600">{formatCurrency(totalOutstanding)}</p>
-      </div>
+      <Card>
+        <CardContent className="p-5">
+          <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Total Outstanding Arrears</p>
+          <p className="text-2xl font-bold text-destructive">{formatCurrency(totalOutstanding)}</p>
+        </CardContent>
+      </Card>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {['', 'pending', 'partial', 'cleared', 'waived'].map(s => (
-          <button key={s} onClick={() => setStatusFilter(s)}
-            className={cn('px-3 py-1.5 rounded-full text-xs font-semibold border transition-all capitalize',
-              statusFilter === s ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300')}>
+          <Button key={s} onClick={() => setStatusFilter(s)}
+            variant={statusFilter === s ? 'default' : 'outline'}
+            size="sm"
+            className="rounded-full capitalize">
             {s || 'All'}
-          </button>
+          </Button>
         ))}
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-        {isLoading ? (
-          <div className="p-12 text-center"><Loader2 className="w-6 h-6 animate-spin text-indigo-600 mx-auto" /></div>
-        ) : !(arrears ?? []).length ? (
-          <div className="p-12 text-center text-gray-400">
-            <p className="font-medium">No arrears found</p>
-            <p className="text-sm mt-1">Use "Carry Forward Dues" at the start of a new academic year to bring unpaid balances forward</p>
-          </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Student</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">From → To Year</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Amount</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Paid</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Remaining</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Status</th>
-                <th className="px-5 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {(arrears ?? []).map((a: any) => {
-                const isSettled = a.status === 'cleared' || a.status === 'waived'
-                const remaining = isSettled ? 0 : Number(a.amount) - Number(a.amount_paid)
-                const canAct = a.status === 'pending' || a.status === 'partial'
-                return (
-                  <tr key={a.id} className="hover:bg-gray-50/80">
-                    <td className="px-5 py-3.5 font-semibold text-gray-900">
-                      {a.students?.first_name} {a.students?.last_name}
-                      <p className="text-xs text-gray-400">{a.students?.classes?.name}</p>
-                    </td>
-                    <td className="px-5 py-3.5 text-gray-500 text-xs">
-                      {a.from_year?.name ?? '—'} → {a.to_year?.name ?? '—'}
-                    </td>
-                    <td className="px-5 py-3.5 text-gray-700">{formatCurrency(a.amount)}</td>
-                    <td className="px-5 py-3.5 text-emerald-600">{formatCurrency(a.amount_paid)}</td>
-                    <td className="px-5 py-3.5 font-bold text-rose-600">{formatCurrency(remaining)}</td>
-                    <td className="px-5 py-3.5">
-                      <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize', STATUS_STYLES[a.status])}>
-                        {a.status}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      {canAct && (
-                        <div className="flex justify-end gap-1.5">
-                          <button onClick={() => setPayTarget(a)}
-                            className="px-3 py-1.5 bg-indigo-50 text-indigo-700 text-xs font-semibold rounded-lg hover:bg-indigo-100">
-                            Record Payment
-                          </button>
-                          <button onClick={() => setWaiveTarget(a)}
-                            className="px-3 py-1.5 bg-gray-50 text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-100">
-                            Waive
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <Card>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="p-12 text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" /></div>
+          ) : !(arrears ?? []).length ? (
+            <EmptyState
+              icon={ArrowRightLeft}
+              title="No arrears found"
+              description='Use "Carry Forward Dues" at the start of a new academic year to bring unpaid balances forward'
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Student</TableHead>
+                  <TableHead>From → To Year</TableHead>
+                  <TableHead>Amount</TableHead>
+                  <TableHead>Paid</TableHead>
+                  <TableHead>Remaining</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(arrears ?? []).map((a: any) => {
+                  const isSettled = a.status === 'cleared' || a.status === 'waived'
+                  const remaining = isSettled ? 0 : Number(a.amount) - Number(a.amount_paid)
+                  const canAct = a.status === 'pending' || a.status === 'partial'
+                  return (
+                    <TableRow key={a.id} className="cursor-default">
+                      <TableCell className="font-semibold text-foreground">
+                        {a.students?.first_name} {a.students?.last_name}
+                        <p className="text-xs text-muted-foreground">{a.students?.classes?.name}</p>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {a.from_year?.name ?? '—'} → {a.to_year?.name ?? '—'}
+                      </TableCell>
+                      <TableCell className="text-foreground">{formatCurrency(a.amount)}</TableCell>
+                      <TableCell className="text-success">{formatCurrency(a.amount_paid)}</TableCell>
+                      <TableCell className="font-bold text-destructive">{formatCurrency(remaining)}</TableCell>
+                      <TableCell>
+                        <span className={cn('rounded-full px-2.5 py-1 text-xs font-semibold capitalize', STATUS_STYLES[a.status])}>
+                          {a.status}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {canAct && (
+                          <div className="flex justify-end gap-1.5">
+                            <Button size="sm" variant="secondary" onClick={() => setPayTarget(a)}>
+                              Record Payment
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => setWaiveTarget(a)}>
+                              Waive
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
       {showCarryForward && (
         <CarryForwardModal onClose={() => { setShowCarryForward(false); qc.invalidateQueries({ queryKey: ['fee-arrears'] }) }} />
@@ -167,58 +181,58 @@ function CarryForwardModal({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Carry Forward Dues</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Carry Forward Dues</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
           {result ? (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-800">
+            <div className="rounded-xl border border-success/30 bg-success/10 p-4 text-sm text-success">
               <p className="font-semibold">{result.message ?? `${result.carried_forward} arrears created`}</p>
               {result.total_amount != null && <p className="mt-1">Total: {formatCurrency(result.total_amount)}</p>}
             </div>
           ) : (
             <>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-muted-foreground">
                 For every student with unpaid or partially-paid invoices in the "From" year, this creates an arrear carrying the remaining balance into the "To" year. Safe to re-run — already-carried invoices won't be duplicated.
               </p>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">From Academic Year *</label>
-                <select className={inputCls} value={fromYear} onChange={e => setFromYear(e.target.value)}>
-                  <option value="">Select year</option>
-                  {(years ?? []).map((y: any) => <option key={y.id} value={y.id}>{y.name}</option>)}
-                </select>
+              <div className="space-y-1.5">
+                <Label>From Academic Year *</Label>
+                <Select value={fromYear} onValueChange={setFromYear}>
+                  <SelectTrigger><SelectValue placeholder="Select year" /></SelectTrigger>
+                  <SelectContent>
+                    {(years ?? []).map((y: any) => <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">To Academic Year *</label>
-                <select className={inputCls} value={toYear} onChange={e => setToYear(e.target.value)}>
-                  <option value="">Select year</option>
-                  {(years ?? []).map((y: any) => <option key={y.id} value={y.id}>{y.name}</option>)}
-                </select>
+              <div className="space-y-1.5">
+                <Label>To Academic Year *</Label>
+                <Select value={toYear} onValueChange={setToYear}>
+                  <SelectTrigger><SelectValue placeholder="Select year" /></SelectTrigger>
+                  <SelectContent>
+                    {(years ?? []).map((y: any) => <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             </>
           )}
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+        <DialogFooter>
           {result ? (
-            <button onClick={onClose} className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700">Done</button>
+            <Button onClick={onClose}>Done</Button>
           ) : (
             <>
-              <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-              <button onClick={handleSubmit} disabled={loading}
-                className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-                {loading && <Loader2 className="w-4 h-4 animate-spin" />} Carry Forward
-              </button>
+              <Button variant="ghost" onClick={onClose}>Cancel</Button>
+              <Button onClick={handleSubmit} disabled={loading}>
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />} Carry Forward
+              </Button>
             </>
           )}
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -244,44 +258,43 @@ function RecordPaymentModal({ arrear, onClose }: { arrear: any, onClose: () => v
     }
   }
 
-  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Record Payment</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <p className="text-sm text-gray-500">
-            {arrear.students?.first_name} {arrear.students?.last_name} · Remaining: <span className="font-semibold text-rose-600">{formatCurrency(remaining)}</span>
-          </p>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount *</label>
-            <input type="number" max={remaining} className={inputCls} value={amount} onChange={e => setAmount(e.target.value)} />
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Record Payment</DialogTitle>
+          <DialogDescription>
+            {arrear.students?.first_name} {arrear.students?.last_name} · Remaining: <span className="font-semibold text-destructive">{formatCurrency(remaining)}</span>
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="arrear-amount">Amount *</Label>
+            <Input id="arrear-amount" type="number" max={remaining} value={amount} onChange={e => setAmount(e.target.value)} />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Payment Mode</label>
-            <select className={inputCls} value={paymentMode} onChange={e => setPaymentMode(e.target.value)}>
-              <option value="cash">Cash</option>
-              <option value="cheque">Cheque</option>
-              <option value="neft">NEFT</option>
-              <option value="card">Card</option>
-              <option value="upi">UPI</option>
-              <option value="online">Online</option>
-            </select>
+          <div className="space-y-1.5">
+            <Label>Payment Mode</Label>
+            <Select value={paymentMode} onValueChange={setPaymentMode}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="cash">Cash</SelectItem>
+                <SelectItem value="cheque">Cheque</SelectItem>
+                <SelectItem value="neft">NEFT</SelectItem>
+                <SelectItem value="card">Card</SelectItem>
+                <SelectItem value="upi">UPI</SelectItem>
+                <SelectItem value="online">Online</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSubmit} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Record
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Record
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -304,30 +317,26 @@ function WaiveModal({ arrear, onClose }: { arrear: any, onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Waive Arrear</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <p className="text-sm text-gray-500">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Waive Arrear</DialogTitle>
+          <DialogDescription>
             This permanently waives the remaining balance for {arrear.students?.first_name} {arrear.students?.last_name}. This action should be reserved for admin/principal-approved hardship cases.
-          </p>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Reason *</label>
-            <textarea rows={2} className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none resize-none"
-              value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Financial hardship, approved by Principal" />
-          </div>
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <Label htmlFor="waive-reason">Reason *</Label>
+          <Textarea id="waive-reason" rows={2} className="resize-none"
+            value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Financial hardship, approved by Principal" />
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSubmit} disabled={loading}
-            className="px-5 py-2.5 bg-red-600 text-white text-sm font-semibold rounded-xl hover:bg-red-700 disabled:opacity-60 flex items-center gap-2">
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Waive
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="destructive" onClick={handleSubmit} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Waive
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

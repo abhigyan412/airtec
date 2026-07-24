@@ -8,6 +8,14 @@ import { Plus, Trash2, Loader2, ShieldOff, BookOpen, ClipboardList, NotebookPen,
 import { toast } from 'sonner'
 import { MonthCalendar, toDateKey, type CalendarEvent } from '@/components/academics/MonthCalendar'
 import { SyllabusMeter } from '@/components/academics/SyllabusMeter'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 
 type Tab = 'homework' | 'syllabus'
 const todayKey = toDateKey(new Date())
@@ -22,11 +30,7 @@ export default function HomeworkPage() {
 
   if (!permLoading && !canView) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-        <ShieldOff className="w-12 h-12 mb-3 text-gray-200" />
-        <p className="font-semibold text-gray-500">Access Denied</p>
-        <p className="text-sm mt-1">You don't have permission to view homework.</p>
-      </div>
+      <EmptyState icon={ShieldOff} title="Access Denied" description="You don't have permission to view homework." className="h-64" />
     )
   }
 
@@ -56,40 +60,36 @@ function MyHomeworkView() {
 
   return (
     <div className="space-y-5 max-w-3xl">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">My Homework</h1>
-        <p className="text-gray-500 text-sm mt-0.5">Homework and classwork assigned to you</p>
-      </div>
+      <PageHeader title="My Homework" description="Homework and classwork assigned to you" icon={BookOpen} />
 
       {isLoading ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
-          <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+        <div className="bg-card rounded-2xl border border-border p-12 text-center">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
         </div>
       ) : (data ?? []).length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-16 text-center text-gray-400">
-          <BookOpen className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-          <p className="font-medium">Nothing assigned yet</p>
+        <div className="bg-card rounded-2xl border border-border">
+          <EmptyState icon={BookOpen} title="Nothing assigned yet" />
         </div>
       ) : (
         <div className="grid gap-3">
           {(data ?? []).map((hw: any) => (
-            <div key={hw.id} className="bg-white rounded-2xl border border-gray-200 p-5">
+            <div key={hw.id} className="bg-card rounded-2xl border border-border p-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase',
-                      hw.type === 'homework' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600')}>
+                      hw.type === 'homework' ? 'bg-primary/10 text-primary' : 'bg-success/10 text-success')}>
                       {hw.type}
                     </span>
-                    <span className="text-xs text-gray-400">{hw.subject_name}</span>
+                    <span className="text-xs text-muted-foreground">{hw.subject_name}</span>
                   </div>
-                  <h3 className="font-semibold text-gray-900">{hw.title}</h3>
-                  {hw.description && <p className="text-sm text-gray-500 mt-1">{hw.description}</p>}
+                  <h3 className="font-semibold text-foreground">{hw.title}</h3>
+                  {hw.description && <p className="text-sm text-muted-foreground mt-1">{hw.description}</p>}
                 </div>
                 {hw.due_date && (
                   <div className="text-right flex-shrink-0">
-                    <p className="text-xs text-gray-400">Due</p>
-                    <p className="text-sm font-medium text-gray-700">{formatDate(hw.due_date)}</p>
+                    <p className="text-xs text-muted-foreground">Due</p>
+                    <p className="text-sm font-medium text-foreground">{formatDate(hw.due_date)}</p>
                   </div>
                 )}
               </div>
@@ -149,10 +149,10 @@ function StaffHomeworkView({ canCreate, canSeeSyllabus, canPlanSyllabus, canLogS
   // Subjects the CURRENT user is actually timetabled for in the selected
   // class+section — undefined (no restriction) for senior management,
   // who can post/plan for any subject.
-  const myAllowedSubjects = isSeniorManagement ? undefined : Array.from(new Set(
+  const myAllowedSubjects = isSeniorManagement ? undefined : Array.from(new Set<string>(
     (myClasses ?? [])
       .filter((c: any) => c.class_id === selectedClass && (c.section_id ?? '') === (selectedSection ?? ''))
-      .map((c: any) => c.subject_name)
+      .map((c: any) => c.subject_name as string)
   ))
 
   const TABS: { id: Tab; label: string; icon: any; show: boolean }[] = [
@@ -162,52 +162,53 @@ function StaffHomeworkView({ canCreate, canSeeSyllabus, canPlanSyllabus, canLogS
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Homework</h1>
-        <p className="text-gray-500 text-sm mt-0.5">
-          {isSeniorManagement ? 'Assign homework/classwork and track syllabus progress school-wide' : 'Your classes, homework, and syllabus progress'}
-        </p>
-      </div>
+      <PageHeader
+        title="Homework"
+        description={isSeniorManagement ? 'Assign homework/classwork and track syllabus progress school-wide' : 'Your classes, homework, and syllabus progress'}
+        icon={BookOpen}
+      />
 
       {canSeeSyllabus && (
         <SyllabusOverview scope={isSeniorManagement ? 'all' : (myClasses ?? [])} />
       )}
 
-      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl w-fit">
+      <div className="flex items-center gap-1 bg-muted p-1 rounded-lg w-fit">
         {TABS.filter(t => t.show).map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            className={cn('flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all',
-              tab === t.id ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700')}>
+            className={cn('flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold transition-all',
+              tab === t.id ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground')}>
             <t.icon className="w-3.5 h-3.5" /> {t.label}
           </button>
         ))}
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 flex gap-4 items-end flex-wrap">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Class</label>
-          <select value={selectedClass} onChange={e => { setSelectedClass(e.target.value); setSelectedSection('') }}
-            className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none min-w-[160px]">
-            <option value="">Select class...</option>
-            {classesData.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+      <div className="bg-card rounded-2xl border border-border p-5 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex items-center gap-2">
+          <Label className="shrink-0">Class</Label>
+          <Select value={selectedClass || undefined} onValueChange={v => { setSelectedClass(v); setSelectedSection('') }}>
+            <SelectTrigger className="h-9 min-w-[160px]"><SelectValue placeholder="Select class..." /></SelectTrigger>
+            <SelectContent>
+              {classesData.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
         {sections.length > 0 && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Section</label>
-            <select value={selectedSection} onChange={e => setSelectedSection(e.target.value)}
-              className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none">
-              <option value="">{isSeniorManagement ? 'All sections' : 'Select section...'}</option>
-              {sections.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+          <div className="flex items-center gap-2">
+            <Label className="shrink-0">Section</Label>
+            <Select value={selectedSection || 'all'} onValueChange={v => setSelectedSection(v === 'all' ? '' : v)}>
+              <SelectTrigger className="h-9 min-w-[160px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{isSeniorManagement ? 'All sections' : 'Select section...'}</SelectItem>
+                {sections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         )}
       </div>
 
       {!selectedClass ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-16 text-center text-gray-400">
-          <BookOpen className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-          <p className="font-medium">{classesData.length === 0 && !isSeniorManagement ? "You're not scheduled to teach any class yet — check your timetable" : 'Select a class to get started'}</p>
+        <div className="bg-card rounded-2xl border border-border">
+          <EmptyState icon={BookOpen} title={classesData.length === 0 && !isSeniorManagement ? "You're not scheduled to teach any class yet — check your timetable" : 'Select a class to get started'} />
         </div>
       ) : tab === 'homework' ? (
         <HomeworkTab classId={selectedClass} sectionId={selectedSection} canCreate={canCreate} allowedSubjects={myAllowedSubjects} />
@@ -271,8 +272,8 @@ function SyllabusOverview({ scope }: {
   if (cards.length === 0) return null
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-5">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-4">
+    <div className="bg-card rounded-2xl border border-border p-5">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-4">
         {scope === 'all' ? 'School-wide syllabus progress' : 'Your classes'}
       </h3>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -330,7 +331,7 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
     for (const [key, items] of Object.entries(byDate)) {
       map[key] = items.map(hw => ({
         id: hw.id, label: hw.title,
-        color: hw.type === 'homework' ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700',
+        color: hw.type === 'homework' ? 'bg-primary/15 text-primary' : 'bg-success/15 text-success',
       }))
     }
     return map
@@ -342,45 +343,44 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
     <div className="grid grid-cols-[1fr_320px] gap-4 items-start">
       <MonthCalendar month={month} onMonthChange={setMonth} selectedDate={selectedDate} onSelectDate={setSelectedDate} eventsByDate={eventsByDate} />
 
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-4">
+      <div className="bg-card rounded-2xl border border-border p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs text-gray-400 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" /> {selectedDate === todayKey ? 'Today' : formatDate(selectedDate)}</p>
-            <h3 className="font-semibold text-gray-900 text-sm mt-0.5">Due this day</h3>
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" /> {selectedDate === todayKey ? 'Today' : formatDate(selectedDate)}</p>
+            <h3 className="font-semibold text-foreground text-sm mt-0.5">Due this day</h3>
           </div>
           {canCreate && (
-            <button onClick={() => setShowAdd(true)} title="Assign for this day"
-              className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex-shrink-0">
+            <Button size="icon" onClick={() => setShowAdd(true)} title="Assign for this day" aria-label="Assign for this day">
               <Plus className="w-4 h-4" />
-            </button>
+            </Button>
           )}
         </div>
 
         {isLoading ? (
-          <div className="py-8 text-center"><div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" /></div>
+          <div className="py-8 text-center"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" /></div>
         ) : dayItems.length === 0 ? (
-          <p className="text-xs text-gray-400">Nothing due this day</p>
+          <p className="text-xs text-muted-foreground">Nothing due this day</p>
         ) : (
           <div className="space-y-3">
             {dayItems.map((hw: any) => (
-              <div key={hw.id} className="border border-gray-100 rounded-xl p-3">
+              <div key={hw.id} className="border border-border rounded-xl p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 mb-1 flex-wrap">
                       <span className={cn('px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase',
-                        hw.type === 'homework' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600')}>
+                        hw.type === 'homework' ? 'bg-primary/10 text-primary' : 'bg-success/10 text-success')}>
                         {hw.type}
                       </span>
                       {hw.assignment_type === 'individual' && (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-50 text-amber-600">Individual</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-warning/10 text-warning">Individual</span>
                       )}
-                      <span className="text-[10px] text-gray-400 truncate">{hw.subject_name}</span>
+                      <span className="text-[10px] text-muted-foreground truncate">{hw.subject_name}</span>
                     </div>
-                    <p className="text-sm font-medium text-gray-900 truncate">{hw.title}</p>
-                    {hw.description && <p className="text-xs text-gray-500 mt-0.5">{hw.description}</p>}
+                    <p className="text-sm font-medium text-foreground truncate">{hw.title}</p>
+                    {hw.description && <p className="text-xs text-muted-foreground mt-0.5">{hw.description}</p>}
                   </div>
                   {canCreate && (
-                    <button onClick={() => deleteMutation.mutate(hw.id)} className="text-gray-300 hover:text-red-500 transition-colors flex-shrink-0">
+                    <button onClick={() => deleteMutation.mutate(hw.id)} aria-label="Delete" className="text-muted-foreground/50 hover:text-destructive transition-colors flex-shrink-0">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   )}
@@ -444,82 +444,87 @@ function AddHomeworkModal({ classId, sectionId, initialDueDate, allowedSubjects,
     } finally { setLoading(false) }
   }
 
-  const ic = 'w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20'
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Assign Homework / Classwork</h2>
-        </div>
-        <div className="px-6 py-5 space-y-4">
+    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Assign Homework / Classwork</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Type</label>
-              <select className={ic} value={type} onChange={e => setType(e.target.value as any)}>
-                <option value="homework">Homework</option>
-                <option value="classwork">Classwork</option>
-              </select>
+            <div className="space-y-1.5">
+              <Label>Type</Label>
+              <Select value={type} onValueChange={v => setType(v as any)}>
+                <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="homework">Homework</SelectItem>
+                  <SelectItem value="classwork">Classwork</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Assign to</label>
-              <select className={ic} value={assignmentType} onChange={e => setAssignmentType(e.target.value as any)}>
-                <option value="class">Whole class</option>
-                <option value="individual">Specific students</option>
-              </select>
+            <div className="space-y-1.5">
+              <Label>Assign to</Label>
+              <Select value={assignmentType} onValueChange={v => setAssignmentType(v as any)}>
+                <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="class">Whole class</SelectItem>
+                  <SelectItem value="individual">Specific students</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
           {assignmentType === 'individual' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Students</label>
-              <div className="border border-gray-200 rounded-xl p-2 max-h-36 overflow-y-auto space-y-1">
+            <div className="space-y-1.5">
+              <Label>Students</Label>
+              <div className="border border-border rounded-xl p-2 max-h-36 overflow-y-auto space-y-1">
                 {(students ?? []).map((s: any) => (
-                  <label key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 text-sm cursor-pointer">
+                  <label key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-muted/50 text-sm text-foreground cursor-pointer">
                     <input type="checkbox" checked={studentIds.includes(s.id)}
                       onChange={e => setStudentIds(ids => e.target.checked ? [...ids, s.id] : ids.filter(id => id !== s.id))} />
-                    {s.first_name} {s.last_name} {s.roll_number && <span className="text-gray-400">· Roll {s.roll_number}</span>}
+                    {s.first_name} {s.last_name} {s.roll_number && <span className="text-muted-foreground">· Roll {s.roll_number}</span>}
                   </label>
                 ))}
-                {(students ?? []).length === 0 && <p className="text-xs text-gray-400 px-2 py-1.5">No students found for this class/section</p>}
+                {(students ?? []).length === 0 && <p className="text-xs text-muted-foreground px-2 py-1.5">No students found for this class/section</p>}
               </div>
             </div>
           )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject *</label>
-            <select className={ic} value={subjectName} onChange={e => setSubjectName(e.target.value)}>
-              <option value="">Select subject...</option>
-              {subjectOptions.map((s: string) => <option key={s} value={s}>{s}</option>)}
-            </select>
+          <div className="space-y-1.5">
+            <Label>Subject *</Label>
+            <Select value={subjectName || undefined} onValueChange={setSubjectName}>
+              <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Select subject..." /></SelectTrigger>
+              <SelectContent>
+                {subjectOptions.map((s: string) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              </SelectContent>
+            </Select>
             {subjectOptions.length === 0 && (
-              <p className="text-xs text-amber-600 mt-1.5">
+              <p className="text-xs text-warning mt-1.5">
                 {allowedSubjects ? "You're not timetabled for any subject in this class/section." : 'No subjects set up for this class yet — add some in Settings → Classes & Sections.'}
               </p>
             )}
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Title *</label>
-            <input className={ic} value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Chapter 4 exercises 1-10" />
+          <div className="space-y-1.5">
+            <Label>Title *</Label>
+            <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Chapter 4 exercises 1-10" />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Description</label>
-            <textarea className={ic} rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details / instructions" />
+          <div className="space-y-1.5">
+            <Label>Description</Label>
+            <Textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details / instructions" />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Due Date</label>
-            <input type="date" className={ic} value={dueDate} onChange={e => setDueDate(e.target.value)} />
+          <div className="space-y-1.5">
+            <Label>Due Date</Label>
+            <Input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSave} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={loading}>
             {loading && <Loader2 className="w-4 h-4 animate-spin" />} Assign
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -599,8 +604,8 @@ function SyllabusTab({ classId, sectionId, canPlan, canLog, allowedSubjects }: {
     for (const [key, items] of Object.entries(byDate)) {
       map[key] = items.map((ch: any) => {
         const behind = ch.status !== 'completed' && ch.planned_date < todayKey
-        const color = ch.status === 'completed' ? 'bg-emerald-100 text-emerald-700'
-          : behind ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+        const color = ch.status === 'completed' ? 'bg-success/15 text-success'
+          : behind ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'
         return { id: `due-${ch.id}`, label: ch.chapter_name, color }
       })
     }
@@ -609,7 +614,7 @@ function SyllabusTab({ classId, sectionId, canPlan, canLog, allowedSubjects }: {
       map[key].push(...items.map((log: any) => ({
         id: `log-${log.id}`,
         label: log.syllabus_chapters?.chapter_name ?? log.note.slice(0, 24),
-        color: 'bg-indigo-100 text-indigo-700',
+        color: 'bg-primary/15 text-primary',
       })))
     }
     return map
@@ -623,72 +628,69 @@ function SyllabusTab({ classId, sectionId, canPlan, canLog, allowedSubjects }: {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <input value={subjectFilter} onChange={e => setSubjectFilter(e.target.value)} placeholder="Filter by subject..."
-          className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none min-w-[200px]" />
+        <Input value={subjectFilter} onChange={e => setSubjectFilter(e.target.value)} placeholder="Filter by subject..." className="max-w-[240px]" />
         <div className="flex items-center gap-2">
           {canPlan && (
-            <button onClick={() => setShowAdd(true)}
-              className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50">
+            <Button variant="outline" onClick={() => setShowAdd(true)}>
               <Plus className="w-4 h-4" /> Set Chapter Due Dates
-            </button>
+            </Button>
           )}
           {canLog && (
-            <button onClick={() => openLogModal(null)}
-              className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700">
+            <Button onClick={() => openLogModal(null)}>
               <NotebookPen className="w-4 h-4" /> Log Today's Progress
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
       <div className="grid grid-cols-[1fr_320px] gap-4 items-start">
         {isLoading ? (
-          <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
-            <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+          <div className="bg-card rounded-2xl border border-border p-12 text-center">
+            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
           </div>
         ) : (
           <MonthCalendar month={month} onMonthChange={setMonth} selectedDate={selectedDate} onSelectDate={setSelectedDate} eventsByDate={eventsByDate} />
         )}
 
-        <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-5">
+        <div className="bg-card rounded-2xl border border-border p-5 space-y-5">
           <div>
-            <p className="text-xs text-gray-400 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" /> {selectedDate === todayKey ? 'Today' : formatDate(selectedDate)}</p>
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" /> {selectedDate === todayKey ? 'Today' : formatDate(selectedDate)}</p>
           </div>
 
           <div className="space-y-2">
-            <h3 className="font-semibold text-gray-900 text-xs uppercase tracking-wide text-gray-400">Due this day</h3>
+            <h3 className="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Due this day</h3>
             {dueToday.length === 0 ? (
-              <p className="text-xs text-gray-400">Nothing due</p>
+              <p className="text-xs text-muted-foreground">Nothing due</p>
             ) : (
               <div className="space-y-2">
                 {dueToday.map((ch: any) => {
                   const behind = ch.status !== 'completed' && ch.planned_date < todayKey
                   return (
-                    <div key={ch.id} className="border border-gray-100 rounded-xl p-3">
+                    <div key={ch.id} className="border border-border rounded-xl p-3">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-start gap-2 min-w-0">
                           {ch.status === 'completed' ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                            <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0 mt-0.5" />
                           ) : (
-                            <Clock className={cn('w-4 h-4 flex-shrink-0 mt-0.5', behind ? 'text-red-500' : 'text-amber-400')} />
+                            <Clock className={cn('w-4 h-4 flex-shrink-0 mt-0.5', behind ? 'text-destructive' : 'text-warning')} />
                           )}
                           <div className="min-w-0">
-                            <p className="text-sm font-medium text-gray-900 truncate">
+                            <p className="text-sm font-medium text-foreground truncate">
                               {ch.chapter_number ? `${ch.chapter_number}. ` : ''}{ch.chapter_name}
                             </p>
-                            <p className="text-xs text-gray-400">
+                            <p className="text-xs text-muted-foreground">
                               {ch.subject_name} · {ch.status === 'completed' ? 'Covered' : behind ? 'Overdue' : 'Due'}
                             </p>
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {canLog && ch.status !== 'completed' && (
-                            <button onClick={() => openLogModal(ch)} className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-700">
+                            <button onClick={() => openLogModal(ch)} className="text-[11px] font-semibold text-primary hover:text-primary/80">
                               Log progress
                             </button>
                           )}
                           {canPlan && (
-                            <button onClick={() => deleteChapterMutation.mutate(ch.id)} className="text-gray-300 hover:text-red-500 transition-colors">
+                            <button onClick={() => deleteChapterMutation.mutate(ch.id)} aria-label="Remove chapter" className="text-muted-foreground/50 hover:text-destructive transition-colors">
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
@@ -702,32 +704,32 @@ function SyllabusTab({ classId, sectionId, canPlan, canLog, allowedSubjects }: {
           </div>
 
           <div className="space-y-2">
-            <h3 className="font-semibold text-gray-900 text-xs uppercase tracking-wide text-gray-400">Logged this day</h3>
+            <h3 className="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Logged this day</h3>
             {loggedToday.length === 0 ? (
-              <p className="text-xs text-gray-400">No progress logged</p>
+              <p className="text-xs text-muted-foreground">No progress logged</p>
             ) : (
               <div className="space-y-2">
                 {loggedToday.map((log: any) => (
-                  <div key={log.id} className="border border-gray-100 rounded-xl p-3">
+                  <div key={log.id} className="border border-border rounded-xl p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
                           {log.progress_status && (
                             <span className={cn('px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase',
-                              log.progress_status === 'completed' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600')}>
+                              log.progress_status === 'completed' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning')}>
                               {log.progress_status.replace('_', ' ')}
                             </span>
                           )}
-                          <span className="text-[10px] text-gray-400 truncate">{log.subject_name}</span>
+                          <span className="text-[10px] text-muted-foreground truncate">{log.subject_name}</span>
                         </div>
                         {log.syllabus_chapters?.chapter_name && (
-                          <p className="text-sm font-medium text-gray-900 truncate">{log.syllabus_chapters.chapter_name}</p>
+                          <p className="text-sm font-medium text-foreground truncate">{log.syllabus_chapters.chapter_name}</p>
                         )}
-                        {log.note && <p className="text-xs text-gray-500 mt-0.5">{log.note}</p>}
-                        <p className="text-[10px] text-gray-400 mt-1">{log.users?.full_name}</p>
+                        {log.note && <p className="text-xs text-muted-foreground mt-0.5">{log.note}</p>}
+                        <p className="text-[10px] text-muted-foreground mt-1">{log.users?.full_name}</p>
                       </div>
                       {canLog && (
-                        <button onClick={() => deleteLogMutation.mutate(log.id)} className="text-gray-300 hover:text-red-500 transition-colors flex-shrink-0">
+                        <button onClick={() => deleteLogMutation.mutate(log.id)} aria-label="Remove log" className="text-muted-foreground/50 hover:text-destructive transition-colors flex-shrink-0">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       )}
@@ -782,69 +784,71 @@ function LogProgressModal({ classId, sectionId, chapters, initialChapter, initia
     } finally { setLoading(false) }
   }
 
-  const ic = 'w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none'
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Log Today's Progress</h2>
-          <p className="text-xs text-gray-400 mt-0.5">What did you actually cover this period? This drives the covered-vs-left tracking.</p>
-        </div>
-        <div className="px-6 py-5 space-y-4">
+    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Log Today's Progress</DialogTitle>
+          <DialogDescription>What did you actually cover this period? This drives the covered-vs-left tracking.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject *</label>
-              <select className={ic} value={subjectName} onChange={e => { setSubjectName(e.target.value); setChapterId('') }}>
-                <option value="">Select subject...</option>
-                {subjects.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
+            <div className="space-y-1.5">
+              <Label>Subject *</Label>
+              <Select value={subjectName || undefined} onValueChange={v => { setSubjectName(v); setChapterId('') }}>
+                <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Select subject..." /></SelectTrigger>
+                <SelectContent>
+                  {subjects.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Date</label>
-              <input type="date" className={ic} value={logDate} onChange={e => setLogDate(e.target.value)} />
+            <div className="space-y-1.5">
+              <Label>Date</Label>
+              <Input type="date" value={logDate} onChange={e => setLogDate(e.target.value)} />
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Chapter</label>
-            <select className={ic} value={chapterId} onChange={e => setChapterId(e.target.value)} disabled={!subjectName}>
-              <option value="">No specific chapter (general note)</option>
-              {chaptersForSubject.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.chapter_number ? `${c.chapter_number}. ` : ''}{c.chapter_name}{c.status === 'completed' ? ' (already covered)' : ''}
-                </option>
-              ))}
-            </select>
+          <div className="space-y-1.5">
+            <Label>Chapter</Label>
+            <Select value={chapterId || 'none'} onValueChange={v => setChapterId(v === 'none' ? '' : v)} disabled={!subjectName}>
+              <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No specific chapter (general note)</SelectItem>
+                {chaptersForSubject.map(c => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.chapter_number ? `${c.chapter_number}. ` : ''}{c.chapter_name}{c.status === 'completed' ? ' (already covered)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Status</label>
+          <div className="space-y-1.5">
+            <Label>Status</Label>
             <div className="grid grid-cols-3 gap-2">
               {(['started', 'in_progress', 'completed'] as const).map(s => (
                 <button key={s} onClick={() => setStatus(s)}
-                  className={cn('py-2 rounded-xl text-xs font-semibold border transition-all',
-                    status === s ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-200 text-gray-500 hover:bg-gray-50')}>
+                  className={cn('py-2 rounded-lg text-xs font-semibold border transition-all',
+                    status === s ? 'bg-primary border-primary text-primary-foreground' : 'border-input text-muted-foreground hover:bg-muted/50')}>
                   {s === 'started' ? 'Started' : s === 'in_progress' ? 'In Progress' : 'Completed'}
                 </button>
               ))}
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes (optional)</label>
-            <textarea className={ic} rows={3} value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Covered pages 10-15, did examples on the board" />
+          <div className="space-y-1.5">
+            <Label>Notes (optional)</Label>
+            <Textarea rows={3} value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Covered pages 10-15, did examples on the board" />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSave} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={loading}>
             {loading && <Loader2 className="w-4 h-4 animate-spin" />} Save
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -901,75 +905,76 @@ function AddChaptersModal({ classId, sectionId, initialDate, onClose }: { classI
     } finally { setLoading(false) }
   }
 
-  const ic = 'flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:outline-none'
   const updateRow = (i: number, patch: Partial<ChapterRow>) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r))
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-xl max-h-[90vh] overflow-y-auto">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Set Chapter Due Dates</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Tie each chapter to the exam it needs to be covered before, or set a custom date — teachers mark them covered as they go</p>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject *</label>
-            <select className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none"
-              value={subjectName} onChange={e => setSubjectName(e.target.value)}>
-              <option value="">Select subject...</option>
-              {(subjects ?? []).map((s: any) => <option key={s.id} value={s.name}>{s.name}</option>)}
-            </select>
+    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Set Chapter Due Dates</DialogTitle>
+          <DialogDescription>Tie each chapter to the exam it needs to be covered before, or set a custom date — teachers mark them covered as they go</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Subject *</Label>
+            <Select value={subjectName || undefined} onValueChange={setSubjectName}>
+              <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Select subject..." /></SelectTrigger>
+              <SelectContent>
+                {(subjects ?? []).map((s: any) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
             {(subjects ?? []).length === 0 && (
-              <p className="text-xs text-amber-600 mt-1.5">No subjects set up for this class yet — add some in Settings → Classes & Sections.</p>
+              <p className="text-xs text-warning mt-1.5">No subjects set up for this class yet — add some in Settings → Classes & Sections.</p>
             )}
           </div>
           {sectionId && (
-            <label className="flex items-center gap-2 text-sm text-gray-700 bg-gray-50 rounded-xl px-4 py-3 cursor-pointer">
+            <label className="flex items-center gap-2 text-sm text-foreground bg-muted/50 rounded-xl px-4 py-3 cursor-pointer">
               <input type="checkbox" checked={applyToSection} onChange={e => setApplyToSection(e.target.checked)} />
               Only for this section — uncheck to apply to every section of the class
             </label>
           )}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <label className="flex-1 block text-sm font-medium text-gray-700">Chapter</label>
-              <label className="w-48 block text-sm font-medium text-gray-700">Due before</label>
+              <Label className="flex-1">Chapter</Label>
+              <Label className="w-48">Due before</Label>
             </div>
             {rows.map((row, i) => (
               <div key={i} className="flex items-center gap-2">
-                <input className={ic} value={row.chapter_name} placeholder={`Chapter ${i + 1} name`}
+                <Input className="flex-1" value={row.chapter_name} placeholder={`Chapter ${i + 1} name`}
                   onChange={e => updateRow(i, { chapter_name: e.target.value })} />
-                <select className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:outline-none w-48"
-                  value={row.due_mode === 'custom' ? 'custom' : row.exam_id}
-                  onChange={e => e.target.value === 'custom' ? updateRow(i, { due_mode: 'custom', exam_id: '' }) : updateRow(i, { due_mode: 'exam', exam_id: e.target.value })}>
-                  <option value="">No due date</option>
-                  {sortedExams.map(ex => (
-                    <option key={ex.id} value={ex.id}>
-                      {EXAM_TYPE_LABELS[ex.exam_type] ?? ex.exam_type} — {ex.name}{ex.start_date ? ` (${formatDate(ex.start_date)})` : ''}
-                    </option>
-                  ))}
-                  <option value="custom">Custom date...</option>
-                </select>
+                <Select
+                  value={row.due_mode === 'custom' ? 'custom' : (row.exam_id || 'none')}
+                  onValueChange={v => v === 'custom' ? updateRow(i, { due_mode: 'custom', exam_id: '' }) : updateRow(i, { due_mode: 'exam', exam_id: v === 'none' ? '' : v })}>
+                  <SelectTrigger className="h-9 w-48"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No due date</SelectItem>
+                    {sortedExams.map(ex => (
+                      <SelectItem key={ex.id} value={ex.id}>
+                        {EXAM_TYPE_LABELS[ex.exam_type] ?? ex.exam_type} — {ex.name}{ex.start_date ? ` (${formatDate(ex.start_date)})` : ''}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="custom">Custom date...</SelectItem>
+                  </SelectContent>
+                </Select>
                 {row.due_mode === 'custom' && (
-                  <input type="date" className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:outline-none w-40"
+                  <Input type="date" className="w-40"
                     value={row.planned_date} onChange={e => updateRow(i, { planned_date: e.target.value })} />
                 )}
               </div>
             ))}
             <button onClick={() => setRows(rs => [...rs, { chapter_name: '', due_mode: 'custom', exam_id: '', planned_date: '' }])}
-              className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 flex items-center gap-1">
+              className="text-xs font-semibold text-primary hover:text-primary/80 flex items-center gap-1">
               <Plus className="w-3 h-3" /> Add another chapter
             </button>
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSave} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={loading}>
             {loading && <Loader2 className="w-4 h-4 animate-spin" />} Save Chapters
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
-

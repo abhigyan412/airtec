@@ -6,6 +6,34 @@ import { studentsApi, admissionApi, academicYearsApi } from '@/lib/api'
 import { cn, STATUS_COLORS, formatDate } from '@/lib/utils'
 import { ArrowLeft, Search, CheckSquare, Square, Users, ArrowRight, Loader2, GraduationCap, AlertTriangle, History, ArrowRightLeft } from 'lucide-react'
 import { toast } from 'sonner'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table'
 
 const PROMOTION_TYPES = [
   { value: 'promoted', label: 'Promoted', hint: 'Moving up to the next class for a new academic year' },
@@ -99,195 +127,215 @@ export default function PromoteStudentsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
-          <Link href="/students" className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
-            <ArrowLeft className="w-5 h-5 text-gray-500" />
-          </Link>
+          <Button variant="ghost" size="icon" asChild aria-label="Back to students">
+            <Link href="/students">
+              <ArrowLeft className="h-5 w-5" />
+            </Link>
+          </Button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Promote / Transfer Students</h1>
-            <p className="text-gray-500 text-sm mt-0.5">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Promote / Transfer Students</h1>
+            <p className="mt-0.5 text-sm text-muted-foreground">
               {view === 'tool'
                 ? "Move students to a new class, section, or academic year — tracked in each student's promotion history"
                 : 'Every promotion, transfer, detention, and withdrawal recorded so far'}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-          <button onClick={() => setView('tool')}
-            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
-              view === 'tool' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-            <ArrowRightLeft className="w-4 h-4" /> Promote / Transfer
-          </button>
-          <button onClick={() => setView('history')}
-            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
-              view === 'history' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-            <History className="w-4 h-4" /> History
-          </button>
-        </div>
+        <Tabs value={view} onValueChange={(v) => setView(v as 'tool' | 'history')}>
+          <TabsList>
+            <TabsTrigger value="tool">
+              <ArrowRightLeft className="h-4 w-4" /> Promote / Transfer
+            </TabsTrigger>
+            <TabsTrigger value="history">
+              <History className="h-4 w-4" /> History
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
       {view === 'history' && <PromotionHistory classesData={classesData} />}
 
       {/* Step 1: source */}
       {view === 'tool' && (<>
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
-        <p className="text-sm font-semibold text-gray-700 mb-3">1. Select students</p>
-        <div className="flex flex-wrap gap-3">
-          <select value={fromClass} onChange={e => { setFromClass(e.target.value); setFromSection(''); setSelected(new Set()) }}
-            className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-w-[160px]">
-            <option value="">Select current class...</option>
-            {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          {fromSections.length > 0 && (
-            <select value={fromSection} onChange={e => { setFromSection(e.target.value); setSelected(new Set()) }}
-              className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-              <option value="">All sections</option>
-              {fromSections.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          )}
-          <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input type="text" placeholder="Search within selected class..." value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-gray-50 focus:bg-white" />
+      <Card>
+        <CardContent className="p-5">
+          <p className="mb-3 text-sm font-semibold text-foreground">1. Select students</p>
+          <div className="flex flex-wrap gap-3">
+            <Select value={fromClass || undefined}
+              onValueChange={v => { setFromClass(v); setFromSection(''); setSelected(new Set()) }}>
+              <SelectTrigger className="min-w-[160px] sm:w-[200px]">
+                <SelectValue placeholder="Select current class..." />
+              </SelectTrigger>
+              <SelectContent>
+                {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {fromSections.length > 0 && (
+              <Select value={fromSection || 'all'}
+                onValueChange={v => { setFromSection(v === 'all' ? '' : v); setSelected(new Set()) }}>
+                <SelectTrigger className="min-w-[140px]">
+                  <SelectValue placeholder="All sections" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All sections</SelectItem>
+                  {fromSections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
+            <div className="relative min-w-[200px] flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input type="text" placeholder="Search within selected class..." value={search}
+                onChange={e => setSearch(e.target.value)} className="pl-9" />
+            </div>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Student list */}
       {fromClass && (
-        <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <Card className="overflow-hidden p-0">
+          <div className="flex items-center justify-between border-b border-border px-6 py-4">
             <div className="flex items-center gap-3">
-              <button onClick={toggleAll} className="text-gray-400 hover:text-indigo-600 transition-colors">
+              <button onClick={toggleAll} className="text-muted-foreground transition-colors hover:text-primary" aria-label="Toggle all">
                 {selected.size === students.length && students.length > 0
-                  ? <CheckSquare className="w-5 h-5 text-indigo-600" /> : <Square className="w-5 h-5" />}
+                  ? <CheckSquare className="h-5 w-5 text-primary" /> : <Square className="h-5 w-5" />}
               </button>
-              <span className="text-sm text-gray-500">
+              <span className="text-sm text-muted-foreground">
                 {students.length} active students
-                {selected.size > 0 && <span className="text-indigo-600 font-semibold"> · {selected.size} selected</span>}
+                {selected.size > 0 && <span className="font-semibold text-primary"> · {selected.size} selected</span>}
               </span>
             </div>
             {students.length > 0 && (
-              <button onClick={toggleAll} className="text-xs text-indigo-600 font-medium hover:text-indigo-700">
+              <Button variant="link" size="sm" onClick={toggleAll} className="h-auto p-0">
                 {selected.size === students.length ? 'Deselect all' : 'Select all'}
-              </button>
+              </Button>
             )}
           </div>
           {isLoading ? (
-            <div className="p-12 text-center text-gray-400">Loading students...</div>
+            <div className="p-12 text-center text-sm text-muted-foreground">Loading students...</div>
           ) : students.length === 0 ? (
-            <div className="p-12 text-center text-gray-400">
-              <Users className="w-10 h-10 mx-auto mb-2 text-gray-200" />
-              <p className="font-medium text-sm">No active students in this class/section</p>
-            </div>
+            <EmptyState icon={Users} title="No active students in this class/section" className="py-12" />
           ) : (
-            <div className="divide-y divide-gray-50 max-h-[360px] overflow-y-auto">
+            <div className="max-h-[360px] divide-y divide-border overflow-y-auto">
               {students.map((s: any) => {
                 const isSelected = selected.has(s.id)
                 return (
                   <div key={s.id} onClick={() => toggleOne(s.id)}
-                    className={cn('flex items-center gap-4 px-6 py-2.5 cursor-pointer transition-colors', isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50')}>
-                    <button className="text-gray-400 flex-shrink-0">
-                      {isSelected ? <CheckSquare className="w-4 h-4 text-indigo-600" /> : <Square className="w-4 h-4" />}
+                    className={cn('flex cursor-pointer items-center gap-4 px-6 py-2.5 transition-colors', isSelected ? 'bg-primary/10' : 'hover:bg-muted/50')}>
+                    <button className="shrink-0 text-muted-foreground" aria-label="Toggle student">
+                      {isSelected ? <CheckSquare className="h-4 w-4 text-primary" /> : <Square className="h-4 w-4" />}
                     </button>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900">{s.first_name} {s.last_name}</p>
-                      <p className="text-xs text-gray-400">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-foreground">{s.first_name} {s.last_name}</p>
+                      <p className="text-xs text-muted-foreground">
                         {s.admission_number && `#${s.admission_number} · `}Roll: {s.roll_number ?? '—'}
                         {s.sections?.name && ` · ${s.sections.name}`}
                       </p>
                     </div>
-                    <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', STATUS_COLORS[s.status])}>{s.status}</span>
+                    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', STATUS_COLORS[s.status])}>{s.status}</span>
                   </div>
                 )
               })}
             </div>
           )}
-        </div>
+        </Card>
       )}
 
       {/* Step 2: destination */}
       {selected.size > 0 && (
-        <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-4">
-          <p className="text-sm font-semibold text-gray-700">2. Move {selected.size} selected student{selected.size !== 1 ? 's' : ''} to</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Academic Year *</label>
-              <select value={toAcademicYear} onChange={e => setToAcademicYear(e.target.value)}
-                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-                <option value="">Select year...</option>
-                {(academicYears ?? []).map((y: any) => <option key={y.id} value={y.id}>{y.name}{y.is_current ? ' (current)' : ''}</option>)}
-              </select>
+        <Card>
+          <CardContent className="space-y-4 p-5">
+            <p className="text-sm font-semibold text-foreground">2. Move {selected.size} selected student{selected.size !== 1 ? 's' : ''} to</p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Academic Year *</Label>
+                <Select value={toAcademicYear || undefined} onValueChange={v => setToAcademicYear(v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select year..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(academicYears ?? []).map((y: any) => <SelectItem key={y.id} value={y.id}>{y.name}{y.is_current ? ' (current)' : ''}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Class *</Label>
+                <Select value={toClass || undefined} onValueChange={v => { setToClass(v); setToSection('') }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select class..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Section</Label>
+                <Select value={toSection || 'unassigned'} onValueChange={v => setToSection(v === 'unassigned' ? '' : v)} disabled={!toClass}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Unassigned" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unassigned">Unassigned</SelectItem>
+                    {toSections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Type *</Label>
+                <Select value={promotionType} onValueChange={v => setPromotionType(v)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROMOTION_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Class *</label>
-              <select value={toClass} onChange={e => { setToClass(e.target.value); setToSection('') }}
-                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-                <option value="">Select class...</option>
-                {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+            <p className="text-xs text-muted-foreground">{PROMOTION_TYPES.find(t => t.value === promotionType)?.hint}</p>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Notes (optional)</Label>
+              <Input type="text" value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Promoted after Annual Exam 2026" />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Section</label>
-              <select value={toSection} onChange={e => setToSection(e.target.value)} disabled={!toClass}
-                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50">
-                <option value="">Unassigned</option>
-                {toSections.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+            <div className="flex justify-end">
+              <Button onClick={() => setConfirming(true)} disabled={!canReview}>
+                <GraduationCap className="h-4 w-4" /> Review &amp; Confirm
+              </Button>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
-              <select value={promotionType} onChange={e => setPromotionType(e.target.value)}
-                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-                {PROMOTION_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-              </select>
-            </div>
-          </div>
-          <p className="text-xs text-gray-400">{PROMOTION_TYPES.find(t => t.value === promotionType)?.hint}</p>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Notes (optional)</label>
-            <input type="text" value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Promoted after Annual Exam 2026"
-              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
-          </div>
-          <div className="flex justify-end">
-            <button onClick={() => setConfirming(true)} disabled={!canReview}
-              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">
-              <GraduationCap className="w-4 h-4" /> Review & Confirm
-            </button>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
-      {confirming && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-amber-500" />
-              <h2 className="text-lg font-semibold text-gray-900">Confirm {PROMOTION_TYPES.find(t => t.value === promotionType)?.label.toLowerCase()}</h2>
+      <Dialog open={confirming} onOpenChange={setConfirming}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-warning" />
+              Confirm {PROMOTION_TYPES.find(t => t.value === promotionType)?.label.toLowerCase()}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              <span className="font-semibold text-foreground">{selected.size}</span> student{selected.size !== 1 ? 's' : ''} will move to:
+            </p>
+            <div className="flex items-center gap-2 rounded-xl bg-muted px-4 py-3 text-sm">
+              <span className="font-medium text-foreground">{fromClassObj?.name ?? 'Current class'}</span>
+              <ArrowRight className="h-4 w-4 text-muted-foreground" />
+              <span className="font-semibold text-primary">{toClassName}{toSectionName ? ` · ${toSectionName}` : ''} · {toYearName}</span>
             </div>
-            <div className="px-6 py-5 space-y-3">
-              <p className="text-sm text-gray-600">
-                <span className="font-semibold text-gray-900">{selected.size}</span> student{selected.size !== 1 ? 's' : ''} will move to:
-              </p>
-              <div className="flex items-center gap-2 text-sm bg-gray-50 rounded-xl px-4 py-3">
-                <span className="font-medium text-gray-900">{fromClassObj?.name ?? 'Current class'}</span>
-                <ArrowRight className="w-4 h-4 text-gray-400" />
-                <span className="font-semibold text-indigo-600">{toClassName}{toSectionName ? ` · ${toSectionName}` : ''} · {toYearName}</span>
-              </div>
-              <p className="text-xs text-gray-400">This updates each student's record immediately and is logged in their promotion history. It isn't automatically reversible — you'd need to promote them back manually.</p>
-            </div>
-            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-              <button onClick={() => setConfirming(false)} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-              <button onClick={() => promoteMutation.mutate()} disabled={promoteMutation.isPending}
-                className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60">
-                {promoteMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} Confirm
-              </button>
-            </div>
+            <p className="text-xs text-muted-foreground">This updates each student&apos;s record immediately and is logged in their promotion history. It isn&apos;t automatically reversible — you&apos;d need to promote them back manually.</p>
           </div>
-        </div>
-      )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button onClick={() => promoteMutation.mutate()} disabled={promoteMutation.isPending}>
+              {promoteMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       </>)}
     </div>
   )
@@ -309,77 +357,82 @@ function PromotionHistory({ classesData }: { classesData: any }) {
   const records = data ?? []
 
   const TYPE_STYLES: Record<string, string> = {
-    promoted: 'bg-emerald-100 text-emerald-700',
-    transferred: 'bg-indigo-100 text-indigo-700',
-    detained: 'bg-amber-100 text-amber-700',
-    withdrawn: 'bg-red-100 text-red-700',
+    promoted: 'bg-success/10 text-success',
+    transferred: 'bg-primary/10 text-primary',
+    detained: 'bg-warning/10 text-warning',
+    withdrawn: 'bg-destructive/10 text-destructive',
   }
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 flex flex-wrap gap-3">
-        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
-          className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-w-[160px]">
-          <option value="">All types</option>
-          {PROMOTION_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-        </select>
-        <select value={classFilter} onChange={e => setClassFilter(e.target.value)}
-          className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-w-[160px]">
-          <option value="">All classes (from or to)</option>
-          {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      </div>
+      <Card>
+        <CardContent className="flex flex-wrap gap-3 p-5">
+          <Select value={typeFilter || 'all'} onValueChange={v => setTypeFilter(v === 'all' ? '' : v)}>
+            <SelectTrigger className="min-w-[160px]">
+              <SelectValue placeholder="All types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All types</SelectItem>
+              {PROMOTION_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={classFilter || 'all'} onValueChange={v => setClassFilter(v === 'all' ? '' : v)}>
+            <SelectTrigger className="min-w-[160px]">
+              <SelectValue placeholder="All classes (from or to)" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All classes (from or to)</SelectItem>
+              {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </CardContent>
+      </Card>
 
-      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+      <Card className="overflow-hidden p-0">
         {isLoading ? (
-          <div className="p-12 text-center text-gray-400">Loading history...</div>
+          <div className="p-12 text-center text-sm text-muted-foreground">Loading history...</div>
         ) : records.length === 0 ? (
-          <div className="p-12 text-center text-gray-400">
-            <History className="w-10 h-10 mx-auto mb-2 text-gray-200" />
-            <p className="font-medium text-sm">No promotions or transfers recorded yet</p>
-          </div>
+          <EmptyState icon={History} title="No promotions or transfers recorded yet" className="py-12" />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                  <th className="px-6 py-3 font-semibold">Student</th>
-                  <th className="px-3 py-3 font-semibold">Type</th>
-                  <th className="px-3 py-3 font-semibold">From</th>
-                  <th className="px-3 py-3 font-semibold">To</th>
-                  <th className="px-3 py-3 font-semibold">By</th>
-                  <th className="px-6 py-3 font-semibold text-right">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {records.map((r: any) => (
-                  <tr key={r.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-3">
-                      <p className="font-medium text-gray-900">{r.students?.first_name} {r.students?.last_name}</p>
-                      <p className="text-xs text-gray-400">#{r.students?.admission_number ?? '—'}</p>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className={cn('px-2 py-0.5 rounded-full text-xs font-semibold capitalize', TYPE_STYLES[r.promotion_type] ?? 'bg-gray-100 text-gray-600')}>
-                        {r.promotion_type}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 text-gray-500">
-                      {r.from_class?.name ?? '—'}{r.from_section?.name ? ` · ${r.from_section.name}` : ''}
-                      {r.from_year?.name && <span className="text-gray-300"> ({r.from_year.name})</span>}
-                    </td>
-                    <td className="px-3 py-3 text-gray-900 font-medium">
-                      {r.to_class?.name ?? '—'}{r.to_section?.name ? ` · ${r.to_section.name}` : ''}
-                      {r.to_year?.name && <span className="text-gray-400 font-normal"> ({r.to_year.name})</span>}
-                    </td>
-                    <td className="px-3 py-3 text-gray-500">{r.promoter?.full_name ?? '—'}</td>
-                    <td className="px-6 py-3 text-right text-xs text-gray-400">{formatDate(r.created_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Student</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>From</TableHead>
+                <TableHead>To</TableHead>
+                <TableHead>By</TableHead>
+                <TableHead className="text-right">Date</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {records.map((r: any) => (
+                <TableRow key={r.id} className="cursor-default">
+                  <TableCell>
+                    <p className="font-medium text-foreground">{r.students?.first_name} {r.students?.last_name}</p>
+                    <p className="text-xs text-muted-foreground">#{r.students?.admission_number ?? '—'}</p>
+                  </TableCell>
+                  <TableCell>
+                    <span className={cn('rounded-full px-2 py-0.5 text-xs font-semibold capitalize', TYPE_STYLES[r.promotion_type] ?? 'bg-muted text-muted-foreground')}>
+                      {r.promotion_type}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {r.from_class?.name ?? '—'}{r.from_section?.name ? ` · ${r.from_section.name}` : ''}
+                    {r.from_year?.name && <span className="text-muted-foreground/60"> ({r.from_year.name})</span>}
+                  </TableCell>
+                  <TableCell className="font-medium text-foreground">
+                    {r.to_class?.name ?? '—'}{r.to_section?.name ? ` · ${r.to_section.name}` : ''}
+                    {r.to_year?.name && <span className="font-normal text-muted-foreground"> ({r.to_year.name})</span>}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{r.promoter?.full_name ?? '—'}</TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground">{formatDate(r.created_at)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
-      </div>
+      </Card>
     </div>
   )
 }

@@ -5,6 +5,10 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { feeApi, admissionApi } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { PiggyBank, BarChart3 } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/shared/EmptyState'
 
 // Collection meter: single ratio (collected ÷ billed), color-banded by the
 // same severity convention used everywhere else in this app (attendance %,
@@ -16,36 +20,39 @@ function CollectionMeter({ stats }: { stats: any }) {
   const collected = stats?.total_collected ?? 0
   const due = stats?.total_due ?? 0
   const pct = billed > 0 ? Math.round((collected / billed) * 100) : 0
-  const ramp = pct >= 75 ? { fill: 'bg-emerald-500', track: 'bg-emerald-100', text: 'text-emerald-700' }
-    : pct >= 50 ? { fill: 'bg-amber-500', track: 'bg-amber-100', text: 'text-amber-700' }
-    : { fill: 'bg-rose-500', track: 'bg-rose-100', text: 'text-rose-700' }
+  const ramp = pct >= 75 ? { fill: 'bg-success', track: 'bg-success/15', text: 'text-success' }
+    : pct >= 50 ? { fill: 'bg-warning', track: 'bg-warning/15', text: 'text-warning' }
+    : { fill: 'bg-destructive', track: 'bg-destructive/15', text: 'text-destructive' }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6">
-      <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-1">
-        <PiggyBank className="w-4 h-4 text-gray-400" /> Collection Health
-      </h3>
-      <p className="text-xs text-gray-400 mb-5">Collected against total billed this year</p>
-
-      <div className="flex items-end justify-between mb-2">
-        <span className={cn('text-3xl font-bold', ramp.text)}>{pct}%</span>
-        <span className="text-xs text-gray-400">of {formatCurrency(billed)} billed</span>
-      </div>
-      <div className={cn('h-3 rounded-full overflow-hidden', ramp.track)}>
-        <div className={cn('h-full rounded-full transition-all', ramp.fill)} style={{ width: `${Math.min(100, pct)}%` }} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 mt-5 pt-5 border-t border-gray-100">
-        <div>
-          <p className="text-xs text-gray-400">Collected</p>
-          <p className="text-lg font-bold text-emerald-600">{formatCurrency(collected)}</p>
+    <Card>
+      <CardHeader className="space-y-1 pb-0">
+        <CardTitle className="flex items-center gap-2">
+          <PiggyBank className="h-4 w-4 text-muted-foreground" /> Collection Health
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">Collected against total billed this year</p>
+      </CardHeader>
+      <CardContent className="pt-5">
+        <div className="mb-2 flex items-end justify-between">
+          <span className={cn('text-3xl font-bold', ramp.text)}>{pct}%</span>
+          <span className="text-xs text-muted-foreground">of {formatCurrency(billed)} billed</span>
         </div>
-        <div>
-          <p className="text-xs text-gray-400">Outstanding</p>
-          <p className="text-lg font-bold text-rose-600">{formatCurrency(due)}</p>
+        <div className={cn('h-3 overflow-hidden rounded-full', ramp.track)}>
+          <div className={cn('h-full rounded-full transition-all', ramp.fill)} style={{ width: `${Math.min(100, pct)}%` }} />
         </div>
-      </div>
-    </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-5">
+          <div>
+            <p className="text-xs text-muted-foreground">Collected</p>
+            <p className="text-lg font-bold text-success">{formatCurrency(collected)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Outstanding</p>
+            <p className="text-lg font-bold text-destructive">{formatCurrency(due)}</p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -95,48 +102,58 @@ function ClassWiseDues() {
   const selectedClassName = (classesData ?? []).find((c: any) => c.id === classId)?.name
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6">
-      <div className="flex items-start justify-between gap-3 mb-1">
-        <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-          <BarChart3 className="w-4 h-4 text-gray-400" /> Outstanding Dues {classId ? `— ${selectedClassName}` : 'by Class'}
-        </h3>
-        <select value={classId} onChange={e => setClassId(e.target.value)}
-          className="px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 flex-shrink-0">
-          <option value="">All Classes</option>
-          {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      </div>
-      <p className="text-xs text-gray-400 mb-4">{classId ? 'Students to follow up with' : 'Where to focus follow-up'}</p>
-      {isLoading ? (
-        <div className="h-[220px] bg-gray-50 rounded-xl animate-pulse" />
-      ) : data.length === 0 ? (
-        <div className="h-[220px] flex flex-col items-center justify-center text-gray-300">
-          <BarChart3 className="w-10 h-10 mb-2" />
-          <p className="text-sm text-gray-400">No outstanding dues 🎉</p>
+    <Card>
+      <CardHeader className="space-y-1 pb-4">
+        <div className="flex items-start justify-between gap-3">
+          <CardTitle className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4 text-muted-foreground" /> Outstanding Dues {classId ? `— ${selectedClassName}` : 'by Class'}
+          </CardTitle>
+          <Select value={classId || 'all'} onValueChange={v => setClassId(v === 'all' ? '' : v)}>
+            <SelectTrigger className="h-8 w-[140px] shrink-0 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Classes</SelectItem>
+              {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
-      ) : (
-        <ResponsiveContainer width="100%" height={Math.max(200, data.length * 32)}>
-          <BarChart data={data} layout="vertical" margin={{ left: 8, right: 24 }}>
-            <CartesianGrid horizontal={false} stroke="#f3f4f6" />
-            <XAxis type="number" tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false}
-              tickFormatter={(v) => v >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${v}`} />
-            <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: '#4b5563' }} tickLine={false} axisLine={false} width={classId ? 90 : 70} />
-            <Tooltip
-              contentStyle={{ border: '1px solid #e5e7eb', borderRadius: 10, fontSize: 13, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)' }}
-              cursor={{ fill: '#f9fafb' }}
-              formatter={(value: any) => [formatCurrency(Number(value)), 'Outstanding']}
-            />
-            <Bar dataKey="amount" fill="#f43f5e" radius={[0, 6, 6, 0]} maxBarSize={20} />
-          </BarChart>
-        </ResponsiveContainer>
-      )}
-    </div>
+        <p className="text-xs text-muted-foreground">{classId ? 'Students to follow up with' : 'Where to focus follow-up'}</p>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-[220px] w-full rounded-xl" />
+        ) : data.length === 0 ? (
+          <EmptyState icon={BarChart3} title="No outstanding dues 🎉" className="py-12" />
+        ) : (
+          <ResponsiveContainer width="100%" height={Math.max(200, data.length * 32)}>
+            <BarChart data={data} layout="vertical" margin={{ left: 8, right: 24 }}>
+              <CartesianGrid horizontal={false} stroke="hsl(var(--border))" />
+              <XAxis type="number" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false}
+                tickFormatter={(v) => v >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${v}`} />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} width={classId ? 90 : 70} />
+              <Tooltip
+                contentStyle={{
+                  border: '1px solid hsl(var(--border))',
+                  borderRadius: 12,
+                  fontSize: 13,
+                  background: 'hsl(var(--popover))',
+                  color: 'hsl(var(--popover-foreground))',
+                  boxShadow: '0 8px 24px -8px rgb(0 0 0 / 0.2)',
+                }}
+                cursor={{ fill: 'hsl(var(--muted))' }}
+                formatter={(value: any) => [formatCurrency(Number(value)), 'Outstanding']}
+              />
+              <Bar dataKey="amount" fill="hsl(0 84% 62%)" radius={[0, 6, 6, 0]} maxBarSize={20} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
 export function FeeAnalytics({ stats }: { stats: any }) {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <CollectionMeter stats={stats} />
       <ClassWiseDues />
     </div>

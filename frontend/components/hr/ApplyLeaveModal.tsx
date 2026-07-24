@@ -3,8 +3,26 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { hrmsApi, calendarApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { Loader2, X, AlertTriangle } from 'lucide-react'
+import { Loader2, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 // Single shared "Apply for Leave" modal — used by both /hr/my-leave and
 // /hr/leave, which previously had their own independent copies. The
@@ -92,75 +110,83 @@ export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-gray-50 focus:bg-white"
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Apply for Leave</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Leave Type *</label>
-            <select className={inputCls} value={form.leave_type_id} onChange={e => setForm(f => ({ ...f, leave_type_id: e.target.value }))}>
-              <option value="">Select leave type</option>
-              {(leaveTypes ?? []).map((lt: any) => (
-                <option key={lt.id} value={lt.id}>{lt.name} {lt.is_paid ? '(Paid)' : '(Unpaid)'}</option>
-              ))}
-            </select>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Apply for Leave</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Leave Type *</Label>
+            <Select
+              value={form.leave_type_id}
+              onValueChange={(v) => setForm(f => ({ ...f, leave_type_id: v }))}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select leave type" />
+              </SelectTrigger>
+              <SelectContent>
+                {(leaveTypes ?? []).map((lt: any) => (
+                  <SelectItem key={lt.id} value={lt.id}>{lt.name} {lt.is_paid ? '(Paid)' : '(Unpaid)'}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {selectedBalance && (
-              <p className="text-xs text-gray-400 mt-1">{selectedBalance.remaining_days} of {selectedBalance.total_days} days remaining</p>
+              <p className="mt-1 text-xs text-muted-foreground">{selectedBalance.remaining_days} of {selectedBalance.total_days} days remaining</p>
             )}
           </div>
+
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">From Date *</label>
-              <input type="date" className={inputCls} value={form.from_date}
+            <div className="space-y-1.5">
+              <Label htmlFor="from_date">From Date *</Label>
+              <Input id="from_date" type="date" value={form.from_date}
                 onChange={e => setForm(f => ({ ...f, from_date: e.target.value }))} />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">To Date *</label>
-              <input type="date" className={inputCls} value={form.to_date}
+            <div className="space-y-1.5">
+              <Label htmlFor="to_date">To Date *</Label>
+              <Input id="to_date" type="date" value={form.to_date}
                 onChange={e => setForm(f => ({ ...f, to_date: e.target.value }))} />
             </div>
           </div>
+
           {totalDays > 0 && (
-            <p className="text-sm text-indigo-600 font-medium">
+            <p className="text-sm font-medium text-primary">
               {totalDays} working day{totalDays !== 1 ? 's' : ''} requested
               {excludedCount > 0 && (
-                <span className="text-gray-400 font-normal"> · {excludedCount} holiday/weekly-off day{excludedCount !== 1 ? 's' : ''} in range not counted</span>
+                <span className="font-normal text-muted-foreground"> · {excludedCount} holiday/weekly-off day{excludedCount !== 1 ? 's' : ''} in range not counted</span>
               )}
             </p>
           )}
           {form.from_date && form.to_date && form.to_date >= form.from_date && totalDays === 0 && (
-            <p className="text-sm text-red-500 font-medium">Selected range is entirely holidays/weekly-off — nothing to apply for</p>
+            <p className="text-sm font-medium text-destructive">Selected range is entirely holidays/weekly-off — nothing to apply for</p>
           )}
           {exceedsBalance && (
-            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
-              <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-700">
+            <div className="flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3 py-2.5">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-warning" />
+              <p className="text-xs text-warning">
                 This exceeds your remaining balance of {selectedBalance.remaining_days} day{selectedBalance.remaining_days === 1 ? '' : 's'}.
                 You can still submit it, but it'll be flagged for the approver as going past your quota.
               </p>
             </div>
           )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Reason</label>
-            <textarea rows={3} className={inputCls + ' resize-none'} value={form.reason}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="reason">Reason</Label>
+            <Textarea id="reason" rows={3} className="resize-none" value={form.reason}
               onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
               placeholder="Brief reason for leave..." />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSubmit} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Submit Application
-          </button>
-        </div>
-      </div>
-    </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Submit Application
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

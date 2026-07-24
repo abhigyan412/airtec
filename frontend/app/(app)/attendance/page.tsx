@@ -9,15 +9,34 @@ import { toast } from 'sonner'
 import { usePermissions } from '@/lib/usePermissions'
 import { useAuth } from '@/lib/auth'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+} from '@/components/ui/select'
 
 type AttendanceStatus = 'present' | 'absent' | 'late' | 'leave'
 type Tab = 'mark' | 'report'
 
 const STATUS_CONFIG = {
-  present: { label: 'P', color: 'bg-green-500 text-white', border: 'border-green-500', icon: CheckCircle },
-  absent:  { label: 'A', color: 'bg-red-500 text-white',   border: 'border-red-500',   icon: XCircle },
-  late:    { label: 'L', color: 'bg-yellow-500 text-white', border: 'border-yellow-500', icon: Clock },
-  leave:   { label: 'LV', color: 'bg-blue-500 text-white',  border: 'border-blue-500',  icon: Calendar },
+  present: { label: 'P', color: 'bg-success text-success-foreground', border: 'border-success', icon: CheckCircle },
+  absent:  { label: 'A', color: 'bg-destructive text-destructive-foreground', border: 'border-destructive', icon: XCircle },
+  late:    { label: 'L', color: 'bg-warning text-warning-foreground', border: 'border-warning', icon: Clock },
+  leave:   { label: 'LV', color: 'bg-blue-500 text-white', border: 'border-blue-500', icon: Calendar },
+}
+
+// Bar-fill colors for the KPI cards, keyed to the semantic status tokens.
+const STATUS_BAR: Record<string, string> = {
+  present: 'bg-success',
+  absent: 'bg-destructive',
+  late: 'bg-warning',
+  leave: 'bg-blue-500',
 }
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -35,6 +54,10 @@ function useCurrentAcademicYear() {
   if (!current) return null
   return { ...current, effective_end: current.end_date < todayStr ? current.end_date : todayStr }
 }
+
+// theme-aware percentage pill classes shared by both tabs
+const pctColor = (pct: number) =>
+  pct >= 75 ? 'text-success bg-success/10' : pct >= 50 ? 'text-warning bg-warning/10' : 'text-destructive bg-destructive/10'
 
 export default function AttendancePage() {
   const [tab, setTab] = useState<Tab>('mark')
@@ -55,74 +78,81 @@ export default function AttendancePage() {
 
   if (!permLoading && !canView) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-        <ShieldOff className="w-12 h-12 mb-3 text-gray-200" />
-        <p className="font-semibold text-gray-500">Access Denied</p>
-        <p className="text-sm mt-1">You don't have permission to view attendance.</p>
+      <div className="flex h-64 flex-col items-center justify-center text-muted-foreground">
+        <ShieldOff className="mb-3 h-12 w-12 text-muted-foreground/40" />
+        <p className="font-semibold text-foreground">Access Denied</p>
+        <p className="mt-1 text-sm">You don't have permission to view attendance.</p>
       </div>
     )
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Attendance</h1>
-          <p className="text-gray-500 text-sm mt-0.5">
-            {tab === 'mark'
-              ? (canManage ? 'Mark daily attendance by class' : 'View daily attendance by class')
-              : 'Monthly attendance report, class-wise or section-wise'}
-          </p>
-        </div>
-        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-          <button onClick={() => setTab('mark')}
-            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
-              tab === 'mark' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-            <ClipboardList className="w-4 h-4" /> Mark
-          </button>
-          <button onClick={() => setTab('report')}
-            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
-              tab === 'report' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-            <BarChart3 className="w-4 h-4" /> Report
-          </button>
-        </div>
-      </div>
+    <Tabs value={tab} onValueChange={v => setTab(v as Tab)}>
+      <PageHeader
+        title="Attendance"
+        icon={ClipboardList}
+        description={
+          tab === 'mark'
+            ? (canManage ? 'Mark daily attendance by class' : 'View daily attendance by class')
+            : 'Monthly attendance report, class-wise or section-wise'
+        }
+        actions={
+          <TabsList>
+            <TabsTrigger value="mark"><ClipboardList className="h-4 w-4" /> Mark</TabsTrigger>
+            <TabsTrigger value="report"><BarChart3 className="h-4 w-4" /> Report</TabsTrigger>
+          </TabsList>
+        }
+      />
 
-      {/* Class / Section pickers — shared between tabs */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
-        <div className="flex flex-wrap gap-4 items-end">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Class</label>
-            <select value={selectedClass} onChange={e => { setSelectedClass(e.target.value); setSelectedSection('') }}
-              className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-gray-50 focus:bg-white min-w-[140px]">
-              <option value="">Select class...</option>
-              {(classesData ?? []).map((c: any) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </div>
+      <div className="space-y-6">
+        {/* Class / Section pickers — shared between tabs */}
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="space-y-1.5">
+                <Label>Class</Label>
+                <Select value={selectedClass}
+                  onValueChange={v => { setSelectedClass(v); setSelectedSection('') }}>
+                  <SelectTrigger className="min-w-[160px]">
+                    <SelectValue placeholder="Select class..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(classesData ?? []).map((c: any) => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-          {sections.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Section</label>
-              <select value={selectedSection} onChange={e => setSelectedSection(e.target.value)}
-                className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-gray-50 focus:bg-white">
-                <option value="">All sections</option>
-                {sections.map((s: any) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+              {sections.length > 0 && (
+                <div className="space-y-1.5">
+                  <Label>Section</Label>
+                  <Select value={selectedSection || 'all'}
+                    onValueChange={v => setSelectedSection(v === 'all' ? '' : v)}>
+                    <SelectTrigger className="min-w-[140px]">
+                      <SelectValue placeholder="All sections" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All sections</SelectItem>
+                      {sections.map((s: any) => (
+                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      </div>
+          </CardContent>
+        </Card>
 
-      {tab === 'mark' ? (
-        <MarkTab classId={selectedClass} sectionId={selectedSection} className={selectedClassData?.name} canManage={canManage} />
-      ) : (
-        <ReportTab classId={selectedClass} sectionId={selectedSection} className={selectedClassData?.name} />
-      )}
-    </div>
+        <TabsContent value="mark" className="mt-0">
+          <MarkTab classId={selectedClass} sectionId={selectedSection} className={selectedClassData?.name} canManage={canManage} />
+        </TabsContent>
+        <TabsContent value="report" className="mt-0">
+          <ReportTab classId={selectedClass} sectionId={selectedSection} className={selectedClassData?.name} />
+        </TabsContent>
+      </div>
+    </Tabs>
   )
 }
 
@@ -154,53 +184,60 @@ function ClassWiseAttendanceChart({ date }: { date: string }) {
   const dateLabel = new Date(date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
 
   if (isLoading) {
-    return <div className="bg-white rounded-2xl border border-gray-200 p-6 h-64 animate-pulse" />
+    return <Card className="h-64 animate-pulse" />
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6">
-      <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-1">
-        <BarChart3 className="w-4 h-4 text-gray-400" /> Attendance by Class
+    <Card className="p-6">
+      <h3 className="mb-1 flex items-center gap-2 font-semibold text-foreground">
+        <BarChart3 className="h-4 w-4 text-muted-foreground" /> Attendance by Class
       </h3>
-      <p className="text-xs text-gray-400 mb-4">{dateLabel}</p>
+      <p className="mb-4 text-xs text-muted-foreground">{dateLabel}</p>
 
       {!data?.is_working_day ? (
-        <div className="h-[140px] flex flex-col items-center justify-center text-gray-300">
-          <Calendar className="w-10 h-10 mb-2" />
-          <p className="text-sm text-gray-400">No school on this date</p>
+        <div className="flex h-[140px] flex-col items-center justify-center text-muted-foreground/50">
+          <Calendar className="mb-2 h-10 w-10" />
+          <p className="text-sm text-muted-foreground">No school on this date</p>
         </div>
       ) : !allClasses.length ? (
-        <div className="h-[140px] flex flex-col items-center justify-center text-gray-300">
-          <BarChart3 className="w-10 h-10 mb-2" />
-          <p className="text-sm text-gray-400">No students found</p>
+        <div className="flex h-[140px] flex-col items-center justify-center text-muted-foreground/50">
+          <BarChart3 className="mb-2 h-10 w-10" />
+          <p className="text-sm text-muted-foreground">No students found</p>
         </div>
       ) : !markedClasses.length ? (
-        <div className="h-[140px] flex flex-col items-center justify-center text-gray-300">
-          <ClipboardList className="w-10 h-10 mb-2" />
-          <p className="text-sm text-gray-400">No class has been marked yet for this date</p>
+        <div className="flex h-[140px] flex-col items-center justify-center text-muted-foreground/50">
+          <ClipboardList className="mb-2 h-10 w-10" />
+          <p className="text-sm text-muted-foreground">No class has been marked yet for this date</p>
         </div>
       ) : (
         <>
           <ResponsiveContainer width="100%" height={Math.max(140, markedClasses.length * 40)}>
             <BarChart data={markedClasses} layout="vertical" margin={{ left: 8, right: 32 }} barGap={2}>
-              <CartesianGrid horizontal={false} stroke="#f3f4f6" />
-              <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} />
-              <YAxis type="category" dataKey="class_name" tick={{ fontSize: 13, fill: '#374151', fontWeight: 600 }} tickLine={false} axisLine={false} width={70} />
+              <CartesianGrid horizontal={false} stroke="hsl(var(--border))" />
+              <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} />
+              <YAxis type="category" dataKey="class_name" tick={{ fontSize: 13, fill: 'hsl(var(--foreground))', fontWeight: 600 }} tickLine={false} axisLine={false} width={70} />
               <Tooltip
-                contentStyle={{ border: '1px solid #e5e7eb', borderRadius: 10, fontSize: 13, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)' }}
-                cursor={{ fill: '#f9fafb' }}
+                contentStyle={{
+                  border: '1px solid hsl(var(--border))',
+                  borderRadius: 12,
+                  fontSize: 13,
+                  background: 'hsl(var(--popover))',
+                  color: 'hsl(var(--popover-foreground))',
+                  boxShadow: '0 8px 24px -8px rgb(0 0 0 / 0.2)',
+                }}
+                cursor={{ fill: 'hsl(var(--muted))' }}
               />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="present" name="Present" fill="#22c55e" radius={[0, 4, 4, 0]} maxBarSize={16} label={{ position: 'right', fontSize: 11, fill: '#16a34a', fontWeight: 600 }} />
-              <Bar dataKey="absent" name="Absent" fill="#ef4444" radius={[0, 4, 4, 0]} maxBarSize={16} label={{ position: 'right', fontSize: 11, fill: '#dc2626', fontWeight: 600 }} />
+              <Bar dataKey="present" name="Present" fill="hsl(152 62% 45%)" radius={[0, 4, 4, 0]} maxBarSize={16} label={{ position: 'right', fontSize: 11, fill: 'hsl(152 62% 45%)', fontWeight: 600 }} />
+              <Bar dataKey="absent" name="Absent" fill="hsl(0 84% 62%)" radius={[0, 4, 4, 0]} maxBarSize={16} label={{ position: 'right', fontSize: 11, fill: 'hsl(0 84% 62%)', fontWeight: 600 }} />
             </BarChart>
           </ResponsiveContainer>
 
           {unmarkedClasses.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-medium text-gray-400">Not marked yet:</span>
+            <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+              <span className="text-xs font-medium text-muted-foreground">Not marked yet:</span>
               {unmarkedClasses.map((c: any) => (
-                <span key={c.class_id} className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                <span key={c.class_id} className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                   {c.class_name}
                 </span>
               ))}
@@ -208,7 +245,7 @@ function ClassWiseAttendanceChart({ date }: { date: string }) {
           )}
         </>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -301,66 +338,69 @@ function MarkTab({ classId, sectionId, className, canManage }: {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
-        <div className="flex flex-wrap gap-4 items-end">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Date</label>
-            <div className="flex items-center gap-2">
-              <button onClick={() => changeDate(-1)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                <ChevronLeft className="w-4 h-4 text-gray-500" />
-              </button>
-              <input type="date" value={selectedDate}
-                onChange={e => setSelectedDate(e.target.value)}
-                max={today}
-                className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-gray-50 focus:bg-white" />
-              <button onClick={() => changeDate(1)} disabled={selectedDate >= today}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-40">
-                <ChevronRight className="w-4 h-4 text-gray-500" />
-              </button>
-            </div>
-          </div>
-
-          {canManage && classId && Object.keys(attendance).length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Mark All</label>
-              <div className="flex gap-2">
-                {(Object.keys(STATUS_CONFIG) as AttendanceStatus[]).map(s => (
-                  <button key={s} onClick={() => markAll(s)}
-                    className={cn('px-3 py-2 rounded-lg text-xs font-bold border transition-colors', STATUS_CONFIG[s].color)}>
-                    All {STATUS_CONFIG[s].label}
-                  </button>
-                ))}
+      <Card>
+        <CardContent className="p-5">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="space-y-1.5">
+              <Label>Date</Label>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="icon" onClick={() => changeDate(-1)} aria-label="Previous day">
+                  <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+                </Button>
+                <Input type="date" value={selectedDate}
+                  onChange={e => setSelectedDate(e.target.value)}
+                  max={today}
+                  className="w-auto" />
+                <Button variant="ghost" size="icon" onClick={() => changeDate(1)} disabled={selectedDate >= today} aria-label="Next day">
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </Button>
               </div>
             </div>
-          )}
-        </div>
-      </div>
+
+            {canManage && classId && Object.keys(attendance).length > 0 && (
+              <div className="space-y-1.5">
+                <Label>Mark All</Label>
+                <div className="flex gap-2">
+                  {(Object.keys(STATUS_CONFIG) as AttendanceStatus[]).map(s => (
+                    <button key={s} onClick={() => markAll(s)}
+                      className={cn('rounded-lg border px-3 py-2 text-xs font-bold transition-colors', STATUS_CONFIG[s].color, STATUS_CONFIG[s].border)}>
+                      All {STATUS_CONFIG[s].label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {!canManage && classId && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-3 flex items-center gap-3">
-          <ShieldOff className="w-5 h-5 text-amber-500 flex-shrink-0" />
-          <p className="text-sm text-amber-700">You have view-only access. Contact an admin to mark or edit attendance.</p>
+        <div className="flex items-center gap-3 rounded-2xl border border-warning/20 bg-warning/10 px-5 py-3">
+          <ShieldOff className="h-5 w-5 shrink-0 text-warning" />
+          <p className="text-sm text-warning">You have view-only access. Contact an admin to mark or edit attendance.</p>
         </div>
       )}
 
       {classId && stats.total > 0 && (
         <div className="grid grid-cols-4 gap-4">
           {[
-            { label: 'Present', count: stats.present, color: 'bg-green-500', pct: Math.round((stats.present/stats.total)*100) },
-            { label: 'Absent',  count: stats.absent,  color: 'bg-red-500',   pct: Math.round((stats.absent/stats.total)*100) },
-            { label: 'Late',    count: stats.late,    color: 'bg-yellow-500', pct: Math.round((stats.late/stats.total)*100) },
-            { label: 'Leave',   count: stats.leave,   color: 'bg-blue-500',  pct: Math.round((stats.leave/stats.total)*100) },
+            { label: 'Present', count: stats.present, key: 'present', pct: Math.round((stats.present/stats.total)*100) },
+            { label: 'Absent',  count: stats.absent,  key: 'absent',  pct: Math.round((stats.absent/stats.total)*100) },
+            { label: 'Late',    count: stats.late,    key: 'late',    pct: Math.round((stats.late/stats.total)*100) },
+            { label: 'Leave',   count: stats.leave,   key: 'leave',   pct: Math.round((stats.leave/stats.total)*100) },
           ].map(s => (
-            <div key={s.label} className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-gray-500">{s.label}</span>
-                <span className="text-lg font-bold text-gray-900">{s.count}</span>
-              </div>
-              <div className="w-full bg-gray-100 rounded-full h-1.5">
-                <div className={cn('h-1.5 rounded-full transition-all', s.color)} style={{ width: `${s.pct}%` }} />
-              </div>
-              <p className="text-xs text-gray-400 mt-1">{s.pct}%</p>
-            </div>
+            <Card key={s.label}>
+              <CardContent className="p-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">{s.label}</span>
+                  <span className="text-lg font-bold text-foreground">{s.count}</span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-muted">
+                  <div className={cn('h-1.5 rounded-full transition-all', STATUS_BAR[s.key])} style={{ width: `${s.pct}%` }} />
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">{s.pct}%</p>
+              </CardContent>
+            </Card>
           ))}
         </div>
       )}
@@ -368,71 +408,62 @@ function MarkTab({ classId, sectionId, className, canManage }: {
       <ClassWiseAttendanceChart date={selectedDate} />
 
       {!classId ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
-          <Calendar className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-          <p className="font-medium">Select a class to {canManage ? 'mark' : 'view'} attendance</p>
-        </div>
+        <Card>
+          <EmptyState icon={Calendar} title={`Select a class to ${canManage ? 'mark' : 'view'} attendance`} />
+        </Card>
       ) : isLoading ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
-          Loading students...
-        </div>
+        <Card>
+          <div className="p-12 text-center text-muted-foreground">Loading students...</div>
+        </Card>
       ) : !(sheet?.students ?? []).length ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
-          <p className="font-medium">No students found in this class</p>
-        </div>
+        <Card>
+          <EmptyState icon={Calendar} title="No students found in this class" />
+        </Card>
       ) : (
-        <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <h3 className="font-semibold text-gray-900">
+        <Card className="overflow-hidden">
+          <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <h3 className="font-semibold text-foreground">
               {className} — {new Date(selectedDate).toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' })}
             </h3>
             {canManage && (
-              <button onClick={() => saveMutation.mutate()}
+              <Button onClick={() => saveMutation.mutate()}
                 disabled={saveMutation.isPending}
-                className={cn(
-                  'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all',
-                  saved
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60'
-                )}>
+                className={cn(saved && 'bg-success/15 text-success hover:bg-success/20')}>
                 {saveMutation.isPending
-                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>
+                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving...</>
                   : saved
-                  ? <><CheckCircle className="w-4 h-4" /> Saved!</>
-                  : <><Save className="w-4 h-4" /> Save Attendance</>
+                  ? <><CheckCircle className="h-4 w-4" /> Saved!</>
+                  : <><Save className="h-4 w-4" /> Save Attendance</>
                 }
-              </button>
+              </Button>
             )}
           </div>
 
-          <div className="divide-y divide-gray-50">
+          <div className="divide-y divide-border">
             {(sheet?.students ?? []).map((student: any, idx: number) => {
               const status = attendance[student.id] ?? 'present'
               return (
                 <div key={student.id} className={cn(
                   'flex items-center gap-4 px-6 py-3 transition-colors',
-                  status === 'absent' ? 'bg-red-50' : status === 'late' ? 'bg-yellow-50' : 'hover:bg-gray-50'
+                  status === 'absent' ? 'bg-destructive/10' : status === 'late' ? 'bg-warning/10' : 'hover:bg-muted/50'
                 )}>
-                  <span className="text-xs text-gray-400 w-6 text-center font-mono">{idx + 1}</span>
-                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 text-xs font-bold text-indigo-700">
+                  <span className="w-6 text-center font-mono text-xs text-muted-foreground">{idx + 1}</span>
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
                     {student.photo_url
-                      ? <img src={student.photo_url} alt="" className="w-8 h-8 rounded-full object-cover" />
+                      ? <img src={student.photo_url} alt="" className="h-8 w-8 rounded-full object-cover" />
                       : `${student.first_name?.[0]}${student.last_name?.[0]}`
                     }
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-gray-900">{student.first_name} {student.last_name}</p>
+                      <p className="text-sm font-medium text-foreground">{student.first_name} {student.last_name}</p>
                       {percentByStudent[student.id] !== undefined && (
-                        <span className={cn('px-1.5 py-0.5 rounded-full text-[10px] font-bold',
-                          percentByStudent[student.id] >= 75 ? 'text-green-600 bg-green-50'
-                          : percentByStudent[student.id] >= 50 ? 'text-yellow-600 bg-yellow-50'
-                          : 'text-red-600 bg-red-50')}>
+                        <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-bold', pctColor(percentByStudent[student.id]))}>
                           {percentByStudent[student.id]}% this year
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-gray-400">
+                    <p className="text-xs text-muted-foreground">
                       Roll: {student.roll_number ?? '—'}
                       {student.sections?.name && ` · ${student.sections.name}`}
                     </p>
@@ -443,11 +474,11 @@ function MarkTab({ classId, sectionId, className, canManage }: {
                         onClick={() => canManage && setAttendance(a => ({ ...a, [student.id]: s }))}
                         disabled={!canManage}
                         className={cn(
-                          'w-9 h-9 rounded-xl text-xs font-bold border-2 transition-all',
+                          'h-9 w-9 rounded-xl border-2 text-xs font-bold transition-all',
                           attendance[student.id] === s
                             ? config.color + ' ' + config.border + ' scale-110 shadow-sm'
-                            : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300',
-                          !canManage && 'cursor-default opacity-70 hover:border-gray-200'
+                            : 'border-border bg-background text-muted-foreground hover:border-muted-foreground/40',
+                          !canManage && 'cursor-default opacity-70 hover:border-border'
                         )}>
                         {config.label}
                       </button>
@@ -457,7 +488,7 @@ function MarkTab({ classId, sectionId, className, canManage }: {
               )
             })}
           </div>
-        </div>
+        </Card>
       )}
     </div>
   )
@@ -498,127 +529,122 @@ function ReportTab({ classId, sectionId, className }: { classId: string; section
   const isFutureMonth = year > now.getFullYear() || (year === now.getFullYear() && month > now.getMonth() + 1)
   const periodLabel = scope === 'month' ? `${MONTHS[month - 1]} ${year}` : (academicYear ? `Academic Year ${academicYear.name}` : 'Academic Year')
 
-  const pctColor = (pct: number) =>
-    pct >= 75 ? 'text-green-600 bg-green-50' : pct >= 50 ? 'text-yellow-600 bg-yellow-50' : 'text-red-600 bg-red-50'
-
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="flex items-end gap-4 flex-wrap">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Period</label>
-              <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-                <button onClick={() => setScope('month')}
-                  className={cn('px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors',
-                    scope === 'month' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-                  Month
-                </button>
-                <button onClick={() => setScope('year')}
-                  className={cn('px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors',
-                    scope === 'year' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-                  Academic Year
-                </button>
-              </div>
-            </div>
-            {scope === 'month' && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Month</label>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                    <ChevronLeft className="w-4 h-4 text-gray-500" />
+      <Card>
+        <CardContent className="p-5">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="space-y-1.5">
+                <Label>Period</Label>
+                <div className="flex items-center gap-1 rounded-lg bg-muted p-1">
+                  <button onClick={() => setScope('month')}
+                    className={cn('rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
+                      scope === 'month' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
+                    Month
                   </button>
-                  <span className="text-sm font-medium text-gray-900 w-36 text-center">{MONTHS[month - 1]} {year}</span>
-                  <button onClick={() => changeMonth(1)} disabled={isFutureMonth}
-                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-40">
-                    <ChevronRight className="w-4 h-4 text-gray-500" />
+                  <button onClick={() => setScope('year')}
+                    className={cn('rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
+                      scope === 'year' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
+                    Academic Year
                   </button>
                 </div>
               </div>
-            )}
-          </div>
-          {classId && (
-            <div className="text-sm text-gray-500 text-right">
-              Working days: <span className="font-semibold text-gray-900">{workingDays}</span>
-              {holidaysInMonth > 0 && (
-                <p className="text-xs text-gray-400 mt-0.5">{holidaysInMonth} holiday{holidaysInMonth > 1 ? 's' : ''} excluded</p>
+              {scope === 'month' && (
+                <div className="space-y-1.5">
+                  <Label>Month</Label>
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="icon" onClick={() => changeMonth(-1)} aria-label="Previous month">
+                      <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+                    </Button>
+                    <span className="w-36 text-center text-sm font-medium text-foreground">{MONTHS[month - 1]} {year}</span>
+                    <Button variant="ghost" size="icon" onClick={() => changeMonth(1)} disabled={isFutureMonth} aria-label="Next month">
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    </Button>
+                  </div>
+                </div>
               )}
             </div>
-          )}
-        </div>
-      </div>
+            {classId && (
+              <div className="text-right text-sm text-muted-foreground">
+                Working days: <span className="font-semibold text-foreground">{workingDays}</span>
+                {holidaysInMonth > 0 && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">{holidaysInMonth} holiday{holidaysInMonth > 1 ? 's' : ''} excluded</p>
+                )}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {!classId ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
-          <BarChart3 className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-          <p className="font-medium">Select a class to view its attendance report</p>
-        </div>
+        <Card>
+          <EmptyState icon={BarChart3} title="Select a class to view its attendance report" />
+        </Card>
       ) : scope === 'year' && !academicYear ? (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 text-sm text-amber-700">
+        <div className="rounded-2xl border border-warning/20 bg-warning/10 px-5 py-4 text-sm text-warning">
           No academic year is configured for this school yet.
         </div>
       ) : isLoading ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
-          Loading report...
-        </div>
+        <Card>
+          <div className="p-12 text-center text-muted-foreground">Loading report...</div>
+        </Card>
       ) : students.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
-          <p className="font-medium">No students found in this class</p>
-        </div>
+        <Card>
+          <EmptyState icon={BarChart3} title="No students found in this class" />
+        </Card>
       ) : workingDays === 0 ? (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 text-sm text-amber-700">
+        <div className="rounded-2xl border border-warning/20 bg-warning/10 px-5 py-4 text-sm text-warning">
           No attendance was marked for {className} in {periodLabel} yet.
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100">
-            <h3 className="font-semibold text-gray-900">
+        <Card className="overflow-hidden">
+          <div className="border-b border-border px-6 py-4">
+            <h3 className="font-semibold text-foreground">
               {className}{sectionId ? '' : ' — all sections'} · {periodLabel}
             </h3>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                  <th className="px-6 py-3 font-semibold">Student</th>
-                  {!sectionId && <th className="px-3 py-3 font-semibold">Section</th>}
-                  <th className="px-3 py-3 font-semibold text-center">Present</th>
-                  <th className="px-3 py-3 font-semibold text-center">Absent</th>
-                  <th className="px-3 py-3 font-semibold text-center">Late</th>
-                  <th className="px-3 py-3 font-semibold text-center">Leave</th>
-                  <th className="px-3 py-3 font-semibold text-center">%</th>
-                  <th className="px-6 py-3 font-semibold text-right">Individual</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {students.map((s: any) => (
-                  <tr key={s.student_id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-3">
-                      <p className="font-medium text-gray-900">{s.first_name} {s.last_name}</p>
-                      <p className="text-xs text-gray-400">Roll: {s.roll_number ?? '—'}</p>
-                    </td>
-                    {!sectionId && <td className="px-3 py-3 text-gray-500">{s.section_name ?? '—'}</td>}
-                    <td className="px-3 py-3 text-center font-mono text-gray-700">{s.present}</td>
-                    <td className="px-3 py-3 text-center font-mono text-gray-700">{s.absent}</td>
-                    <td className="px-3 py-3 text-center font-mono text-gray-700">{s.late}</td>
-                    <td className="px-3 py-3 text-center font-mono text-gray-700">{s.leave}</td>
-                    <td className="px-3 py-3 text-center">
-                      <span className={cn('px-2 py-0.5 rounded-full text-xs font-bold', pctColor(s.percentage))}>
-                        {s.percentage}%
-                      </span>
-                    </td>
-                    <td className="px-6 py-3 text-right">
-                      <Link href={`/students/${s.student_id}/attendance`}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
-                        View <ExternalLink className="w-3 h-3" />
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="px-6">Student</TableHead>
+                {!sectionId && <TableHead>Section</TableHead>}
+                <TableHead className="text-center">Present</TableHead>
+                <TableHead className="text-center">Absent</TableHead>
+                <TableHead className="text-center">Late</TableHead>
+                <TableHead className="text-center">Leave</TableHead>
+                <TableHead className="text-center">%</TableHead>
+                <TableHead className="px-6 text-right">Individual</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {students.map((s: any) => (
+                <TableRow key={s.student_id} className="cursor-default">
+                  <TableCell className="px-6">
+                    <p className="font-medium text-foreground">{s.first_name} {s.last_name}</p>
+                    <p className="text-xs text-muted-foreground">Roll: {s.roll_number ?? '—'}</p>
+                  </TableCell>
+                  {!sectionId && <TableCell className="text-muted-foreground">{s.section_name ?? '—'}</TableCell>}
+                  <TableCell className="text-center font-mono text-muted-foreground">{s.present}</TableCell>
+                  <TableCell className="text-center font-mono text-muted-foreground">{s.absent}</TableCell>
+                  <TableCell className="text-center font-mono text-muted-foreground">{s.late}</TableCell>
+                  <TableCell className="text-center font-mono text-muted-foreground">{s.leave}</TableCell>
+                  <TableCell className="text-center">
+                    <span className={cn('rounded-full px-2 py-0.5 text-xs font-bold', pctColor(s.percentage))}>
+                      {s.percentage}%
+                    </span>
+                  </TableCell>
+                  <TableCell className="px-6 text-right">
+                    <Link href={`/students/${s.student_id}/attendance`}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80">
+                      View <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
       )}
     </div>
   )

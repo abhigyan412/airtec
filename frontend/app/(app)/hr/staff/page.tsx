@@ -5,13 +5,35 @@ import { hrmsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Search, Users, UserCheck, UserMinus, Briefcase, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { StatCard } from '@/components/shared/StatCard'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Card } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-emerald-100 text-emerald-700',
-  on_leave: 'bg-amber-100 text-amber-700',
-  suspended: 'bg-orange-100 text-orange-700',
-  resigned: 'bg-gray-100 text-gray-600',
-  terminated: 'bg-red-100 text-red-700',
+  active: 'bg-success/10 text-success ring-1 ring-inset ring-success/20',
+  on_leave: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/20',
+  suspended: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/20',
+  resigned: 'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
+  terminated: 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/20',
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -38,140 +60,113 @@ export default function StaffDirectoryPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Staff Directory</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Manage staff profiles, leave, payroll and recruitment</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Link href="/hr/attendance"
-            className="px-3 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
-            Attendance
-          </Link>
-          <Link href="/hr/leave"
-            className="px-3 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
-            Leave
-          </Link>
-          <Link href="/hr/payroll"
-            className="px-3 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
-            Payroll
-          </Link>
-          <Link href="/hr/reports"
-            className="px-3 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
-            Reports
-          </Link>
-          <Link href="/hr/permissions"
-            className="px-3 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
-            Permissions
-          </Link>
-          <Link href="/hr/recruitment"
-            className="flex items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded-xl text-sm font-semibold hover:bg-indigo-700 shadow-sm shadow-indigo-200">
-            <Briefcase className="w-4 h-4" /> Recruitment
-          </Link>
-        </div>
-      </div>
+      <PageHeader
+        title="Staff Directory"
+        description="Manage staff profiles, leave, payroll and recruitment"
+        icon={Users}
+        actions={
+          <>
+            <Button variant="outline" size="sm" asChild><Link href="/hr/attendance">Attendance</Link></Button>
+            <Button variant="outline" size="sm" asChild><Link href="/hr/leave">Leave</Link></Button>
+            <Button variant="outline" size="sm" asChild><Link href="/hr/payroll">Payroll</Link></Button>
+            <Button variant="outline" size="sm" asChild><Link href="/hr/reports">Reports</Link></Button>
+            <Button variant="outline" size="sm" asChild><Link href="/hr/permissions">Permissions</Link></Button>
+            <Button size="sm" asChild>
+              <Link href="/hr/recruitment"><Briefcase className="h-4 w-4" /> Recruitment</Link>
+            </Button>
+          </>
+        }
+      />
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        {[
-          { label: 'Total Staff',     value: stats?.total_staff ?? 0,            icon: Users,     color: 'text-indigo-600 bg-indigo-50' },
-          { label: 'Active',          value: stats?.active_staff ?? 0,           icon: UserCheck, color: 'text-emerald-600 bg-emerald-50' },
-          { label: 'On Leave',        value: stats?.on_leave ?? 0,               icon: UserMinus, color: 'text-amber-600 bg-amber-50' },
-          { label: 'Pending Leaves',  value: stats?.pending_leave_requests ?? 0, icon: UserMinus, color: 'text-purple-600 bg-purple-50' },
-          { label: 'Open Positions',  value: stats?.open_positions ?? 0,         icon: Briefcase, color: 'text-blue-600 bg-blue-50' },
-        ].map(s => (
-          <div key={s.label} className="bg-white rounded-2xl border border-gray-200 p-4">
-            <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center mb-2', s.color)}>
-              <s.icon className="w-4 h-4" />
-            </div>
-            <p className="text-2xl font-bold text-gray-900">{s.value}</p>
-            <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
-          </div>
-        ))}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <StatCard label="Total Staff"    value={stats?.total_staff ?? 0}            icon={Users}     accent="primary" />
+        <StatCard label="Active"         value={stats?.active_staff ?? 0}           icon={UserCheck} accent="success" />
+        <StatCard label="On Leave"       value={stats?.on_leave ?? 0}               icon={UserMinus} accent="warning" />
+        <StatCard label="Pending Leaves" value={stats?.pending_leave_requests ?? 0} icon={UserMinus} accent="info" />
+        <StatCard label="Open Positions" value={stats?.open_positions ?? 0}         icon={Briefcase} accent="info" />
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-4 flex gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input type="text" placeholder="Search staff by name..."
+      <Card className="flex flex-wrap gap-3 p-4">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input type="text" placeholder="Search staff by name..."
             value={search} onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-gray-50 focus:bg-white" />
+            className="pl-9" />
         </div>
-        <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}
-          className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none">
-          <option value="">All Roles</option>
-          {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-      </div>
+        <Select value={roleFilter || 'all'} onValueChange={v => setRoleFilter(v === 'all' ? '' : v)}>
+          <SelectTrigger className="w-auto min-w-[160px]">
+            <SelectValue placeholder="All Roles" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Roles</SelectItem>
+            {Object.entries(ROLE_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </Card>
 
       {/* Department breakdown */}
       {stats?.by_department && stats.by_department.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {stats.by_department.map((d: any) => (
-            <span key={d.department} className="px-3 py-1.5 bg-white border border-gray-200 rounded-full text-xs font-medium text-gray-600">
-              {d.department}: <span className="font-bold text-gray-900">{d.count}</span>
+            <span key={d.department} className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground">
+              {d.department}: <span className="font-bold text-foreground">{d.count}</span>
             </span>
           ))}
         </div>
       )}
 
       {/* Staff table */}
-      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+      <Card className="overflow-hidden">
         {isLoading ? (
-          <div className="p-12 text-center">
-            <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+          <div className="space-y-3 p-6">
+            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
           </div>
         ) : (staffData?.data ?? []).length === 0 ? (
-          <div className="p-12 text-center text-gray-400">
-            <Users className="w-10 h-10 mx-auto mb-2 text-gray-200" />
-            <p className="font-medium">No staff found</p>
-          </div>
+          <EmptyState icon={Users} title="No staff found" />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Name</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Role</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Designation</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Department</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Employee ID</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Status</th>
-                  <th className="px-5 py-3.5" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {(staffData?.data ?? []).map((s: any) => (
-                  <tr key={s.id} onClick={() => window.location.href = `/hr/staff/${s.id}`}
-                    className="hover:bg-gray-50/80 transition-colors group cursor-pointer">
-                    <td className="px-5 py-3.5">
-                      <p className="font-semibold text-gray-900">{s.full_name}</p>
-                      <p className="text-xs text-gray-400">{s.email}</p>
-                    </td>
-                    <td className="px-5 py-3.5 text-gray-600 whitespace-nowrap">{ROLE_LABELS[s.role] ?? s.role}</td>
-                    <td className="px-5 py-3.5 text-gray-600 hidden md:table-cell">{s.staff_profile?.designation ?? '—'}</td>
-                    <td className="px-5 py-3.5 text-gray-600 hidden md:table-cell">{s.staff_profile?.department ?? '—'}</td>
-                    <td className="px-5 py-3.5 text-gray-500 font-mono text-xs hidden lg:table-cell">{s.staff_profile?.employee_id ?? '—'}</td>
-                    <td className="px-5 py-3.5">
-                      <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize whitespace-nowrap',
-                        STATUS_COLORS[s.staff_profile?.employment_status ?? 'active'])}>
-                        {(s.staff_profile?.employment_status ?? 'active').replace('_', ' ')}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <Link href={`/hr/staff/${s.id}`}
-                        className="flex items-center gap-1 text-xs text-indigo-600 font-semibold opacity-0 group-hover:opacity-100 transition-opacity hover:text-indigo-700 whitespace-nowrap">
-                        View <ChevronRight className="w-3 h-3" />
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Name</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead className="hidden md:table-cell">Designation</TableHead>
+                <TableHead className="hidden md:table-cell">Department</TableHead>
+                <TableHead className="hidden lg:table-cell">Employee ID</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(staffData?.data ?? []).map((s: any) => (
+                <TableRow key={s.id} onClick={() => window.location.href = `/hr/staff/${s.id}`} className="group">
+                  <TableCell>
+                    <p className="font-semibold text-foreground">{s.full_name}</p>
+                    <p className="text-xs text-muted-foreground">{s.email}</p>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-muted-foreground">{ROLE_LABELS[s.role] ?? s.role}</TableCell>
+                  <TableCell className="hidden text-muted-foreground md:table-cell">{s.staff_profile?.designation ?? '—'}</TableCell>
+                  <TableCell className="hidden text-muted-foreground md:table-cell">{s.staff_profile?.department ?? '—'}</TableCell>
+                  <TableCell className="hidden font-mono text-xs text-muted-foreground lg:table-cell">{s.staff_profile?.employee_id ?? '—'}</TableCell>
+                  <TableCell>
+                    <span className={cn('inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold capitalize',
+                      STATUS_COLORS[s.staff_profile?.employment_status ?? 'active'])}>
+                      {(s.staff_profile?.employment_status ?? 'active').replace('_', ' ')}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <Link href={`/hr/staff/${s.id}`}
+                      className="flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-primary opacity-0 transition-opacity hover:text-primary/80 group-hover:opacity-100">
+                      View <ChevronRight className="h-3 w-3" />
+                    </Link>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
-      </div>
+      </Card>
     </div>
   )
 }

@@ -6,6 +6,11 @@ import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { Plus, Trash2, Loader2, ShieldOff, CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { EmptyState } from '@/components/shared/EmptyState'
 
 const WEEKDAYS = [
   { value: 0, label: 'Sun' }, { value: 1, label: 'Mon' }, { value: 2, label: 'Tue' },
@@ -65,115 +70,116 @@ export default function AcademicCalendarPage() {
 
   if (!canManage) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-        <ShieldOff className="w-12 h-12 mb-3 text-gray-200" />
-        <p className="font-semibold text-gray-500">Access Denied</p>
-        <p className="text-sm mt-1">Only School Admin or Principal can manage the academic calendar.</p>
-      </div>
+      <EmptyState
+        icon={ShieldOff}
+        title="Access Denied"
+        description="Only School Admin or Principal can manage the academic calendar."
+        className="h-64"
+      />
     )
   }
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6">
       <div>
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Settings</p>
-        <h1 className="text-2xl font-bold text-gray-900">Academic Calendar</h1>
-        <p className="text-gray-500 text-sm mt-0.5">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Settings</p>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Academic Calendar</h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">
           Holidays and weekly off days — attendance % is calculated against these as the real working days
         </p>
       </div>
 
       {/* Weekly off */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
-        <h3 className="font-semibold text-gray-900 text-sm mb-1">Weekly Off Days</h3>
-        <p className="text-xs text-gray-400 mb-4">These weekdays never count toward attendance working days, every month.</p>
-        <div className="flex gap-2 flex-wrap">
-          {WEEKDAYS.map(d => (
-            <button key={d.value} onClick={() => toggleOffDay(d.value)}
-              disabled={weeklyOffMutation.isPending}
-              className={cn(
-                'px-4 py-2 rounded-xl text-sm font-semibold border-2 transition-all disabled:opacity-60',
-                offDays.includes(d.value)
-                  ? 'bg-indigo-600 border-indigo-600 text-white'
-                  : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
-              )}>
-              {d.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Holidays */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
-        <div className="flex items-center justify-between mb-1">
-          <h3 className="font-semibold text-gray-900 text-sm">Holidays</h3>
-          <button onClick={() => setShowAdd(v => !v)}
-            className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-700">
-            <Plus className="w-3.5 h-3.5" /> Add Holiday
-          </button>
-        </div>
-        <p className="text-xs text-gray-400 mb-4">Declared non-working dates — excluded from attendance working days.</p>
-
-        {showAdd && (
-          <div className="flex flex-wrap items-end gap-2 mb-4 p-3 bg-gray-50 rounded-xl">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Date</label>
-              <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
-            </div>
-            <div className="flex-1 min-w-[160px]">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Name</label>
-              <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Diwali"
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
-            </div>
-            <button
-              onClick={() => {
-                if (!newDate || !newName.trim()) return toast.error('Date and name are required')
-                addHolidayMutation.mutate()
-              }}
-              disabled={addHolidayMutation.isPending}
-              className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-60">
-              {addHolidayMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
-            </button>
-          </div>
-        )}
-
-        <div className="flex items-center justify-center gap-3 mb-3">
-          <button onClick={() => setYear(y => y - 1)} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-            <ChevronLeft className="w-4 h-4 text-gray-500" />
-          </button>
-          <span className="text-sm font-semibold text-gray-900 w-16 text-center">{year}</span>
-          <button onClick={() => setYear(y => y + 1)} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-            <ChevronRight className="w-4 h-4 text-gray-500" />
-          </button>
-        </div>
-
-        {isLoading ? (
-          <div className="py-8 text-center text-gray-400 text-sm">Loading...</div>
-        ) : (holidays ?? []).length === 0 ? (
-          <div className="py-10 text-center text-gray-400">
-            <CalendarDays className="w-10 h-10 mx-auto mb-2 text-gray-200" />
-            <p className="text-sm font-medium">No holidays declared for {year}</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-50">
-            {(holidays ?? []).map((h: any) => (
-              <div key={h.id} className="flex items-center justify-between py-2.5">
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-mono text-gray-400 w-24">
-                    {new Date(`${h.date}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                  </span>
-                  <span className="text-sm font-medium text-gray-900">{h.name}</span>
-                </div>
-                <button onClick={() => deleteHolidayMutation.mutate(h.id)}
-                  className="text-gray-300 hover:text-red-500 transition-colors">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Weekly Off Days</CardTitle>
+          <CardDescription className="text-xs">These weekdays never count toward attendance working days, every month.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-2">
+            {WEEKDAYS.map(d => (
+              <Button
+                key={d.value}
+                type="button"
+                variant={offDays.includes(d.value) ? 'default' : 'outline'}
+                onClick={() => toggleOffDay(d.value)}
+                disabled={weeklyOffMutation.isPending}
+              >
+                {d.label}
+              </Button>
             ))}
           </div>
-        )}
-      </div>
+        </CardContent>
+      </Card>
+
+      {/* Holidays */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm">Holidays</CardTitle>
+            <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setShowAdd(v => !v)}>
+              <Plus className="h-3.5 w-3.5" /> Add Holiday
+            </Button>
+          </div>
+          <CardDescription className="text-xs">Declared non-working dates — excluded from attendance working days.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {showAdd && (
+            <div className="mb-4 flex flex-wrap items-end gap-2 rounded-xl bg-muted/40 p-3">
+              <div className="space-y-1">
+                <Label htmlFor="holiday-date" className="text-xs">Date</Label>
+                <Input id="holiday-date" type="date" value={newDate} onChange={e => setNewDate(e.target.value)} className="w-auto" />
+              </div>
+              <div className="min-w-[160px] flex-1 space-y-1">
+                <Label htmlFor="holiday-name" className="text-xs">Name</Label>
+                <Input id="holiday-name" type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Diwali" />
+              </div>
+              <Button
+                onClick={() => {
+                  if (!newDate || !newName.trim()) return toast.error('Date and name are required')
+                  addHolidayMutation.mutate()
+                }}
+                disabled={addHolidayMutation.isPending}
+              >
+                {addHolidayMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+              </Button>
+            </div>
+          )}
+
+          <div className="mb-3 flex items-center justify-center gap-3">
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setYear(y => y - 1)} aria-label="Previous year">
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="w-16 text-center text-sm font-semibold text-foreground">{year}</span>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setYear(y => y + 1)} aria-label="Next year">
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {isLoading ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">Loading...</div>
+          ) : (holidays ?? []).length === 0 ? (
+            <EmptyState icon={CalendarDays} title={`No holidays declared for ${year}`} className="py-10" />
+          ) : (
+            <div className="divide-y divide-border">
+              {(holidays ?? []).map((h: any) => (
+                <div key={h.id} className="flex items-center justify-between py-2.5">
+                  <div className="flex items-center gap-3">
+                    <span className="w-24 font-mono text-xs text-muted-foreground">
+                      {new Date(`${h.date}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </span>
+                    <span className="text-sm font-medium text-foreground">{h.name}</span>
+                  </div>
+                  <button onClick={() => deleteHolidayMutation.mutate(h.id)}
+                    className="text-muted-foreground transition-colors hover:text-destructive">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

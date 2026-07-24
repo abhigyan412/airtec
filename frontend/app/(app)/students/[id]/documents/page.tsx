@@ -7,6 +7,26 @@ import { formatDate, cn } from '@/lib/utils'
 import { ArrowLeft, Upload, FileText, Trash2, Eye, Download, Loader2, Plus } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { EmptyState } from '@/components/shared/EmptyState'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select'
 
 const DOC_TYPES = [
   { value: 'aadhaar', label: 'Aadhaar Card' },
@@ -57,92 +77,94 @@ export default function StudentDocumentsPage() {
     <div className="max-w-6xl space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link href={`/students/${id}`} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
-            <ArrowLeft className="w-5 h-5 text-gray-500" />
-          </Link>
+          <Button asChild variant="ghost" size="icon" aria-label="Back to student">
+            <Link href={`/students/${id}`}><ArrowLeft className="h-5 w-5" /></Link>
+          </Button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">
               Documents — {student?.first_name} {student?.last_name}
             </h1>
-            <p className="text-gray-500 text-sm mt-0.5">
+            <p className="text-muted-foreground text-sm mt-0.5">
               {(docs ?? []).length} document{(docs ?? []).length !== 1 ? 's' : ''} uploaded
             </p>
           </div>
         </div>
-        <button onClick={() => setShowUpload(true)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-colors">
-          <Plus className="w-4 h-4" /> Upload Document
-        </button>
+        <Button onClick={() => setShowUpload(true)}>
+          <Plus className="h-4 w-4" /> Upload Document
+        </Button>
       </div>
 
       {/* Documents list */}
-      <div className="bg-white rounded-2xl border border-gray-200">
+      <Card className="rounded-2xl">
         {isLoading ? (
-          <div className="p-12 text-center text-gray-400">Loading documents...</div>
+          <div className="p-12 text-center text-muted-foreground">Loading documents...</div>
         ) : !(docs ?? []).length ? (
-          <div className="p-20 text-center text-gray-400">
-            <FileText className="w-14 h-14 mx-auto mb-4 text-gray-200" />
-            <p className="font-medium text-base">No documents uploaded yet</p>
-            <p className="text-sm mt-1.5">Upload Aadhaar, birth certificate, marksheets and more</p>
-            <button onClick={() => setShowUpload(true)}
-              className="mt-5 px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700">
-              Upload First Document
-            </button>
-          </div>
+          <EmptyState
+            icon={FileText}
+            title="No documents uploaded yet"
+            description="Upload Aadhaar, birth certificate, marksheets and more"
+            action={<Button onClick={() => setShowUpload(true)}>Upload First Document</Button>}
+          />
         ) : (
-          <div className="divide-y divide-gray-50">
+          <div className="divide-y divide-border">
             {(docs ?? []).map((doc: any) => (
-              <div key={doc.id} className="flex items-center gap-5 px-8 py-5 hover:bg-gray-50 transition-colors">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center flex-shrink-0">
+              <div key={doc.id} className="flex items-center gap-5 px-8 py-5 hover:bg-muted/50 transition-colors">
+                <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center flex-shrink-0">
                   <span className="text-2xl leading-none">{DOC_ICONS[doc.document_type] ?? '📎'}</span>
                 </div>
 
                 <div className="flex-1 min-w-0 grid grid-cols-[1fr_auto_auto] gap-6 items-center">
                   <div>
                     <div className="flex items-center gap-2.5 flex-wrap">
-                      <p className="font-semibold text-gray-900 text-base">{doc.document_name}</p>
-                      <span className="text-xs font-medium text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-full whitespace-nowrap">
+                      <p className="font-semibold text-foreground text-base">{doc.document_name}</p>
+                      <Badge className="border-transparent bg-primary/10 text-primary whitespace-nowrap">
                         {DOC_TYPES.find(t => t.value === doc.document_type)?.label ?? doc.document_type}
-                      </span>
+                      </Badge>
                     </div>
                     {doc.notes && (
-                      <p className="text-sm text-gray-500 mt-1.5 italic">"{doc.notes}"</p>
+                      <p className="text-sm text-muted-foreground mt-1.5 italic">"{doc.notes}"</p>
                     )}
                   </div>
 
-                  <div className="text-right text-sm text-gray-400 whitespace-nowrap hidden sm:block">
+                  <div className="text-right text-sm text-muted-foreground whitespace-nowrap hidden sm:block">
                     <p>{formatDate(doc.created_at)}</p>
                     <div className="flex items-center justify-end gap-1.5 mt-0.5 text-xs">
                       {doc.file_size && <span>{doc.file_size}</span>}
-                      {doc.file_size && doc.users?.full_name && <span className="text-gray-300">·</span>}
+                      {doc.file_size && doc.users?.full_name && <span className="text-muted-foreground/50">·</span>}
                       {doc.users?.full_name && <span>{doc.users.full_name}</span>}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    <a href={doc.file_url} target="_blank" rel="noreferrer" title="View"
-                      className="p-2.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
-                      <Eye className="w-4.5 h-4.5" />
-                    </a>
-                    <a href={doc.file_url} download title="Download"
-                      className="p-2.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
-                      <Download className="w-4.5 h-4.5" />
-                    </a>
-                    <button
+                    <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" title="View">
+                      <a href={doc.file_url} target="_blank" rel="noreferrer" aria-label="View document">
+                        <Eye className="h-4 w-4" />
+                      </a>
+                    </Button>
+                    <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-success" title="Download">
+                      <a href={doc.file_url} download aria-label="Download document">
+                        <Download className="h-4 w-4" />
+                      </a>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground hover:text-destructive"
+                      title="Delete"
+                      aria-label="Delete document"
                       onClick={() => {
                         if (confirm('Delete this document?')) deleteMutation.mutate(doc.id)
                       }}
-                      title="Delete"
-                      className="p-2.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                      <Trash2 className="w-4.5 h-4.5" />
-                    </button>
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
                 </div>
               </div>
             ))}
           </div>
         )}
-      </div>
+      </Card>
 
       {showUpload && (
         <UploadModal studentId={id} onClose={() => {
@@ -189,67 +211,65 @@ function UploadModal({ studentId, onClose }: { studentId: string, onClose: () =>
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Upload Document</h2>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Document Type</label>
-            <select value={form.document_type}
-              onChange={e => setForm(f => ({ ...f, document_type: e.target.value }))}
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-              {DOC_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Upload Document</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Document Type</Label>
+            <Select value={form.document_type} onValueChange={v => setForm(f => ({ ...f, document_type: v }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {DOC_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Document Name *</label>
-            <input value={form.document_name}
+          <div className="space-y-1.5">
+            <Label htmlFor="doc-name">Document Name *</Label>
+            <Input id="doc-name" value={form.document_name}
               onChange={e => setForm(f => ({ ...f, document_name: e.target.value }))}
-              placeholder="e.g. Aadhaar Card - Front & Back"
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              placeholder="e.g. Aadhaar Card - Front & Back" />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">File *</label>
+          <div className="space-y-1.5">
+            <Label>File *</Label>
             <div
               onClick={() => fileRef.current?.click()}
               className={cn(
                 'border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors',
-                file ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50'
+                file ? 'border-primary bg-primary/10' : 'border-input hover:border-primary hover:bg-muted/50'
               )}>
               {file ? (
                 <div>
-                  <p className="text-sm font-medium text-indigo-700">{file.name}</p>
-                  <p className="text-xs text-gray-400 mt-1">{(file.size / 1024).toFixed(0)} KB</p>
+                  <p className="text-sm font-medium text-primary">{file.name}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{(file.size / 1024).toFixed(0)} KB</p>
                 </div>
               ) : (
                 <div>
-                  <Upload className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                  <p className="text-sm text-gray-500">Click to select file</p>
-                  <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG up to 10MB</p>
+                  <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">Click to select file</p>
+                  <p className="text-xs text-muted-foreground/70 mt-1">PDF, JPG, PNG up to 10MB</p>
                 </div>
               )}
             </div>
             <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" className="hidden"
               onChange={e => setFile(e.target.files?.[0] ?? null)} />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes (optional)</label>
-            <input value={form.notes}
+          <div className="space-y-1.5">
+            <Label htmlFor="doc-notes">Notes (optional)</Label>
+            <Input id="doc-notes" value={form.notes}
               onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-              placeholder="Any additional notes..."
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              placeholder="Any additional notes..." />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium hover:text-gray-900">Cancel</button>
-          <button onClick={handleUpload} disabled={uploading || !file}
-            className="px-5 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {uploading ? <><Loader2 className="w-4 h-4 animate-spin" /> Uploading...</> : 'Upload'}
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleUpload} disabled={uploading || !file}>
+            {uploading ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading...</> : 'Upload'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
