@@ -41,7 +41,7 @@ services:
         #  - NEXT_PUBLIC_API_URL: relative same-origin base the browser uses
         #  - BACKEND_URL: the /api rewrite target (internal service name)
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
-        BACKEND_URL: http://backend:4000
+        BACKEND_URL: ${BACKEND_URL:-http://backend:4000}
     image: airtec-frontend
     restart: unless-stopped
     depends_on:
