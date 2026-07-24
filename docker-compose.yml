@@ -3,17 +3,19 @@
 #
 # In Dokploy: create a "Compose" application pointing at this repo, set the
 # environment variables below in the Environment tab, then assign a domain
-# to ONLY the frontend (container port 3000). The frontend proxies /api/*
-# to the backend over the internal Docker network, so the backend needs no
-# public domain and there is no CORS to configure.
+# to ONLY the frontend (target the container port, 3000). The frontend
+# proxies /api/* to the backend over the internal Docker network, so the
+# backend needs no public domain and there is no CORS to configure.
 #
-# No host `ports:` are published — Dokploy/Traefik routes to the container
-# via the exposed port + the domain you assign (set the domain's target
-# Port to 3000, the container port). Publishing a host port collides with
-# other apps on the shared host ("port is already allocated").
+# Host ports are loopback-bound (127.0.0.1) and taken from env so they can
+# be moved to avoid a clash on a shared host:
+#   WEB_HOST_PORT     (frontend, default 3000)
+#   BACKEND_HOST_PORT (backend,  default 4000)
+# e.g. `WEB_HOST_PORT=3010 docker compose up`, or set them in Dokploy env.
+# Domain routing goes through Traefik to the container port regardless of
+# the host port, so a domain keeps working even if you change these.
 #
-# For LOCAL browser access, add the (non-auto-merged) local override file:
-#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+# Local run:  docker compose up --build   → http://localhost:${WEB_HOST_PORT:-3000}
 # ─────────────────────────────────────────────────────────────────────
 services:
   backend:
@@ -28,9 +30,12 @@ services:
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       JWT_SECRET: ${JWT_SECRET}
-    # Internal only — reached by the frontend as http://backend:4000.
     expose:
       - "4000"
+    ports:
+      # Loopback-bound: the frontend reaches the backend over the compose
+      # network as http://backend:4000; this is just for local host access.
+      - "127.0.0.1:${BACKEND_HOST_PORT:-4000}:4000"
 
   frontend:
     build:
@@ -51,3 +56,5 @@ services:
       PORT: 3000
     expose:
       - "3000"
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-3000}:3000"
