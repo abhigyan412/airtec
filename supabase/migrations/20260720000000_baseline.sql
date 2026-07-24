@@ -22,7 +22,9 @@ SET row_security = off;
 -- Name: public; Type: SCHEMA; Schema: -; Owner: -
 --
 
-CREATE SCHEMA public;
+-- IF NOT EXISTS so this dump can be replayed by `supabase db reset --linked`,
+-- which recreates an empty public schema before applying migrations.
+CREATE SCHEMA IF NOT EXISTS public;
 
 
 --

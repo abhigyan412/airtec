@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────
+# AIRTEC — full stack for Dokploy (Compose deployment) or local Docker.
+#
+# In Dokploy: create a "Compose" application pointing at this repo, set the
+# environment variables below in the Environment tab, then assign a domain
+# to each service (backend → port 4000, frontend → port 3000).
+#
+# IMPORTANT: NEXT_PUBLIC_API_URL is baked into the frontend at BUILD time
+# (Next.js inlines NEXT_PUBLIC_* vars). It must equal the backend's PUBLIC
+# URL + /api. Changing it requires a frontend rebuild/redeploy.
+# ─────────────────────────────────────────────────────────────────────
+services:
+  backend:
+    build:
+      context: ./backend
+    image: airtec-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      JWT_SECRET: ${JWT_SECRET}
+      # Public URL of the frontend, used for CORS allow-origin.
+      FRONTEND_URL: ${FRONTEND_URL}
+    expose:
+      - "4000"
+    ports:
+      - "4000:4000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Build-time only — see note above.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    image: airtec-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    expose:
+      - "3000"
+    ports:
+      - "3000:3000"
