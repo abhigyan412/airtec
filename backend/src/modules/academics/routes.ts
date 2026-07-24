@@ -3,26 +3,10 @@ import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { authenticate, AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
-import { asyncHandler } from '../../shared/utils/helpers'
+import { asyncHandler, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 
 const router = Router()
 router.use(authenticate)
-
-// Students/parents don't get the general staff listing — they only ever
-// see homework addressed to them. Resolved via students.user_id /
-// parents.user_id, which nothing in the app populates yet (no
-// student/parent login flow exists), so this branch is correct but will
-// return empty until that gap is closed elsewhere.
-const NON_STAFF_ROLES = ['parent', 'student']
-
-async function resolveOwnStudentId(userId: string, role: string, schoolId: string): Promise<string | null> {
-  if (role === 'student') {
-    const { data } = await supabase.from('students').select('id').eq('user_id', userId).eq('school_id', schoolId).maybeSingle()
-    return data?.id ?? null
-  }
-  const { data: parent } = await supabase.from('parents').select('student_id').eq('user_id', userId).eq('school_id', schoolId).maybeSingle()
-  return parent?.student_id ?? null
-}
 
 // GET /academics/my-classes — the class/section/SUBJECT combos the
 // CALLING user actually teaches, sourced from timetable_periods (the

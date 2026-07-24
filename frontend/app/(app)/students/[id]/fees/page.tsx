@@ -2,13 +2,12 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { studentsApi } from '@/lib/api'
+import { studentsApi, documentsApi } from '@/lib/api'
 import { formatDate, formatCurrency, cn, STATUS_COLORS } from '@/lib/utils'
 import { TransferCertificateCard } from '@/components/students/TransferCertificateCard'
 import { ArrowLeft, User, BookOpen, Phone, CreditCard, FileText, Calendar, Droplets, MapPin, Mail, Hash, Camera, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { API_BASE } from '@/lib/api'
 
 export default function StudentDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -79,7 +78,7 @@ export default function StudentDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-         <a href={`${API_BASE}/documents/id-card/${id}`} target="_blank" rel="noreferrer"
+         <a href={documentsApi.idCard(id)} target="_blank" rel="noreferrer"
             className="px-4 py-2 border border-gray-200 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
             ID Card
           </a>
@@ -181,7 +180,7 @@ export default function StudentDetailPage() {
                 className="flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-gray-600 font-medium hover:bg-yellow-50 hover:text-yellow-700 transition-colors border border-transparent hover:border-gray-100">
                 View Attendance <span className="text-gray-300">→</span>
               </Link>
-              <a href={`http://localhost:4000/api/documents/id-card/${id}`} target="_blank" rel="noreferrer"
+              <a href={documentsApi.idCard(id)} target="_blank" rel="noreferrer"
                 className="flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-gray-600 font-medium hover:bg-emerald-50 hover:text-emerald-700 transition-colors border border-transparent hover:border-gray-100">
                 Print ID Card <span className="text-gray-300">→</span>
               </a>

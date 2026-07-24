@@ -2,8 +2,9 @@ import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
-import { asyncHandler, getPagination } from '../../shared/utils/helpers'
+import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
+import { toLocalDateStr } from '../../shared/utils/academicCalendar'
 
 const router = Router()
 router.use(authenticate)
@@ -53,6 +54,30 @@ router.get('/stats', asyncHandler(async (req: AuthRequest, res: Response) => {
         supabase.from('exams').select('*', { count: 'exact', head: true }).eq('school_id', school_id).eq('status', 'completed'),
     ])
     res.json({ success: true, data: { total: total.count ?? 0, draft: draft.count ?? 0, ongoing: ongoing.count ?? 0, completed: completed.count ?? 0 } })
+}))
+
+// GET /exams/upcoming — exams starting within the next N days (default 7),
+// for the dashboard's Academic Snapshot widget. Separate from GET / (which
+// paginates and orders by created_at, not start_date) since a dashboard
+// widget needs "what's coming up soon", not "what was created recently".
+router.get('/upcoming', asyncHandler(async (req: AuthRequest, res: Response) => {
+    const days = Number(req.query.days) || 7
+    const school_id = req.user!.school_id
+    const now = new Date()
+    const today = toLocalDateStr(now)
+    const end = new Date(now)
+    end.setDate(end.getDate() + days)
+    const endStr = toLocalDateStr(end)
+
+    const { data, error } = await supabase
+        .from('exams')
+        .select('id, name, exam_type, start_date, end_date, status, academic_years(name)')
+        .eq('school_id', school_id)
+        .gte('start_date', today)
+        .lte('start_date', endStr)
+        .order('start_date', { ascending: true })
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
 }))
 
 router.get('/subjects/add', asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -339,7 +364,6 @@ router.get('/:id/workflow-status', asyncHandler(async (req: AuthRequest, res: Re
 // 'student' are the only non-staff roles — everyone else (including
 // accountant/counselor, who have no business here but aren't
 // students/parents either) is treated as staff for this gate.
-const NON_STAFF_ROLES = ['parent', 'student']
 
 router.get('/:id/results', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
@@ -365,7 +389,8 @@ router.get('/:id/results', asyncHandler(async (req: AuthRequest, res: Response) 
 }))
 
 router.get('/:id/results/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
-    const { id, student_id } = req.params
+    const { id } = req.params
+    let { student_id } = req.params
     const school_id = req.user!.school_id
 
     if (NON_STAFF_ROLES.includes(req.user!.role)) {
@@ -373,6 +398,12 @@ router.get('/:id/results/:student_id', asyncHandler(async (req: AuthRequest, res
         if (!exam || exam.status !== 'result_published') {
             return res.json({ success: true, data: { report_card: null, marks: [] }, message: 'Results have not been published yet' })
         }
+        // A student/parent hitting this with someone else's student_id in
+        // the URL must still only ever see their own child's/own marks —
+        // ignore whatever was requested and substitute their real one.
+        const ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+        if (!ownStudentId) return res.json({ success: true, data: { report_card: null, marks: [] } })
+        student_id = ownStudentId
     }
 
     const { data: reportCard } = await supabase.from('report_cards').select('*, students(first_name, last_name, admission_number, classes(name))').eq('exam_id', id).eq('student_id', student_id).single()

@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { api, admitCardApi, API_BASE } from '@/lib/api'
+import { api, admitCardApi, documentsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
 import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone } from 'lucide-react'
@@ -647,7 +647,7 @@ function ResultsView({ examId }: { examId: string }) {
                 </span>
               </td>
               <td className="px-4 py-3">
-                <a href={`${API_BASE}/documents/report-card/${rc.exam_id}/${rc.student_id}?token=${typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''}`}
+                <a href={documentsApi.reportCard(rc.exam_id, rc.student_id)}
                   target="_blank" rel="noreferrer"
                   className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">
                   View Card

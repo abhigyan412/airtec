@@ -4,6 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
+import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
 
 const router = Router()
 router.use(authenticate)
@@ -89,29 +90,66 @@ router.get('/inquiries/stats', asyncHandler(async (req: AuthRequest, res: Respon
   const school_id = req.user!.school_id
 
   const statuses = ['new', 'follow_up', 'interested', 'documents_submitted', 'approved', 'admitted', 'rejected', 'lost']
-  const counts = await Promise.all(
-    statuses.map(s =>
-      supabase.from('admission_inquiries')
-        .select('*', { count: 'exact', head: true })
-        .eq('school_id', school_id)
-        .eq('status', s)
-        .then(({ count }) => ({ status: s, count: count ?? 0 }))
-    )
-  )
+  const [counts, { data: sourceRows }] = await Promise.all([
+    Promise.all(
+      statuses.map(s =>
+        supabase.from('admission_inquiries')
+          .select('*', { count: 'exact', head: true })
+          .eq('school_id', school_id)
+          .eq('status', s)
+          .then(({ count }) => ({ status: s, count: count ?? 0 }))
+      )
+    ),
+    // Grouped in JS rather than a per-source count(*) loop — sources are
+    // admin-defined and open-ended (unlike the fixed status enum above),
+    // so there's no fixed list to loop over up front.
+    supabase.from('admission_inquiries').select('inquiry_sources(name)').eq('school_id', school_id),
+  ])
 
   const total = counts.reduce((s, c) => s + c.count, 0)
   const admitted = counts.find(c => c.status === 'admitted')?.count ?? 0
   const conversion_rate = total > 0 ? Math.round((admitted / total) * 100) : 0
 
+  const bySourceMap = new Map<string, number>()
+  for (const row of sourceRows ?? []) {
+    const name = (row as any).inquiry_sources?.name ?? 'Unknown'
+    bySourceMap.set(name, (bySourceMap.get(name) ?? 0) + 1)
+  }
+  const by_source = [...bySourceMap.entries()]
+    .map(([source, count]) => ({ source, count }))
+    .sort((a, b) => b.count - a.count)
+
   res.json({
     success: true,
     data: {
       by_status: counts,
+      by_source,
       total,
       conversion_rate,
     },
   })
 }))
+
+// GET /inquiry-sources — the list the "New Inquiry" form's Source
+// dropdown needs. Nothing fetched this before — the form field existed
+// in state but had no dropdown wired to it, so source_id was always
+// null on every inquiry created through the app.
+router.get('/inquiry-sources', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { data, error } = await supabase.from('inquiry_sources').select('*').eq('school_id', req.user!.school_id).order('name')
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data })
+}))
+
+router.post('/inquiry-sources', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { name } = req.body
+    if (!name?.trim()) return res.status(400).json({ success: false, error: 'name is required' })
+    const { data, error } = await supabase
+      .from('inquiry_sources').insert({ school_id: req.user!.school_id, name: name.trim() }).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
 
 router.get('/inquiries/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
@@ -684,6 +722,66 @@ router.get('/classes', asyncHandler(async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data })
 }))
 
+// GET /classes/strength — TODAY's occupied seats vs sections.max_strength,
+// per section, for the dashboard's class-wise strength widget. "Occupied"
+// is students actually marked present today, not just enrolled — a
+// section showing full-but-half-empty every day is a more useful signal
+// than a static enrollment count that only changes on admission/transfer.
+// present is derived from the students table's real section_id, never
+// from attendance.section_id — that column is left null whenever a
+// teacher marks a whole class at once without picking one section, which
+// would silently undercount if trusted directly (same issue fixed for
+// GET /students/attendance/today).
+//
+// enrolled/is_working_day/marked_today ride along so the frontend can
+// tell "0 present because nobody's here" apart from "0 present because
+// nobody's marked attendance yet" or "0 present because it's a holiday".
+router.get('/classes/strength', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const today = toLocalDateStr(new Date())
+
+  const [{ data: classes, error: classErr }, { data: students, error: stuErr }, { data: records, error: attErr }, nonWorkingSets] = await Promise.all([
+    supabase.from('classes').select('id, name, numeric_level, sections(id, name, max_strength)').eq('school_id', school_id).order('numeric_level'),
+    supabase.from('students').select('id, class_id, section_id').eq('school_id', school_id).eq('status', 'active'),
+    supabase.from('attendance').select('student_id, status').eq('school_id', school_id).eq('date', today),
+    getNonWorkingDaySets(school_id, today, today),
+  ])
+  if (classErr) return res.status(500).json({ success: false, error: classErr.message })
+  if (stuErr) return res.status(500).json({ success: false, error: stuErr.message })
+  if (attErr) return res.status(500).json({ success: false, error: attErr.message })
+
+  const is_working_day = isWorkingDate(today, nonWorkingSets)
+  const statusByStudent = new Map((records ?? []).map(r => [r.student_id, r.status]))
+
+  const enrolledBySection = new Map<string, number>()
+  const presentBySection = new Map<string, number>()
+  const markedBySection = new Map<string, number>()
+  for (const s of students ?? []) {
+    if (!s.section_id) continue
+    enrolledBySection.set(s.section_id, (enrolledBySection.get(s.section_id) ?? 0) + 1)
+    const status = statusByStudent.get(s.id)
+    if (status) markedBySection.set(s.section_id, (markedBySection.get(s.section_id) ?? 0) + 1)
+    if (status === 'present') presentBySection.set(s.section_id, (presentBySection.get(s.section_id) ?? 0) + 1)
+  }
+
+  const sections = (classes ?? []).flatMap((c: any) => (c.sections ?? []).map((sec: any) => ({
+    class_id: c.id, class_name: c.name, numeric_level: c.numeric_level,
+    section_id: sec.id, section_name: sec.name,
+    capacity: sec.max_strength ?? 0,
+    enrolled: enrolledBySection.get(sec.id) ?? 0,
+    occupied: presentBySection.get(sec.id) ?? 0,
+    marked_today: markedBySection.get(sec.id) ?? 0,
+  })))
+
+  // date/is_working_day nested inside data (not sibling fields) — matches
+  // the shape GET /students/attendance/today already uses, so both
+  // dashboard widgets unwrap the same way instead of one being a special
+  // case. A previous version put them as siblings of a top-level `data`
+  // array, which silently broke the frontend's single `.then(r => r.data)`
+  // unwrap (it grabbed `.data` off the wrong object and got undefined).
+  res.json({ success: true, data: { sections, date: today, is_working_day } })
+}))
+
 // POST /classes — create a class (e.g. "Class 11")
 router.post('/classes', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -843,11 +941,19 @@ router.delete('/subjects/:id', requireRole('school_admin', 'principal'),
 // so a date only counts against a student's attendance % if it's
 // neither a weekly-off weekday nor an explicitly declared holiday.
 router.get('/holidays', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { year } = req.query
+  const { year, from, to } = req.query
   const school_id = req.user!.school_id
 
   let query = supabase.from('holidays').select('*').eq('school_id', school_id).order('date')
-  if (year) query = query.gte('date', `${year}-01-01`).lte('date', `${year}-12-31`)
+  // Explicit from/to (e.g. dashboard's "upcoming events" widget) takes
+  // priority over year (the Academic Calendar settings page's year
+  // browser) — the two callers want different slices of the same table.
+  if (from || to) {
+    if (from) query = query.gte('date', from as string)
+    if (to) query = query.lte('date', to as string)
+  } else if (year) {
+    query = query.gte('date', `${year}-01-01`).lte('date', `${year}-12-31`)
+  }
 
   const { data, error } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })

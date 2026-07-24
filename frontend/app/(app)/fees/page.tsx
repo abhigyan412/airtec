@@ -1,13 +1,15 @@
 'use client'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { feeApi, studentsApi } from '@/lib/api'
+import { feeApi, studentsApi, classesApi, academicYearsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, STATUS_COLORS, formatCurrency, formatDate } from '@/lib/utils'
-import { CreditCard, AlertCircle, CheckCircle, Clock, Plus, X, Loader2, Tag, Check, XCircle, AlertTriangle } from 'lucide-react'
+import { CreditCard, AlertCircle, CheckCircle, Clock, Plus, X, Loader2, Tag, Check, XCircle, AlertTriangle, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowRightLeft } from 'lucide-react'
+import { FeeAnalytics } from '@/components/fees/FeeAnalytics'
+import { FeeCollectionTrend } from '@/components/dashboard/FeeCollectionTrend'
 
 export default function FeesPage() {
   const [tab, setTab] = useState<'invoices' | 'dues' | 'structures' | 'discounts'>('invoices')
@@ -66,6 +68,10 @@ export default function FeesPage() {
         ))}
       </div>
 
+      {/* Analytics */}
+      <FeeAnalytics stats={stats} />
+      <FeeCollectionTrend />
+
       {/* Tabs */}
       <div className="bg-white rounded-xl border border-gray-200">
         <div className="flex border-b border-gray-200 px-4">
@@ -98,6 +104,102 @@ export default function FeesPage() {
           {tab === 'discounts' && (
             <DiscountsTab />
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RECORD PAYMENT — for dues collected offline (cash/cheque/UPI at
+// the school office). Opened from a specific invoice's row on the
+// Pending Dues tab, which already has the real remaining balance
+// (amount_due = total_amount minus whatever's already been paid).
+// ═══════════════════════════════════════════════════════════════
+
+const PAYMENT_MODES = ['cash', 'cheque', 'neft', 'card', 'upi', 'online'] as const
+
+function RecordInvoicePaymentModal({ invoice, onClose }: { invoice: any, onClose: () => void }) {
+  const qc = useQueryClient()
+  const [amount, setAmount] = useState(String(invoice.amount_due))
+  const [paymentMode, setPaymentMode] = useState<typeof PAYMENT_MODES[number]>('cash')
+  const [transactionReference, setTransactionReference] = useState('')
+  const [chequeNumber, setChequeNumber] = useState('')
+  const [notes, setNotes] = useState('')
+
+  const mutation = useMutation({
+    mutationFn: () => feeApi.payments.record({
+      invoice_id: invoice.id,
+      amount_paid: Number(amount),
+      payment_mode: paymentMode,
+      transaction_reference: transactionReference || undefined,
+      cheque_number: paymentMode === 'cheque' ? chequeNumber || undefined : undefined,
+      notes: notes || undefined,
+    }),
+    onSuccess: (res: any) => {
+      toast.success(`Payment recorded — receipt ${res.data?.payment?.receipt_number ?? ''}`)
+      qc.invalidateQueries({ queryKey: ['dues'] })
+      qc.invalidateQueries({ queryKey: ['invoices'] })
+      qc.invalidateQueries({ queryKey: ['fee-stats'] })
+      qc.invalidateQueries({ queryKey: ['dashboard-fee-trend'] })
+      onClose()
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to record payment'),
+  })
+
+  const handleSubmit = () => {
+    const amt = Number(amount)
+    if (!amt || amt <= 0) return toast.error('Enter a valid amount')
+    if (amt > Number(invoice.amount_due)) return toast.error(`Amount can't exceed the outstanding balance of ${formatCurrency(invoice.amount_due)}`)
+    mutation.mutate()
+  }
+
+  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl">
+        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900">Record Payment</h2>
+          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <p className="text-sm text-gray-500">
+            {invoice.students?.first_name} {invoice.students?.last_name} · {invoice.invoice_number}
+            <br />Outstanding: <span className="font-semibold text-rose-600">{formatCurrency(invoice.amount_due)}</span>
+          </p>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount *</label>
+            <input type="number" max={invoice.amount_due} className={inputCls} value={amount} onChange={e => setAmount(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Payment Mode</label>
+            <select className={inputCls} value={paymentMode} onChange={e => setPaymentMode(e.target.value as any)}>
+              {PAYMENT_MODES.map(m => <option key={m} value={m}>{m === 'neft' ? 'NEFT' : m === 'upi' ? 'UPI' : m[0].toUpperCase() + m.slice(1)}</option>)}
+            </select>
+          </div>
+          {paymentMode === 'cheque' ? (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Cheque Number</label>
+              <input className={inputCls} value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
+            </div>
+          ) : paymentMode !== 'cash' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Transaction Reference</label>
+              <input className={inputCls} value={transactionReference} onChange={e => setTransactionReference(e.target.value)} placeholder="UTR / reference number" />
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes</label>
+            <input className={inputCls} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional" />
+          </div>
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
+          <button onClick={handleSubmit} disabled={mutation.isPending}
+            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
+            {mutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} Record
+          </button>
         </div>
       </div>
     </div>
@@ -142,68 +244,372 @@ function InvoicesTable({ data }: { data: any[] }) {
 }
 
 function DuesTable({ data }: { data: any[] }) {
+  const [payTarget, setPayTarget] = useState<any>(null)
   if (!data.length) return <Empty message="No pending dues 🎉" />
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="border-b border-gray-100">
-          <th className="pb-3 text-left font-medium text-gray-500">Student</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Class</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Amount Due</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Invoice</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Status</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-gray-50">
-        {data.map((inv: any) => (
-          <tr key={inv.id} className="hover:bg-gray-50">
-            <td className="py-3 font-medium text-gray-900">
-              {inv.students?.first_name} {inv.students?.last_name}
-            </td>
-            <td className="py-3 text-gray-500">{inv.students?.classes?.name}</td>
-            <td className="py-3 font-semibold text-rose-600">{formatCurrency(inv.amount_due)}</td>
-            <td className="py-3 font-mono text-xs text-gray-400">{inv.invoice_number}</td>
-            <td className="py-3">
-              <span className={cn('px-2 py-1 rounded-full text-xs font-medium', STATUS_COLORS[inv.status])}>
-                {inv.status}
-              </span>
-            </td>
+    <>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="pb-3 text-left font-medium text-gray-500">Student</th>
+            <th className="pb-3 text-left font-medium text-gray-500">Class</th>
+            <th className="pb-3 text-left font-medium text-gray-500">Amount Due</th>
+            <th className="pb-3 text-left font-medium text-gray-500">Invoice</th>
+            <th className="pb-3 text-left font-medium text-gray-500">Status</th>
+            <th className="pb-3" />
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody className="divide-y divide-gray-50">
+          {data.map((inv: any) => (
+            <tr key={inv.id} className="hover:bg-gray-50">
+              <td className="py-3 font-medium text-gray-900">
+                {inv.students?.first_name} {inv.students?.last_name}
+              </td>
+              <td className="py-3 text-gray-500">{inv.students?.classes?.name}</td>
+              <td className="py-3 font-semibold text-rose-600">{formatCurrency(inv.amount_due)}</td>
+              <td className="py-3 font-mono text-xs text-gray-400">{inv.invoice_number}</td>
+              <td className="py-3">
+                <span className={cn('px-2 py-1 rounded-full text-xs font-medium', STATUS_COLORS[inv.status])}>
+                  {inv.status}
+                </span>
+              </td>
+              <td className="py-3 text-right">
+                <button onClick={() => setPayTarget(inv)}
+                  className="px-3 py-1.5 bg-indigo-50 text-indigo-700 text-xs font-semibold rounded-lg hover:bg-indigo-100">
+                  Record Payment
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {payTarget && <RecordInvoicePaymentModal invoice={payTarget} onClose={() => setPayTarget(null)} />}
+    </>
   )
 }
 
+// ═══════════════════════════════════════════════════════════════
+// FEE STRUCTURE — grouped by category (fee head: Tuition, Exam,
+// Annual Fund, ...) rather than one flat class×head table, since
+// that's how schools actually think about fee configuration:
+// "here's every category, and what each class pays for it."
+// Both categories and per-class amounts are fully custom — neither
+// had any creation UI before (only feeApi.heads.create /
+// structures.create existed on the backend, unused).
+// ═══════════════════════════════════════════════════════════════
+
+const FREQUENCY_LABELS: Record<string, string> = {
+  monthly: 'Monthly', quarterly: 'Quarterly', half_yearly: 'Half-Yearly', annually: 'Annually', one_time: 'One-Time',
+}
+
 function FeeStructures() {
-  const { data } = useQuery({
+  const qc = useQueryClient()
+  const [showAddCategory, setShowAddCategory] = useState(false)
+  const [showAddAmount, setShowAddAmount] = useState(false)
+  const [selectedHeadId, setSelectedHeadId] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editAmount, setEditAmount] = useState('')
+  const [editFrequency, setEditFrequency] = useState('')
+  const [editOptional, setEditOptional] = useState(false)
+
+  const { data: heads, isLoading: headsLoading } = useQuery({
+    queryKey: ['fee-heads'],
+    queryFn: () => feeApi.heads.list().then(r => r.data),
+  })
+
+  const { data: structures, isLoading: structuresLoading } = useQuery({
     queryKey: ['fee-structures'],
     queryFn: () => feeApi.structures.list().then(r => r.data),
   })
 
-  if (!(data ?? []).length) return <Empty message="No fee structures configured yet" />
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['fee-heads'] })
+    qc.invalidateQueries({ queryKey: ['fee-structures'] })
+  }
+
+  const updateMutation = useMutation({
+    mutationFn: (data: { amount: number, frequency: string, is_optional: boolean }) =>
+      feeApi.structures.update(editingId as string, data),
+    onSuccess: () => {
+      toast.success('Updated')
+      setEditingId(null)
+      invalidate()
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
+  })
+
+  const rows = (structures ?? [])
+    .filter((s: any) => !selectedHeadId || s.fee_head_id === selectedHeadId)
+    .slice()
+    .sort((a: any, b: any) =>
+      (a.fee_heads?.name ?? '').localeCompare(b.fee_heads?.name ?? '') ||
+      (a.classes?.name ?? '').localeCompare(b.classes?.name ?? '', undefined, { numeric: true }))
+
+  const startEdit = (s: any) => {
+    setEditingId(s.id)
+    setEditAmount(String(s.amount))
+    setEditFrequency(s.frequency)
+    setEditOptional(s.is_optional)
+  }
+
+  const saveEdit = () => {
+    const amt = Number(editAmount)
+    if (!amt || amt <= 0) return toast.error('Enter a valid amount')
+    updateMutation.mutate({ amount: amt, frequency: editFrequency, is_optional: editOptional })
+  }
+
+  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+  const selectedHeadName = (heads ?? []).find((h: any) => h.id === selectedHeadId)?.name
 
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="border-b border-gray-100">
-          <th className="pb-3 text-left font-medium text-gray-500">Class</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Fee Head</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Amount</th>
-          <th className="pb-3 text-left font-medium text-gray-500">Frequency</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-gray-50">
-        {(data ?? []).map((s: any) => (
-          <tr key={s.id} className="hover:bg-gray-50">
-            <td className="py-3 font-medium text-gray-900">{s.classes?.name}</td>
-            <td className="py-3 text-gray-600">{s.fee_heads?.name}</td>
-            <td className="py-3 font-semibold text-gray-900">{formatCurrency(s.amount)}</td>
-            <td className="py-3 text-gray-500 capitalize">{s.frequency.replace('_', ' ')}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-500 font-medium">Category</label>
+          <select value={selectedHeadId} onChange={e => setSelectedHeadId(e.target.value)}
+            className="px-3 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-w-[180px]">
+            <option value="">All Categories</option>
+            {(heads ?? []).map((h: any) => <option key={h.id} value={h.id}>{h.name}</option>)}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowAddCategory(true)}
+            className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50">
+            <Plus className="w-4 h-4" /> Add Category
+          </button>
+          <button onClick={() => setShowAddAmount(true)}
+            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-indigo-700">
+            <Plus className="w-4 h-4" /> Add Class Amount
+          </button>
+        </div>
+      </div>
+
+      {(headsLoading || structuresLoading) ? (
+        <div className="py-12 text-center"><div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" /></div>
+      ) : !(heads ?? []).length ? (
+        <Empty message="No fee categories configured yet — add one to get started" />
+      ) : !rows.length ? (
+        <Empty message={selectedHeadName ? `No classes configured under ${selectedHeadName} yet` : 'No fee structures configured yet'} />
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-100">
+              {!selectedHeadId && <th className="pb-3 text-left font-medium text-gray-500">Category</th>}
+              <th className="pb-3 text-left font-medium text-gray-500">Class</th>
+              <th className="pb-3 text-left font-medium text-gray-500">Amount</th>
+              <th className="pb-3 text-left font-medium text-gray-500">Frequency</th>
+              <th className="pb-3 text-left font-medium text-gray-500">Academic Year</th>
+              <th className="pb-3" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {rows.map((s: any) => {
+              const isEditing = editingId === s.id
+              return (
+                <tr key={s.id} className="hover:bg-gray-50">
+                  {!selectedHeadId && <td className="py-3 text-gray-600">{s.fee_heads?.name}</td>}
+                  <td className="py-3 font-medium text-gray-900">{s.classes?.name}</td>
+                  <td className="py-3">
+                    {isEditing ? (
+                      <input type="number" autoFocus className="w-28 px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                        value={editAmount} onChange={e => setEditAmount(e.target.value)} />
+                    ) : (
+                      <span className="font-semibold text-gray-900">
+                        {formatCurrency(s.amount)}{s.is_optional && <span className="ml-1.5 text-xs font-normal text-gray-400">(optional)</span>}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-3 text-gray-500">
+                    {isEditing ? (
+                      <select value={editFrequency} onChange={e => setEditFrequency(e.target.value)}
+                        className="px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                        {Object.entries(FREQUENCY_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                    ) : (
+                      FREQUENCY_LABELS[s.frequency] ?? s.frequency
+                    )}
+                  </td>
+                  <td className="py-3 text-gray-400 text-xs">{s.academic_years?.name}</td>
+                  <td className="py-3 text-right">
+                    {isEditing ? (
+                      <div className="flex justify-end gap-1.5">
+                        <button onClick={saveEdit} disabled={updateMutation.isPending}
+                          className="p-1.5 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 disabled:opacity-50">
+                          {updateMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                        </button>
+                        <button onClick={() => setEditingId(null)} className="p-1.5 bg-gray-50 text-gray-500 rounded-lg hover:bg-gray-100">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button onClick={() => startEdit(s)} className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {showAddCategory && <AddCategoryModal onClose={() => { setShowAddCategory(false); invalidate() }} />}
+      {showAddAmount && (
+        <AddStructureModal heads={heads ?? []} initialHeadId={selectedHeadId}
+          onClose={() => { setShowAddAmount(false); invalidate() }} />
+      )}
+    </div>
+  )
+}
+
+function AddCategoryModal({ onClose }: { onClose: () => void }) {
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+
+  const handleSubmit = async () => {
+    if (!name.trim()) return toast.error('Category name is required')
+    setLoading(true)
+    try {
+      await feeApi.heads.create({ name: name.trim(), description: description.trim() || undefined })
+      toast.success('Category added')
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Failed to add category')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl">
+        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900">Add Fee Category</h2>
+          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Category Name *</label>
+            <input className={inputCls} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Transport Fee, Lab Fee" autoFocus />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Description</label>
+            <input className={inputCls} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional" />
+          </div>
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
+          <button onClick={handleSubmit} disabled={loading}
+            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
+            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Add Category
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AddStructureModal({ heads, initialHeadId, onClose }: { heads: any[], initialHeadId: string, onClose: () => void }) {
+  const [headId, setHeadId] = useState(initialHeadId)
+  const [classId, setClassId] = useState('')
+  const [academicYearId, setAcademicYearId] = useState('')
+  const [amount, setAmount] = useState('')
+  const [frequency, setFrequency] = useState<'monthly' | 'quarterly' | 'half_yearly' | 'annually' | 'one_time'>('monthly')
+  const [isOptional, setIsOptional] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const { data: classes } = useQuery({ queryKey: ['classes'], queryFn: () => classesApi.list().then((r: any) => r.data) })
+  const { data: years } = useQuery({
+    queryKey: ['academic-years'],
+    queryFn: () => academicYearsApi.list().then((r: any) => r.data),
+  })
+
+  // Default to the current academic year once it loads.
+  if (!academicYearId && years?.length) {
+    const current = years.find((y: any) => y.is_current) ?? years[0]
+    if (current) setAcademicYearId(current.id)
+  }
+
+  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+
+  const handleSubmit = async () => {
+    if (!headId || !classId || !academicYearId || !amount) return toast.error('Category, class, academic year, and amount are required')
+    const amt = Number(amount)
+    if (!amt || amt <= 0) return toast.error('Enter a valid amount')
+    setLoading(true)
+    try {
+      await feeApi.structures.create({
+        academic_year_id: academicYearId, class_id: classId, fee_head_id: headId,
+        amount: amt, frequency, is_optional: isOptional,
+      })
+      toast.success('Class amount added')
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Failed to add')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl">
+        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900">Add Class Amount</h2>
+          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Category *</label>
+            <select className={inputCls} value={headId} onChange={e => setHeadId(e.target.value)}>
+              <option value="">Select category</option>
+              {heads.map((h: any) => <option key={h.id} value={h.id}>{h.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Class *</label>
+            <select className={inputCls} value={classId} onChange={e => setClassId(e.target.value)}>
+              <option value="">Select class</option>
+              {(classes ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Academic Year *</label>
+            <select className={inputCls} value={academicYearId} onChange={e => setAcademicYearId(e.target.value)}>
+              <option value="">Select year</option>
+              {(years ?? []).map((y: any) => <option key={y.id} value={y.id}>{y.name}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount *</label>
+              <input type="number" className={inputCls} value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 2500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Frequency</label>
+              <select className={inputCls} value={frequency} onChange={e => setFrequency(e.target.value as any)}>
+                {Object.entries(FREQUENCY_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-gray-600">
+            <input type="checkbox" checked={isOptional} onChange={e => setIsOptional(e.target.checked)} className="rounded border-gray-300" />
+            Optional (not auto-included on every invoice)
+          </label>
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
+          <button onClick={handleSubmit} disabled={loading}
+            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
+            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Add
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

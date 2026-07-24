@@ -28,7 +28,7 @@ export function isWorkingDate(dateStr: string, sets: NonWorkingDaySets): boolean
 // IST, UTC+5:30): local midnight becomes 18:30 the *previous* day in UTC.
 // That off-by-one broke every day-by-day date-range iteration in this
 // file until it was caught via a live leave-exclusion test.
-function toLocalDateStr(d: Date): string {
+export function toLocalDateStr(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
