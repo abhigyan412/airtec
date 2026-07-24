@@ -1,6 +1,11 @@
 import axios, { AxiosError } from 'axios'
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'
+// Same-origin by default: the browser hits the Next.js server at `/api`,
+// which proxies to the backend via the rewrite in next.config.js. This
+// keeps everything on one origin (no CORS, one public domain in prod).
+// Works for both the axios baseURL and the document-download <a href>s,
+// since a relative path resolves against the current page origin.
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api'
 
 export const api = axios.create({
   baseURL: API_BASE,
