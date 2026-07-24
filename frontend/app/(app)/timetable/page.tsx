@@ -7,32 +7,53 @@ import { Plus, Trash2, Loader2, Clock, Grid3X3, List, Printer, User, AlertTriang
 import { toast } from 'sonner'
 import { usePermissions } from '@/lib/usePermissions'
 import { useAuth } from '@/lib/auth'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
+// Decorative per-subject color coding for timetable cells — light + dark
+// variants so the grid stays legible in both themes.
 const SUBJECT_COLORS: Record<string, string> = {
-  'Mathematics':       'bg-indigo-50 border-indigo-300 text-indigo-800',
-  'English':           'bg-blue-50 border-blue-300 text-blue-800',
-  'Science':           'bg-emerald-50 border-emerald-300 text-emerald-800',
-  'Hindi':             'bg-orange-50 border-orange-300 text-orange-800',
-  'Social Studies':    'bg-purple-50 border-purple-300 text-purple-800',
-  'Computer':          'bg-cyan-50 border-cyan-300 text-cyan-800',
-  'Art':               'bg-pink-50 border-pink-300 text-pink-800',
-  'Physical Ed':       'bg-lime-50 border-lime-300 text-lime-800',
-  'Sanskrit':          'bg-yellow-50 border-yellow-300 text-yellow-800',
-  'Drawing':           'bg-rose-50 border-rose-300 text-rose-800',
-  'Sports':            'bg-teal-50 border-teal-300 text-teal-800',
-  'Activity':          'bg-violet-50 border-violet-300 text-violet-800',
-  'Moral Science':     'bg-amber-50 border-amber-300 text-amber-800',
-  'General Knowledge': 'bg-sky-50 border-sky-300 text-sky-800',
-  'Break':             'bg-gray-100 border-gray-200 text-gray-400',
-  'Lunch':             'bg-gray-100 border-gray-200 text-gray-400',
-  'Assembly':          'bg-gray-100 border-gray-200 text-gray-400',
+  'Mathematics':       'bg-indigo-50 border-indigo-300 text-indigo-800 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300',
+  'English':           'bg-blue-50 border-blue-300 text-blue-800 dark:bg-blue-950/40 dark:border-blue-800 dark:text-blue-300',
+  'Science':           'bg-emerald-50 border-emerald-300 text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300',
+  'Hindi':             'bg-orange-50 border-orange-300 text-orange-800 dark:bg-orange-950/40 dark:border-orange-800 dark:text-orange-300',
+  'Social Studies':    'bg-purple-50 border-purple-300 text-purple-800 dark:bg-purple-950/40 dark:border-purple-800 dark:text-purple-300',
+  'Computer':          'bg-cyan-50 border-cyan-300 text-cyan-800 dark:bg-cyan-950/40 dark:border-cyan-800 dark:text-cyan-300',
+  'Art':               'bg-pink-50 border-pink-300 text-pink-800 dark:bg-pink-950/40 dark:border-pink-800 dark:text-pink-300',
+  'Physical Ed':       'bg-lime-50 border-lime-300 text-lime-800 dark:bg-lime-950/40 dark:border-lime-800 dark:text-lime-300',
+  'Sanskrit':          'bg-yellow-50 border-yellow-300 text-yellow-800 dark:bg-yellow-950/40 dark:border-yellow-800 dark:text-yellow-300',
+  'Drawing':           'bg-rose-50 border-rose-300 text-rose-800 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300',
+  'Sports':            'bg-teal-50 border-teal-300 text-teal-800 dark:bg-teal-950/40 dark:border-teal-800 dark:text-teal-300',
+  'Activity':          'bg-violet-50 border-violet-300 text-violet-800 dark:bg-violet-950/40 dark:border-violet-800 dark:text-violet-300',
+  'Moral Science':     'bg-amber-50 border-amber-300 text-amber-800 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300',
+  'General Knowledge': 'bg-sky-50 border-sky-300 text-sky-800 dark:bg-sky-950/40 dark:border-sky-800 dark:text-sky-300',
+  'Break':             'bg-muted border-border text-muted-foreground',
+  'Lunch':             'bg-muted border-border text-muted-foreground',
+  'Assembly':          'bg-muted border-border text-muted-foreground',
 }
-const getColor = (s: string) => SUBJECT_COLORS[s] ?? 'bg-violet-50 border-violet-300 text-violet-800'
+const getColor = (s: string) => SUBJECT_COLORS[s] ?? 'bg-violet-50 border-violet-300 text-violet-800 dark:bg-violet-950/40 dark:border-violet-800 dark:text-violet-300'
+
+const CONFLICT_CELL = 'bg-destructive/10 border-destructive text-destructive'
 
 type ViewMode = 'class' | 'teacher' | 'free'
+
+function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick}
+      className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all',
+        active ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground')}>
+      {children}
+    </button>
+  )
+}
 
 export default function TimetablePage() {
   const [selectedClass,   setSelectedClass]   = useState('')
@@ -89,7 +110,7 @@ export default function TimetablePage() {
     byDay[p.day_of_week].sort((a: any, b: any) => a.period_number - b.period_number)
   }
 
-  const allPeriods = Array.from(new Set((timetableData ?? []).map((p: any) => p.period_number))).sort((a, b) => Number(a) - Number(b))
+  const allPeriods = Array.from(new Set<number>((timetableData ?? []).map((p: any) => p.period_number as number))).sort((a, b) => Number(a) - Number(b))
   const timeByPeriod: Record<number, string> = {}
   for (const p of timetableData ?? []) timeByPeriod[p.period_number] = `${p.start_time?.slice(0,5)}–${p.end_time?.slice(0,5)}`
 
@@ -122,101 +143,95 @@ export default function TimetablePage() {
   // ── PERMISSION GUARD ──────────────────────────────────────
   if (!permLoading && !canView) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-        <ShieldOff className="w-12 h-12 mb-3 text-gray-200" />
-        <p className="font-semibold text-gray-500">Access Denied</p>
-        <p className="text-sm mt-1">You don't have permission to view timetables.</p>
-      </div>
+      <EmptyState icon={ShieldOff} title="Access Denied" description="You don't have permission to view timetables." className="h-64" />
     )
   }
 
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Timetable</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Manage class schedules and period assignments</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* View mode */}
-          <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
-            <button onClick={() => setViewMode('class')}
-              className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all',
-                viewMode === 'class' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700')}>
-              <Grid3X3 className="w-3.5 h-3.5" /> Class View
-            </button>
-            <button onClick={() => setViewMode('teacher')}
-              className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all',
-                viewMode === 'teacher' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700')}>
-              <User className="w-3.5 h-3.5" /> Teacher View
-            </button>
-            {canSeeFreeFaculty && (
-              <button onClick={() => setViewMode('free')}
-                className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all',
-                  viewMode === 'free' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700')}>
-                <UserCheck className="w-3.5 h-3.5" /> Free Faculty
-              </button>
-            )}
-          </div>
-          {/* Grid/List */}
-          {viewMode !== 'free' && (
-            <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
-              <button onClick={() => setGridOrList('grid')}
-                className={cn('p-1.5 rounded-lg transition-all', gridOrList === 'grid' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400')}>
-                <Grid3X3 className="w-4 h-4" />
-              </button>
-              <button onClick={() => setGridOrList('list')}
-                className={cn('p-1.5 rounded-lg transition-all', gridOrList === 'list' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-400')}>
-                <List className="w-4 h-4" />
-              </button>
+      <PageHeader
+        title="Timetable"
+        description="Manage class schedules and period assignments"
+        icon={Clock}
+        actions={
+          <>
+            {/* View mode */}
+            <div className="flex items-center gap-1 bg-muted p-1 rounded-lg">
+              <SegBtn active={viewMode === 'class'} onClick={() => setViewMode('class')}>
+                <Grid3X3 className="w-3.5 h-3.5" /> Class View
+              </SegBtn>
+              <SegBtn active={viewMode === 'teacher'} onClick={() => setViewMode('teacher')}>
+                <User className="w-3.5 h-3.5" /> Teacher View
+              </SegBtn>
+              {canSeeFreeFaculty && (
+                <SegBtn active={viewMode === 'free'} onClick={() => setViewMode('free')}>
+                  <UserCheck className="w-3.5 h-3.5" /> Free Faculty
+                </SegBtn>
+              )}
             </div>
-          )}
-          {/* Print — visible to anyone who can view */}
-          {viewMode !== 'free' && timetableData && timetableData.length > 0 && (
-            <button onClick={() => setShowPrint(true)}
-              className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
-              <Printer className="w-4 h-4" /> Print
-            </button>
-          )}
-        </div>
-      </div>
+            {/* Grid/List */}
+            {viewMode !== 'free' && (
+              <div className="flex items-center gap-1 bg-muted p-1 rounded-lg">
+                <button onClick={() => setGridOrList('grid')} aria-label="Grid view"
+                  className={cn('p-1.5 rounded-md transition-all', gridOrList === 'grid' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground')}>
+                  <Grid3X3 className="w-4 h-4" />
+                </button>
+                <button onClick={() => setGridOrList('list')} aria-label="List view"
+                  className={cn('p-1.5 rounded-md transition-all', gridOrList === 'list' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground')}>
+                  <List className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+            {/* Print — visible to anyone who can view */}
+            {viewMode !== 'free' && timetableData && timetableData.length > 0 && (
+              <Button variant="outline" onClick={() => setShowPrint(true)}>
+                <Printer className="w-4 h-4" /> Print
+              </Button>
+            )}
+          </>
+        }
+      />
 
       {viewMode === 'free' ? (
         <FreeFacultyView />
       ) : (
       <>
       {/* Selectors */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 flex gap-4 items-end flex-wrap">
+      <div className="bg-card rounded-2xl border border-border p-5 flex flex-wrap items-center gap-x-6 gap-y-3">
         {viewMode === 'class' ? (
           <>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Class</label>
-              <select value={selectedClass} onChange={e => { setSelectedClass(e.target.value); setSelectedSection('') }}
-                className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none min-w-[160px]">
-                <option value="">Select class...</option>
-                {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+            <div className="flex items-center gap-2">
+              <Label className="shrink-0">Class</Label>
+              <Select value={selectedClass || undefined} onValueChange={v => { setSelectedClass(v); setSelectedSection('') }}>
+                <SelectTrigger className="h-9 min-w-[160px]"><SelectValue placeholder="Select class..." /></SelectTrigger>
+                <SelectContent>
+                  {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             {sections.length > 0 && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Section</label>
-                <select value={selectedSection} onChange={e => setSelectedSection(e.target.value)}
-                  className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none">
-                  <option value="">All sections</option>
-                  {sections.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
+              <div className="flex items-center gap-2">
+                <Label className="shrink-0">Section</Label>
+                <Select value={selectedSection || 'all'} onValueChange={v => setSelectedSection(v === 'all' ? '' : v)}>
+                  <SelectTrigger className="h-9 min-w-[160px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All sections</SelectItem>
+                    {sections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             )}
           </>
         ) : (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Teacher</label>
-            <select value={selectedTeacher} onChange={e => setSelectedTeacher(e.target.value)}
-              className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none min-w-[200px]">
-              <option value="">Select teacher...</option>
-              {(teachersData ?? []).map((t: any) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
-            </select>
+          <div className="flex items-center gap-2">
+            <Label className="shrink-0">Teacher</Label>
+            <Select value={selectedTeacher || undefined} onValueChange={setSelectedTeacher}>
+              <SelectTrigger className="h-9 min-w-[200px]"><SelectValue placeholder="Select teacher..." /></SelectTrigger>
+              <SelectContent>
+                {(teachersData ?? []).map((t: any) => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         )}
 
@@ -224,17 +239,17 @@ export default function TimetablePage() {
         {timetableData && timetableData.length > 0 && (
           <div className="ml-auto flex items-center gap-6">
             <div className="text-center">
-              <p className="text-2xl font-bold text-indigo-600">{stats.total}</p>
-              <p className="text-xs text-gray-500">Periods/week</p>
+              <p className="text-2xl font-bold text-primary">{stats.total}</p>
+              <p className="text-xs text-muted-foreground">Periods/week</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-emerald-600">{stats.subjects}</p>
-              <p className="text-xs text-gray-500">Subjects</p>
+              <p className="text-2xl font-bold text-success">{stats.subjects}</p>
+              <p className="text-xs text-muted-foreground">Subjects</p>
             </div>
             {stats.conflicts > 0 && (
               <div className="text-center">
-                <p className="text-2xl font-bold text-red-500">{stats.conflicts}</p>
-                <p className="text-xs text-red-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Conflicts</p>
+                <p className="text-2xl font-bold text-destructive">{stats.conflicts}</p>
+                <p className="text-xs text-destructive/80 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Conflicts</p>
               </div>
             )}
           </div>
@@ -243,42 +258,41 @@ export default function TimetablePage() {
 
       {/* Conflict banner */}
       {stats.conflicts > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-2xl px-5 py-3 flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0" />
+        <div className="bg-destructive/10 border border-destructive/30 rounded-2xl px-5 py-3 flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-destructive flex-shrink-0" />
           <div>
-            <p className="text-sm font-semibold text-red-700">Teacher conflict detected</p>
-            <p className="text-xs text-red-500 mt-0.5">A teacher is assigned to multiple periods at the same time. Conflicting periods are highlighted in red.</p>
+            <p className="text-sm font-semibold text-destructive">Teacher conflict detected</p>
+            <p className="text-xs text-destructive/80 mt-0.5">A teacher is assigned to multiple periods at the same time. Conflicting periods are highlighted in red.</p>
           </div>
         </div>
       )}
 
       {/* Empty state */}
       {((viewMode === 'class' && !selectedClass) || (viewMode === 'teacher' && !selectedTeacher)) ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-16 text-center text-gray-400">
-          <Clock className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-          <p className="font-medium">{viewMode === 'class' ? 'Select a class to view timetable' : 'Select a teacher to view their schedule'}</p>
+        <div className="bg-card rounded-2xl border border-border">
+          <EmptyState icon={Clock} title={viewMode === 'class' ? 'Select a class to view timetable' : 'Select a teacher to view their schedule'} />
         </div>
       ) : isLoading ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
-          <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+        <div className="bg-card rounded-2xl border border-border p-12 text-center">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
         </div>
       ) : gridOrList === 'grid' ? (
         // ── GRID VIEW ─────────────────────────────────────────
-        <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+        <div className="bg-card rounded-2xl border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="bg-gray-50">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase border-b border-r border-gray-200 w-28 sticky left-0 bg-gray-50 z-10">
+                <tr className="bg-muted/50">
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase border-b border-r border-border w-28 sticky left-0 bg-muted/50 z-10">
                     Period
                   </th>
                   {DAYS.map((day, idx) => (
-                    <th key={day} className="px-3 py-3 border-b border-r border-gray-200 last:border-r-0 min-w-[150px]">
+                    <th key={day} className="px-3 py-3 border-b border-r border-border last:border-r-0 min-w-[150px]">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-gray-700">{DAY_SHORT[idx]}</span>
+                        <span className="text-xs font-bold text-foreground">{DAY_SHORT[idx]}</span>
                         {viewMode === 'class' && canManage && (
-                          <button onClick={() => { setAddingDay(idx + 1); setShowAdd(true) }}
-                            className="text-indigo-400 hover:text-indigo-600 transition-colors">
+                          <button onClick={() => { setAddingDay(idx + 1); setShowAdd(true) }} aria-label={`Add period on ${day}`}
+                            className="text-primary/60 hover:text-primary transition-colors">
                             <Plus className="w-3.5 h-3.5" />
                           </button>
                         )}
@@ -289,29 +303,29 @@ export default function TimetablePage() {
               </thead>
               <tbody>
                 {allPeriods.map((periodNum) => (
-                  <tr key={periodNum} className="border-b border-gray-100 last:border-b-0">
-                    <td className="px-4 py-2 border-r border-gray-100 sticky left-0 bg-white z-10">
-                      <p className="text-xs font-bold text-gray-700">P{periodNum}</p>
-                      <p className="text-xs text-gray-400">{timeByPeriod[Number(periodNum)]}</p>
+                  <tr key={periodNum} className="border-b border-border last:border-b-0">
+                    <td className="px-4 py-2 border-r border-border sticky left-0 bg-card z-10">
+                      <p className="text-xs font-bold text-foreground">P{periodNum}</p>
+                      <p className="text-xs text-muted-foreground">{timeByPeriod[Number(periodNum)]}</p>
                     </td>
                     {[1,2,3,4,5,6].map(dayNum => {
                       const period = (byDay[dayNum] ?? []).find((p: any) => p.period_number === periodNum)
                       const hasConflict = period && conflicts.has(period.id)
                       return (
-                        <td key={dayNum} className="px-2 py-2 border-r border-gray-100 last:border-r-0 align-top">
+                        <td key={dayNum} className="px-2 py-2 border-r border-border last:border-r-0 align-top">
                           {period ? (
                             <div className={cn(
                               'group relative rounded-xl border px-3 py-2 text-xs transition-all hover:shadow-sm cursor-default',
-                              hasConflict ? 'bg-red-50 border-red-400 text-red-800' : getColor(period.subject_name)
+                              hasConflict ? CONFLICT_CELL : getColor(period.subject_name)
                             )}>
                               <div className="flex items-start justify-between gap-1">
                                 <p className="font-semibold leading-tight flex items-center gap-1">
-                                  {hasConflict && <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />}
+                                  {hasConflict && <AlertTriangle className="w-3 h-3 text-destructive flex-shrink-0" />}
                                   {period.subject_name}
                                 </p>
                                 {viewMode === 'class' && !period.is_break && canManage && (
-                                  <button onClick={() => deleteMutation.mutate(period.id)}
-                                    className="opacity-0 group-hover:opacity-100 flex-shrink-0 text-red-400 hover:text-red-600 transition-all">
+                                  <button onClick={() => deleteMutation.mutate(period.id)} aria-label="Remove period"
+                                    className="opacity-0 group-hover:opacity-100 flex-shrink-0 text-destructive/70 hover:text-destructive transition-all">
                                     <Trash2 className="w-3 h-3" />
                                   </button>
                                 )}
@@ -327,12 +341,12 @@ export default function TimetablePage() {
                               )}
                             </div>
                           ) : viewMode === 'class' && canManage ? (
-                            <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }}
-                              className="w-full h-14 border-2 border-dashed border-gray-200 rounded-xl text-gray-300 hover:border-indigo-300 hover:text-indigo-400 transition-all flex items-center justify-center">
+                            <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }} aria-label="Add period"
+                              className="w-full h-14 border-2 border-dashed border-border rounded-xl text-muted-foreground/40 hover:border-primary/40 hover:text-primary/60 transition-all flex items-center justify-center">
                               <Plus className="w-4 h-4" />
                             </button>
                           ) : (
-                            <div className="w-full h-14 rounded-xl bg-gray-50" />
+                            <div className="w-full h-14 rounded-xl bg-muted/50" />
                           )}
                         </td>
                       )
@@ -341,8 +355,8 @@ export default function TimetablePage() {
                 ))}
                 {allPeriods.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
-                      <Clock className="w-10 h-10 mx-auto mb-2 text-gray-200" />
+                    <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
+                      <Clock className="w-10 h-10 mx-auto mb-2 text-muted-foreground/40" />
                       <p className="font-medium">No periods scheduled yet</p>
                     </td>
                   </tr>
@@ -351,7 +365,7 @@ export default function TimetablePage() {
             </table>
           </div>
           {allPeriods.length > 0 && (
-            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/50 flex flex-wrap gap-2">
+            <div className="px-5 py-3 border-t border-border bg-muted/30 flex flex-wrap gap-2">
               {Array.from(new Set((timetableData ?? []).filter((p: any) => !p.is_break).map((p: any) => p.subject_name))).map((subject: any) => (
                 <span key={subject} className={cn('px-2.5 py-1 rounded-full text-xs font-medium border', getColor(subject))}>
                   {subject}
@@ -367,18 +381,18 @@ export default function TimetablePage() {
             const dayNum = idx + 1
             const periods = byDay[dayNum] ?? []
             return (
-              <div key={day} className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b border-gray-100">
-                  <h3 className="font-semibold text-gray-900 text-sm">{day}</h3>
+              <div key={day} className="bg-card rounded-2xl border border-border overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-3 bg-muted/50 border-b border-border">
+                  <h3 className="font-semibold text-foreground text-sm">{day}</h3>
                   {viewMode === 'class' && canManage && (
                     <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }}
-                      className="flex items-center gap-1 text-xs text-indigo-600 font-medium hover:text-indigo-700">
+                      className="flex items-center gap-1 text-xs text-primary font-medium hover:text-primary/80">
                       <Plus className="w-3.5 h-3.5" /> Add Period
                     </button>
                   )}
                 </div>
                 {periods.length === 0 ? (
-                  <p className="px-5 py-4 text-sm text-gray-400">No periods scheduled</p>
+                  <p className="px-5 py-4 text-sm text-muted-foreground">No periods scheduled</p>
                 ) : (
                   <div className="flex flex-wrap gap-2 p-4">
                     {periods.map((p: any) => {
@@ -386,16 +400,16 @@ export default function TimetablePage() {
                       return (
                         <div key={p.id} className={cn(
                           'group relative flex flex-col gap-1 px-4 py-3 rounded-xl border text-xs min-w-[130px]',
-                          hasConflict ? 'bg-red-50 border-red-400 text-red-800' : getColor(p.subject_name)
+                          hasConflict ? CONFLICT_CELL : getColor(p.subject_name)
                         )}>
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-bold text-sm flex items-center gap-1">
-                              {hasConflict && <AlertTriangle className="w-3 h-3 text-red-500" />}
+                              {hasConflict && <AlertTriangle className="w-3 h-3 text-destructive" />}
                               {p.subject_name}
                             </span>
                             {viewMode === 'class' && !p.is_break && canManage && (
-                              <button onClick={() => deleteMutation.mutate(p.id)}
-                                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity">
+                              <button onClick={() => deleteMutation.mutate(p.id)} aria-label="Remove period"
+                                className="opacity-0 group-hover:opacity-100 text-destructive/70 hover:text-destructive transition-opacity">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             )}
@@ -453,23 +467,23 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (day: 
   })
 
   const REASON_STYLES: Record<string, string> = {
-    not_checked_in: 'bg-red-100 text-red-700',
-    absent: 'bg-red-100 text-red-700',
-    on_leave: 'bg-amber-100 text-amber-700',
-    no_checkin_time: 'bg-amber-100 text-amber-700',
-    checked_in_late: 'bg-orange-100 text-orange-700',
+    not_checked_in: 'bg-destructive/10 text-destructive',
+    absent: 'bg-destructive/10 text-destructive',
+    on_leave: 'bg-warning/10 text-warning',
+    no_checkin_time: 'bg-warning/10 text-warning',
+    checked_in_late: 'bg-warning/10 text-warning',
   }
 
   if (isLoading) {
-    return <div className="bg-white rounded-2xl border border-gray-200 p-5 h-20 animate-pulse" />
+    return <div className="bg-card rounded-2xl border border-border p-5 h-20 animate-pulse" />
   }
 
   // Sunday — nothing scheduled, nothing to check.
   if (!data?.day_of_week) {
     return (
-      <div className="bg-gray-50 border border-gray-200 rounded-2xl px-5 py-4 flex items-center gap-3">
-        <Clock className="w-4 h-4 text-gray-400" />
-        <p className="text-sm text-gray-500">No school today — nothing to check.</p>
+      <div className="bg-muted/50 border border-border rounded-2xl px-5 py-4 flex items-center gap-3">
+        <Clock className="w-4 h-4 text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">No school today — nothing to check.</p>
       </div>
     )
   }
@@ -483,47 +497,46 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (day: 
   // rather than silently looking identical to "all good."
   if (periodsInProgress === 0) {
     return (
-      <div className="bg-gray-50 border border-gray-200 rounded-2xl px-5 py-4 flex items-center gap-3">
-        <Clock className="w-4 h-4 text-gray-400" />
-        <p className="text-sm text-gray-500">No class is in session right now — check back once periods start.</p>
+      <div className="bg-muted/50 border border-border rounded-2xl px-5 py-4 flex items-center gap-3">
+        <Clock className="w-4 h-4 text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">No class is in session right now — check back once periods start.</p>
       </div>
     )
   }
 
   if (flagged.length === 0) {
     return (
-      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-5 py-4 flex items-center gap-3">
-        <UserCheck className="w-4 h-4 text-emerald-500" />
-        <p className="text-sm text-emerald-700">All {periodsInProgress} class{periodsInProgress !== 1 ? 'es' : ''} in session right now {periodsInProgress !== 1 ? 'are' : 'is'} covered.</p>
+      <div className="bg-success/10 border border-success/30 rounded-2xl px-5 py-4 flex items-center gap-3">
+        <UserCheck className="w-4 h-4 text-success" />
+        <p className="text-sm text-success">All {periodsInProgress} class{periodsInProgress !== 1 ? 'es' : ''} in session right now {periodsInProgress !== 1 ? 'are' : 'is'} covered.</p>
       </div>
     )
   }
 
   return (
-    <div className="bg-red-50 border border-red-200 rounded-2xl p-5">
+    <div className="bg-destructive/10 border border-destructive/30 rounded-2xl p-5">
       <div className="flex items-center gap-2 mb-4">
-        <AlertTriangle className="w-4 h-4 text-red-500" />
-        <h3 className="font-semibold text-red-700">Classes Needing Immediate Attention</h3>
-        <span className="text-xs text-red-400">({flagged.length} right now)</span>
+        <AlertTriangle className="w-4 h-4 text-destructive" />
+        <h3 className="font-semibold text-destructive">Classes Needing Immediate Attention</h3>
+        <span className="text-xs text-destructive/70">({flagged.length} right now)</span>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {flagged.map((f: any) => (
-          <div key={f.period_id} className="bg-white rounded-xl border border-red-100 p-4 flex items-start justify-between gap-3">
+          <div key={f.period_id} className="bg-card rounded-xl border border-destructive/20 p-4 flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-gray-900">
+              <p className="text-sm font-semibold text-foreground">
                 {f.class_name}{f.section_name ? ` - ${f.section_name}` : ''} · {f.subject_name}
               </p>
-              <p className="text-xs text-gray-400 mt-0.5">
+              <p className="text-xs text-muted-foreground mt-0.5">
                 P{f.period_number} · {f.start_time?.slice(0, 5)}–{f.end_time?.slice(0, 5)} · {f.teacher_name}{f.room ? ` · ${f.room}` : ''}
               </p>
-              <span className={cn('inline-block mt-2 px-2 py-0.5 rounded-full text-[11px] font-semibold', REASON_STYLES[f.reason] ?? 'bg-gray-100 text-gray-600')}>
+              <span className={cn('inline-block mt-2 px-2 py-0.5 rounded-full text-[11px] font-semibold', REASON_STYLES[f.reason] ?? 'bg-muted text-muted-foreground')}>
                 {f.reason_label}
               </span>
             </div>
-            <button onClick={() => onFindSubstitute(data.day_of_week, f.period_number)}
-              className="flex-shrink-0 px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700">
+            <Button size="sm" onClick={() => onFindSubstitute(data.day_of_week, f.period_number)}>
               Find Substitute
-            </button>
+            </Button>
           </div>
         ))}
       </div>
@@ -570,84 +583,90 @@ function FreeFacultyView() {
   const shownFree = subjectFilter ? freeTeachers.filter(t => t.subjects_today.includes(subjectFilter)) : freeTeachers
   const selectedPeriodInfo = availablePeriods.find((p: any) => p.period_number === period)
 
-  const selectCls = "px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none min-w-[140px]"
-
   return (
     <div className="space-y-5">
       <AttentionRequiredPanel onFindSubstitute={(d, p) => { setDay(d); setPeriod(p); setAutoPicked(true) }} />
 
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 flex gap-4 items-end flex-wrap">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Day</label>
-          <select className={selectCls} value={day} onChange={e => { setDay(Number(e.target.value)); setPeriod(''); setAutoPicked(false) }}>
-            {DAYS.map((d, i) => <option key={d} value={i + 1}>{d}</option>)}
-          </select>
+      <div className="bg-card rounded-2xl border border-border p-5 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex items-center gap-2">
+          <Label className="shrink-0">Day</Label>
+          <Select value={String(day)} onValueChange={v => { setDay(Number(v)); setPeriod(''); setAutoPicked(false) }}>
+            <SelectTrigger className="h-9 min-w-[140px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {DAYS.map((d, i) => <SelectItem key={d} value={String(i + 1)}>{d}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Period</label>
-          <select className={selectCls} value={period} onChange={e => setPeriod(e.target.value ? Number(e.target.value) : '')}>
-            <option value="">Whole day (any period)</option>
-            {availablePeriods.map((p: any) => (
-              <option key={p.period_number} value={p.period_number}>
-                P{p.period_number} · {p.start_time?.slice(0, 5)}–{p.end_time?.slice(0, 5)}
-              </option>
-            ))}
-          </select>
+        <div className="flex items-center gap-2">
+          <Label className="shrink-0">Period</Label>
+          <Select value={period === '' ? 'all' : String(period)} onValueChange={v => setPeriod(v === 'all' ? '' : Number(v))}>
+            <SelectTrigger className="h-9 min-w-[140px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Whole day (any period)</SelectItem>
+              {availablePeriods.map((p: any) => (
+                <SelectItem key={p.period_number} value={String(p.period_number)}>
+                  P{p.period_number} · {p.start_time?.slice(0, 5)}–{p.end_time?.slice(0, 5)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         {allSubjects.length > 0 && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
-            <select className={selectCls} value={subjectFilter} onChange={e => setSubjectFilter(e.target.value)}>
-              <option value="">Any subject</option>
-              {allSubjects.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+          <div className="flex items-center gap-2">
+            <Label className="shrink-0">Subject</Label>
+            <Select value={subjectFilter || 'any'} onValueChange={v => setSubjectFilter(v === 'any' ? '' : v)}>
+              <SelectTrigger className="h-9 min-w-[140px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="any">Any subject</SelectItem>
+                {allSubjects.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         )}
         {period !== '' && (
           <div className="ml-auto flex items-center gap-6">
             <div className="text-center">
-              <p className="text-2xl font-bold text-emerald-600">{shownFree.length}</p>
-              <p className="text-xs text-gray-500">Free</p>
+              <p className="text-2xl font-bold text-success">{shownFree.length}</p>
+              <p className="text-xs text-muted-foreground">Free</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-gray-400">{busyTeachers.length}</p>
-              <p className="text-xs text-gray-500">Teaching</p>
+              <p className="text-2xl font-bold text-muted-foreground">{busyTeachers.length}</p>
+              <p className="text-xs text-muted-foreground">Teaching</p>
             </div>
           </div>
         )}
       </div>
 
       {isLoading ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
-          <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+        <div className="bg-card rounded-2xl border border-border p-12 text-center">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
         </div>
       ) : availablePeriods.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-16 text-center text-gray-400">
-          <Clock className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-          <p className="font-medium">No periods scheduled on {DAYS[day - 1]} yet</p>
+        <div className="bg-card rounded-2xl border border-border">
+          <EmptyState icon={Clock} title={`No periods scheduled on ${DAYS[day - 1]} yet`} />
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           {/* Free */}
-          <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                <UserCheck className="w-4 h-4 text-emerald-500" />
+          <div className="bg-card rounded-2xl border border-border overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h3 className="font-semibold text-foreground flex items-center gap-2">
+                <UserCheck className="w-4 h-4 text-success" />
                 Free {selectedPeriodInfo ? `— P${selectedPeriodInfo.period_number} (${selectedPeriodInfo.start_time?.slice(0,5)}–${selectedPeriodInfo.end_time?.slice(0,5)})` : ''}
               </h3>
-              <span className="text-xs text-gray-400">{shownFree.length}</span>
+              <span className="text-xs text-muted-foreground">{shownFree.length}</span>
             </div>
             {period === '' ? (
-              <p className="px-5 py-6 text-sm text-gray-400">Pick a period to see who's free at that time.</p>
+              <p className="px-5 py-6 text-sm text-muted-foreground">Pick a period to see who's free at that time.</p>
             ) : shownFree.length === 0 ? (
-              <p className="px-5 py-6 text-sm text-gray-400">No one's free at this period{subjectFilter ? ` who teaches ${subjectFilter}` : ''}.</p>
+              <p className="px-5 py-6 text-sm text-muted-foreground">No one's free at this period{subjectFilter ? ` who teaches ${subjectFilter}` : ''}.</p>
             ) : (
-              <div className="divide-y divide-gray-50">
+              <div className="divide-y divide-border">
                 {shownFree.map((t: any) => (
                   <div key={t.id} className="px-5 py-3">
-                    <p className="text-sm font-semibold text-gray-900">{t.full_name}</p>
+                    <p className="text-sm font-semibold text-foreground">{t.full_name}</p>
                     {t.subjects_today.length > 0 && (
-                      <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+                      <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
                         <BookOpen className="w-3 h-3" /> {t.subjects_today.join(', ')}
                       </p>
                     )}
@@ -658,23 +677,23 @@ function FreeFacultyView() {
           </div>
 
           {/* Busy */}
-          <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                <User className="w-4 h-4 text-gray-400" /> Teaching Right Now
+          <div className="bg-card rounded-2xl border border-border overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h3 className="font-semibold text-foreground flex items-center gap-2">
+                <User className="w-4 h-4 text-muted-foreground" /> Teaching Right Now
               </h3>
-              <span className="text-xs text-gray-400">{busyTeachers.length}</span>
+              <span className="text-xs text-muted-foreground">{busyTeachers.length}</span>
             </div>
             {period === '' ? (
-              <p className="px-5 py-6 text-sm text-gray-400">Pick a period to see who's teaching.</p>
+              <p className="px-5 py-6 text-sm text-muted-foreground">Pick a period to see who's teaching.</p>
             ) : busyTeachers.length === 0 ? (
-              <p className="px-5 py-6 text-sm text-gray-400">No one is teaching at this period.</p>
+              <p className="px-5 py-6 text-sm text-muted-foreground">No one is teaching at this period.</p>
             ) : (
-              <div className="divide-y divide-gray-50">
+              <div className="divide-y divide-border">
                 {busyTeachers.map((b: any) => (
                   <div key={b.teacher_id} className="px-5 py-3">
-                    <p className="text-sm font-semibold text-gray-900">{b.full_name}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
+                    <p className="text-sm font-semibold text-foreground">{b.full_name}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
                       {b.subject_name} · {b.class_name}{b.section_name ? ` - ${b.section_name}` : ''}
                       {b.room ? ` · ${b.room}` : ''}
                     </p>
@@ -754,105 +773,111 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
     } finally { setLoading(false) }
   }
 
-  const ic = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Add Period — {DAYS[form.day_of_week - 1]}</h2>
-        </div>
-        <div className="px-6 py-5 space-y-4">
+    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Period — {DAYS[form.day_of_week - 1]}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
           {/* Break toggle */}
-          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-            <span className="text-sm font-medium text-gray-700">Break / Lunch</span>
+          <div className="flex items-center justify-between p-3 bg-muted/50 rounded-xl">
+            <span className="text-sm font-medium text-foreground">Break / Lunch</span>
             <button onClick={() => setForm(f => ({ ...f, is_break: !f.is_break, subject_name: !f.is_break ? 'Break' : '' }))}
-              className={cn('w-12 h-6 rounded-full relative transition-all', form.is_break ? 'bg-indigo-600' : 'bg-gray-300')}>
-              <span className={cn('absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all', form.is_break ? 'left-6' : 'left-0.5')} />
+              aria-label="Toggle break"
+              className={cn('w-12 h-6 rounded-full relative transition-all', form.is_break ? 'bg-primary' : 'bg-muted-foreground/30')}>
+              <span className={cn('absolute top-0.5 w-5 h-5 bg-background rounded-full shadow transition-all', form.is_break ? 'left-6' : 'left-0.5')} />
             </button>
           </div>
 
           {!form.is_break ? (
             <>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject *</label>
-                <select className={ic} value={form.subject_name}
-                  onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))}>
-                  <option value="">Select subject...</option>
-                  {(subjectsData ?? []).map((s: any) => <option key={s.id} value={s.name}>{s.name}</option>)}
-                </select>
+              <div className="space-y-1.5">
+                <Label>Subject *</Label>
+                <Select value={form.subject_name || undefined}
+                  onValueChange={v => setForm(f => ({ ...f, subject_name: v }))}>
+                  <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Select subject..." /></SelectTrigger>
+                  <SelectContent>
+                    {(subjectsData ?? []).map((s: any) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
                 {(subjectsData ?? []).length === 0 && (
-                  <p className="text-xs text-amber-600 mt-1.5">No subjects set up for this class yet — add some in Settings → Classes & Sections.</p>
+                  <p className="text-xs text-warning mt-1.5">No subjects set up for this class yet — add some in Settings → Classes & Sections.</p>
                 )}
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Teacher</label>
-                <select className={ic} value={teacherId}
-                  onChange={e => { setTeacherId(e.target.value); checkConflict(e.target.value, form.day_of_week, form.period_number) }}>
-                  <option value="">No teacher assigned</option>
-                  {(teachersData ?? []).map((t: any) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
-                </select>
+              <div className="space-y-1.5">
+                <Label>Teacher</Label>
+                <Select value={teacherId || 'none'}
+                  onValueChange={v => { const tid = v === 'none' ? '' : v; setTeacherId(tid); checkConflict(tid, form.day_of_week, form.period_number) }}>
+                  <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No teacher assigned</SelectItem>
+                    {(teachersData ?? []).map((t: any) => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
                 {conflict && (
-                  <p className="text-xs text-red-500 mt-1.5 flex items-center gap-1">
+                  <p className="text-xs text-destructive mt-1.5 flex items-center gap-1">
                     <AlertTriangle className="w-3 h-3" /> {conflict}
                   </p>
                 )}
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Room</label>
-                <input className={ic} value={form.room} onChange={e => setForm(f => ({ ...f, room: e.target.value }))} placeholder="e.g. Room 12, Lab 2" />
+              <div className="space-y-1.5">
+                <Label>Room</Label>
+                <Input value={form.room} onChange={e => setForm(f => ({ ...f, room: e.target.value }))} placeholder="e.g. Room 12, Lab 2" />
               </div>
             </>
           ) : (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Label</label>
-              <select className={ic} value={form.subject_name} onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))}>
-                <option value="Break">Break</option>
-                <option value="Lunch">Lunch</option>
-                <option value="Assembly">Assembly</option>
-              </select>
+            <div className="space-y-1.5">
+              <Label>Label</Label>
+              <Select value={form.subject_name || undefined} onValueChange={v => setForm(f => ({ ...f, subject_name: v }))}>
+                <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Break">Break</SelectItem>
+                  <SelectItem value="Lunch">Lunch</SelectItem>
+                  <SelectItem value="Assembly">Assembly</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           )}
 
           <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Period No.</label>
-              <input type="number" min="1" max="12" className={ic} value={form.period_number}
+            <div className="space-y-1.5">
+              <Label>Period No.</Label>
+              <Input type="number" min="1" max="12" value={form.period_number}
                 onChange={e => { const v = Number(e.target.value); setForm(f => ({ ...f, period_number: v })); checkConflict(teacherId, form.day_of_week, v) }} />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Start</label>
-              <input type="time" className={ic} value={form.start_time}
+            <div className="space-y-1.5">
+              <Label>Start</Label>
+              <Input type="time" value={form.start_time}
                 onChange={e => setForm(f => ({ ...f, start_time: e.target.value, end_time: calcEnd(e.target.value, f.is_break ? 30 : 45) }))} />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">End</label>
-              <input type="time" className={ic} value={form.end_time} onChange={e => setForm(f => ({ ...f, end_time: e.target.value }))} />
+            <div className="space-y-1.5">
+              <Label>End</Label>
+              <Input type="time" value={form.end_time} onChange={e => setForm(f => ({ ...f, end_time: e.target.value }))} />
             </div>
           </div>
 
           {/* Day picker */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Day</label>
+          <div className="space-y-1.5">
+            <Label>Day</Label>
             <div className="grid grid-cols-6 gap-1">
               {['M','T','W','T','F','S'].map((d, i) => (
                 <button key={i} onClick={() => { setForm(f => ({ ...f, day_of_week: i+1 })); checkConflict(teacherId, i+1, form.period_number) }}
-                  className={cn('py-2 rounded-lg text-xs font-bold transition-all', form.day_of_week === i+1 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>
+                  className={cn('py-2 rounded-lg text-xs font-bold transition-all', form.day_of_week === i+1 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70')}>
                   {d}
                 </button>
               ))}
             </div>
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSave} disabled={loading || !!conflict}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={loading || !!conflict}>
             {loading && <Loader2 className="w-4 h-4 animate-spin" />} Add Period
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -917,20 +942,20 @@ function PrintModal({ timetableData, label, viewMode, onClose }: {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl p-6 text-center">
-        <div className="w-14 h-14 bg-indigo-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-          <Printer className="w-7 h-7 text-indigo-600" />
+    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <div className="text-center">
+          <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Printer className="w-7 h-7 text-primary" />
+          </div>
+          <h3 className="text-lg font-semibold text-foreground">Print Timetable</h3>
+          <p className="text-sm text-muted-foreground mt-1 mb-6">{label} — {timetableData.filter(p => !p.is_break).length} periods</p>
+          <div className="flex gap-3">
+            <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
+            <Button className="flex-1" onClick={handlePrint}>Open Print Preview</Button>
+          </div>
         </div>
-        <h3 className="text-lg font-semibold text-gray-900">Print Timetable</h3>
-        <p className="text-sm text-gray-500 mt-1 mb-6">{label} — {timetableData.filter(p => !p.is_break).length} periods</p>
-        <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50">Cancel</button>
-          <button onClick={handlePrint} className="flex-1 px-4 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700">
-            Open Print Preview
-          </button>
-        </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

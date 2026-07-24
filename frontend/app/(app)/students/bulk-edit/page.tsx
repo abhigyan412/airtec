@@ -7,6 +7,18 @@ import { Search, Filter, CheckSquare, Square, Edit3, Loader2, ArrowLeft, Users }
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { EmptyState } from '@/components/shared/EmptyState'
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select'
 
 const EDIT_FIELDS = [
   { key: 'house_id',    label: 'House',        type: 'house' },
@@ -106,195 +118,228 @@ export default function BulkEditPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <Link href="/students" className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
-          <ArrowLeft className="w-5 h-5 text-gray-500" />
-        </Link>
+        <Button variant="ghost" size="icon" asChild aria-label="Back to students">
+          <Link href="/students">
+            <ArrowLeft className="h-5 w-5" />
+          </Link>
+        </Button>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Bulk Edit Students</h1>
-          <p className="text-gray-500 text-sm mt-0.5">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Bulk Edit Students</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">
             Filter students, select them, then apply changes to all at once
           </p>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
-        <p className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-          <Filter className="w-4 h-4" /> Filter Students
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input type="text" placeholder="Search by name or admission no..."
-              value={search} onChange={e => { setSearch(e.target.value); setSelected(new Set()) }}
-              className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-gray-50 focus:bg-white" />
+      <Card>
+        <CardContent className="p-5">
+          <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Filter className="h-4 w-4" /> Filter Students
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <div className="relative min-w-[200px] flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input type="text" placeholder="Search by name or admission no..."
+                value={search} onChange={e => { setSearch(e.target.value); setSelected(new Set()) }}
+                className="pl-9" />
+            </div>
+            <Select value={filterClass || 'all'} onValueChange={v => { setFilterClass(v === 'all' ? '' : v); setFilterSection(''); setSelected(new Set()) }}>
+              <SelectTrigger className="min-w-[140px]">
+                <SelectValue placeholder="All Classes" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Classes</SelectItem>
+                {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {sections.length > 0 && (
+              <Select value={filterSection || 'all'} onValueChange={v => { setFilterSection(v === 'all' ? '' : v); setSelected(new Set()) }}>
+                <SelectTrigger className="min-w-[140px]">
+                  <SelectValue placeholder="All Sections" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Sections</SelectItem>
+                  {sections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
+            <Select value={filterHouse || 'all'} onValueChange={v => { setFilterHouse(v === 'all' ? '' : v); setSelected(new Set()) }}>
+              <SelectTrigger className="min-w-[140px]">
+                <SelectValue placeholder="All Houses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Houses</SelectItem>
+                {(housesData ?? []).map((h: any) => <SelectItem key={h.id} value={h.id}>{h.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={filterStatus || 'all'} onValueChange={v => { setFilterStatus(v === 'all' ? '' : v); setSelected(new Set()) }}>
+              <SelectTrigger className="min-w-[140px]">
+                <SelectValue placeholder="All Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                {STATUSES.map(s => <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
-          <select value={filterClass} onChange={e => { setFilterClass(e.target.value); setFilterSection(''); setSelected(new Set()) }}
-            className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-            <option value="">All Classes</option>
-            {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          {sections.length > 0 && (
-            <select value={filterSection} onChange={e => { setFilterSection(e.target.value); setSelected(new Set()) }}
-              className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-              <option value="">All Sections</option>
-              {sections.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          )}
-          <select value={filterHouse} onChange={e => { setFilterHouse(e.target.value); setSelected(new Set()) }}
-            className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-            <option value="">All Houses</option>
-            {(housesData ?? []).map((h: any) => <option key={h.id} value={h.id}>{h.name}</option>)}
-          </select>
-          <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setSelected(new Set()) }}
-            className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-            <option value="">All Status</option>
-            {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-          </select>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Edit action bar */}
       {selected.size > 0 && (
-        <div className="bg-indigo-600 rounded-2xl p-4 flex items-center gap-4 flex-wrap">
-          <div className="flex items-center gap-2 text-white">
-            <Users className="w-5 h-5" />
-            <span className="font-semibold">{selected.size} students selected</span>
-          </div>
-          <div className="flex-1 flex items-center gap-3 flex-wrap">
-            <select value={editField} onChange={e => { setEditField(e.target.value); setEditValue('') }}
-              className="px-4 py-2 text-sm border border-indigo-400 rounded-xl bg-indigo-700 text-white focus:outline-none focus:ring-2 focus:ring-white/30">
-              <option value="">Select field to edit...</option>
-              {EDIT_FIELDS.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
-            </select>
+        <Card className="border-primary/30 bg-primary/5">
+          <CardContent className="flex flex-wrap items-center gap-4 p-4">
+            <div className="flex items-center gap-2 text-foreground">
+              <Users className="h-5 w-5 text-primary" />
+              <span className="font-semibold">{selected.size} students selected</span>
+            </div>
+            <div className="flex flex-1 flex-wrap items-center gap-3">
+              <Select value={editField || undefined} onValueChange={v => { setEditField(v); setEditValue('') }}>
+                <SelectTrigger className="min-w-[180px]">
+                  <SelectValue placeholder="Select field to edit..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {EDIT_FIELDS.map(f => <SelectItem key={f.key} value={f.key}>{f.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
 
-            {/* Value selector based on field type */}
-            {editField === 'house_id' && (
-              <select value={editValue} onChange={e => setEditValue(e.target.value)}
-                className="px-4 py-2 text-sm border border-indigo-400 rounded-xl bg-indigo-700 text-white focus:outline-none focus:ring-2 focus:ring-white/30">
-                <option value="">Select house...</option>
-                {(housesData ?? []).map((h: any) => <option key={h.id} value={h.id}>{h.name}</option>)}
-              </select>
-            )}
-            {editField === 'class_id' && (
-              <select value={editValue} onChange={e => setEditValue(e.target.value)}
-                className="px-4 py-2 text-sm border border-indigo-400 rounded-xl bg-indigo-700 text-white focus:outline-none focus:ring-2 focus:ring-white/30">
-                <option value="">Select class...</option>
-                {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            )}
-            {editField === 'section_id' && (
-              <select value={editValue} onChange={e => setEditValue(e.target.value)}
-                className="px-4 py-2 text-sm border border-indigo-400 rounded-xl bg-indigo-700 text-white focus:outline-none focus:ring-2 focus:ring-white/30">
-                <option value="">Select section...</option>
-                {(classesData ?? []).flatMap((c: any) => c.sections ?? []).map((s: any) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            )}
-            {editField === 'status' && (
-              <select value={editValue} onChange={e => setEditValue(e.target.value)}
-                className="px-4 py-2 text-sm border border-indigo-400 rounded-xl bg-indigo-700 text-white focus:outline-none focus:ring-2 focus:ring-white/30">
-                <option value="">Select status...</option>
-                {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-              </select>
-            )}
-            {editField === 'stream' && (
-              <select value={editValue} onChange={e => setEditValue(e.target.value)}
-                className="px-4 py-2 text-sm border border-indigo-400 rounded-xl bg-indigo-700 text-white focus:outline-none focus:ring-2 focus:ring-white/30">
-                <option value="">Select stream...</option>
-                {STREAMS.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            )}
-            {editField === 'roll_number' && (
-              <input type="text" value={editValue} onChange={e => setEditValue(e.target.value)}
-                placeholder="Enter roll number..."
-                className="px-4 py-2 text-sm border border-indigo-400 rounded-xl bg-indigo-700 text-white placeholder-indigo-300 focus:outline-none focus:ring-2 focus:ring-white/30" />
-            )}
+              {/* Value selector based on field type */}
+              {editField === 'house_id' && (
+                <Select value={editValue || undefined} onValueChange={v => setEditValue(v)}>
+                  <SelectTrigger className="min-w-[160px]">
+                    <SelectValue placeholder="Select house..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(housesData ?? []).map((h: any) => <SelectItem key={h.id} value={h.id}>{h.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              {editField === 'class_id' && (
+                <Select value={editValue || undefined} onValueChange={v => setEditValue(v)}>
+                  <SelectTrigger className="min-w-[160px]">
+                    <SelectValue placeholder="Select class..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              {editField === 'section_id' && (
+                <Select value={editValue || undefined} onValueChange={v => setEditValue(v)}>
+                  <SelectTrigger className="min-w-[160px]">
+                    <SelectValue placeholder="Select section..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(classesData ?? []).flatMap((c: any) => c.sections ?? []).map((s: any) => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {editField === 'status' && (
+                <Select value={editValue || undefined} onValueChange={v => setEditValue(v)}>
+                  <SelectTrigger className="min-w-[160px]">
+                    <SelectValue placeholder="Select status..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATUSES.map(s => <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              {editField === 'stream' && (
+                <Select value={editValue || undefined} onValueChange={v => setEditValue(v)}>
+                  <SelectTrigger className="min-w-[160px]">
+                    <SelectValue placeholder="Select stream..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STREAMS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              {editField === 'roll_number' && (
+                <Input type="text" value={editValue} onChange={e => setEditValue(e.target.value)}
+                  placeholder="Enter roll number..." className="max-w-[200px]" />
+              )}
 
-            <button onClick={applyEdit} disabled={applying || !editField || !editValue}
-              className="flex items-center gap-2 px-5 py-2 bg-white text-indigo-700 text-sm font-bold rounded-xl hover:bg-indigo-50 disabled:opacity-60 transition-colors">
-              {applying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Edit3 className="w-4 h-4" />}
-              Apply to {selected.size} students
-            </button>
-            <button onClick={() => setSelected(new Set())}
-              className="px-4 py-2 text-white/70 text-sm hover:text-white transition-colors">
-              Clear
-            </button>
-          </div>
-        </div>
+              <Button onClick={applyEdit} disabled={applying || !editField || !editValue}>
+                {applying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Edit3 className="h-4 w-4" />}
+                Apply to {selected.size} students
+              </Button>
+              <Button variant="ghost" onClick={() => setSelected(new Set())}>
+                Clear
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Student table */}
-      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <Card className="overflow-hidden p-0">
+        <div className="flex items-center justify-between border-b border-border px-6 py-4">
           <div className="flex items-center gap-3">
-            <button onClick={toggleAll} className="text-gray-400 hover:text-indigo-600 transition-colors">
+            <button onClick={toggleAll} className="text-muted-foreground transition-colors hover:text-primary" aria-label="Toggle all">
               {selected.size === students.length && students.length > 0
-                ? <CheckSquare className="w-5 h-5 text-indigo-600" />
-                : <Square className="w-5 h-5" />
+                ? <CheckSquare className="h-5 w-5 text-primary" />
+                : <Square className="h-5 w-5" />
               }
             </button>
-            <span className="text-sm text-gray-500">
+            <span className="text-sm text-muted-foreground">
               {students.length} students found
-              {selected.size > 0 && <span className="text-indigo-600 font-semibold"> · {selected.size} selected</span>}
+              {selected.size > 0 && <span className="font-semibold text-primary"> · {selected.size} selected</span>}
             </span>
           </div>
           {students.length > 0 && (
-            <button onClick={toggleAll}
-              className="text-xs text-indigo-600 font-medium hover:text-indigo-700">
+            <Button variant="link" size="sm" onClick={toggleAll} className="h-auto p-0">
               {selected.size === students.length ? 'Deselect all' : 'Select all'}
-            </button>
+            </Button>
           )}
         </div>
 
         {isLoading ? (
-          <div className="p-12 text-center text-gray-400">Loading students...</div>
+          <div className="p-12 text-center text-sm text-muted-foreground">Loading students...</div>
         ) : students.length === 0 ? (
-          <div className="p-12 text-center text-gray-400">
-            <Users className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-            <p className="font-medium">No students match the filters</p>
-          </div>
+          <EmptyState icon={Users} title="No students match the filters" className="py-12" />
         ) : (
-          <div className="divide-y divide-gray-50">
+          <div className="divide-y divide-border">
             {students.map((s: any) => {
               const isSelected = selected.has(s.id)
               return (
                 <div key={s.id}
                   onClick={() => toggleOne(s.id)}
                   className={cn(
-                    'flex items-center gap-4 px-6 py-3 cursor-pointer transition-colors',
-                    isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'
+                    'flex cursor-pointer items-center gap-4 px-6 py-3 transition-colors',
+                    isSelected ? 'bg-primary/10' : 'hover:bg-muted/50'
                   )}>
-                  <button className="text-gray-400 flex-shrink-0">
+                  <button className="shrink-0 text-muted-foreground" aria-label="Toggle student">
                     {isSelected
-                      ? <CheckSquare className="w-5 h-5 text-indigo-600" />
-                      : <Square className="w-5 h-5" />
+                      ? <CheckSquare className="h-5 w-5 text-primary" />
+                      : <Square className="h-5 w-5" />
                     }
                   </button>
-                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                    {s.photo_url
-                      ? <img src={s.photo_url} alt="" className="w-8 h-8 rounded-full object-cover" />
-                      : <span className="text-xs font-bold text-indigo-700">{s.first_name?.[0]}{s.last_name?.[0]}</span>
-                    }
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900">{s.first_name} {s.last_name}</p>
-                    <p className="text-xs text-gray-400">
+                  <Avatar className="h-8 w-8">
+                    {s.photo_url && <AvatarImage src={s.photo_url} alt="" />}
+                    <AvatarFallback className="bg-primary/10 text-xs font-bold text-primary">
+                      {s.first_name?.[0]}{s.last_name?.[0]}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-foreground">{s.first_name} {s.last_name}</p>
+                    <p className="text-xs text-muted-foreground">
                       {s.admission_number && `#${s.admission_number} · `}
                       Roll: {s.roll_number ?? '—'}
                     </p>
                   </div>
-                  <div className="hidden md:flex items-center gap-3 text-xs text-gray-500">
+                  <div className="hidden items-center gap-3 text-xs text-muted-foreground md:flex">
                     <span>{s.classes?.name ?? '—'}</span>
                     {s.sections?.name && <span>{s.sections.name}</span>}
                     {s.houses && (
-                      <span className="px-2 py-0.5 rounded-full text-white text-xs font-medium"
+                      <span className="rounded-full px-2 py-0.5 text-xs font-medium text-white"
                         style={{ backgroundColor: s.houses.color ?? '#6366f1' }}>
                         {s.houses.name}
                       </span>
                     )}
-                    <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', STATUS_COLORS[s.status])}>
+                    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', STATUS_COLORS[s.status])}>
                       {s.status}
                     </span>
                   </div>
@@ -303,7 +348,7 @@ export default function BulkEditPage() {
             })}
           </div>
         )}
-      </div>
+      </Card>
     </div>
   )
 }

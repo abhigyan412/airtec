@@ -4,20 +4,45 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { hrmsApi } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, User, Calendar, IndianRupee, Loader2, Check, X, Plus, Edit3 } from 'lucide-react'
+import { ArrowLeft, User, Calendar, IndianRupee, Loader2, Check, X, Edit3 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 
 const TABS = ['Profile', 'Leave', 'Payroll'] as const
+
+// Radix SelectItem can't hold an empty string, so an option meaning "unset"
+// (e.g. Gender's blank "Select") is carried through this sentinel and mapped
+// back to '' in the value written to state.
+const EMPTY_OPTION = '__empty__'
 
 export default function StaffDetailPage() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
   const [tab, setTab] = useState<typeof TABS[number]>('Profile')
   const [editMode, setEditMode] = useState(false)
-  const [showLeaveModal, setShowLeaveModal] = useState(false)
-  const [showSalaryModal, setShowSalaryModal] = useState(false)
-  const [showPayslipModal, setShowPayslipModal] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['hr-staff-detail', id],
@@ -40,9 +65,15 @@ export default function StaffDetailPage() {
   })
 
   if (isLoading) {
-    return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" /></div>
+    return (
+      <div className="max-w-5xl space-y-6">
+        <Skeleton className="h-12 w-64" />
+        <Skeleton className="h-10 w-72" />
+        <Skeleton className="h-64 w-full rounded-2xl" />
+      </div>
+    )
   }
-  if (!data) return <div className="text-center text-gray-400 py-20">Staff member not found</div>
+  if (!data) return <div className="py-20 text-center text-muted-foreground">Staff member not found</div>
 
   const profile = data.profile
 
@@ -50,23 +81,25 @@ export default function StaffDetailPage() {
     <div className="max-w-5xl space-y-6">
       {/* Header */}
       <div className="flex items-start gap-4">
-        <Link href="/hr/staff" className="p-2 hover:bg-gray-100 rounded-xl transition-colors mt-1">
-          <ArrowLeft className="w-5 h-5 text-gray-500" />
-        </Link>
+        <Button variant="ghost" size="icon" asChild className="mt-1">
+          <Link href="/hr/staff" aria-label="Back to staff directory"><ArrowLeft className="h-5 w-5" /></Link>
+        </Button>
         <div className="flex-1">
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold text-gray-900">{data.full_name}</h1>
-            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-700 capitalize">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">{data.full_name}</h1>
+            <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold capitalize text-primary ring-1 ring-inset ring-primary/20">
               {data.role?.replace('_', ' ')}
             </span>
             {profile?.employment_status && (
-              <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize',
-                profile.employment_status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
+              <span className={cn('rounded-full px-2.5 py-1 text-xs font-semibold capitalize ring-1 ring-inset',
+                profile.employment_status === 'active'
+                  ? 'bg-success/10 text-success ring-success/20'
+                  : 'bg-warning/10 text-warning ring-warning/20')}>
                 {profile.employment_status.replace('_', ' ')}
               </span>
             )}
           </div>
-          <p className="text-gray-500 text-sm mt-1">
+          <p className="mt-1 text-sm text-muted-foreground">
             {profile?.designation ?? 'No designation set'}
             {profile?.department && ` · ${profile.department}`}
             {profile?.employee_id && ` · ${profile.employee_id}`}
@@ -75,15 +108,11 @@ export default function StaffDetailPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl w-fit">
-        {TABS.map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            className={cn('px-4 py-2 rounded-lg text-sm font-semibold transition-all',
-              tab === t ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700')}>
-            {t}
-          </button>
-        ))}
-      </div>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof TABS[number])}>
+        <TabsList>
+          {TABS.map(t => <TabsTrigger key={t} value={t}>{t}</TabsTrigger>)}
+        </TabsList>
+      </Tabs>
 
       {tab === 'Profile' && (
         <ProfileTab data={data} profile={profile} staffId={id} editMode={editMode} setEditMode={setEditMode} />
@@ -148,88 +177,96 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
   })
 
-  const ic = "w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-gray-50 focus:bg-white disabled:opacity-60 disabled:bg-gray-50"
-
   const Field = ({ label, name, type = 'text', options }: any) => (
-    <div>
-      <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+    <div className="space-y-1">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
       {options ? (
-        <select className={ic} disabled={!editMode} value={(form as any)[name]} onChange={e => setForm(f => ({ ...f, [name]: e.target.value }))}>
-          {options.map((o: any) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <Select disabled={!editMode} value={((form as any)[name] || EMPTY_OPTION)} onValueChange={v => setForm(f => ({ ...f, [name]: v === EMPTY_OPTION ? '' : v }))}>
+          <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {options.map((o: any) => <SelectItem key={o.value} value={o.value === '' ? EMPTY_OPTION : o.value}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
       ) : (
-        <input type={type} className={ic} disabled={!editMode} value={(form as any)[name]}
-          onChange={e => setForm(f => ({ ...f, [name]: e.target.value }))} />
+        <Input type={type} disabled={!editMode} value={(form as any)[name]}
+          onChange={e => setForm(f => ({ ...f, [name]: e.target.value }))} className="disabled:opacity-60" />
       )}
     </div>
   )
 
   return (
     <div className="space-y-5">
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-gray-900 flex items-center gap-2"><User className="w-4 h-4 text-gray-400" /> Personal & Employment Details</h3>
-          {!editMode ? (
-            <button onClick={() => setEditMode(true)} className="flex items-center gap-1.5 text-sm text-indigo-600 font-medium hover:text-indigo-700">
-              <Edit3 className="w-3.5 h-3.5" /> Edit
-            </button>
-          ) : (
-            <div className="flex gap-2">
-              <button onClick={() => setEditMode(false)} className="text-sm text-gray-500 font-medium px-3 py-1.5">Cancel</button>
-              <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}
-                className="flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-60">
-                {saveMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Save
-              </button>
-            </div>
-          )}
-        </div>
+      <Card>
+        <CardContent className="p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="flex items-center gap-2 font-semibold text-foreground"><User className="h-4 w-4 text-muted-foreground" /> Personal &amp; Employment Details</h3>
+            {!editMode ? (
+              <Button variant="ghost" size="sm" onClick={() => setEditMode(true)} className="text-primary hover:text-primary/80">
+                <Edit3 className="h-3.5 w-3.5" /> Edit
+              </Button>
+            ) : (
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setEditMode(false)}>Cancel</Button>
+                <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+                  {saveMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save
+                </Button>
+              </div>
+            )}
+          </div>
 
-        <div className="grid grid-cols-3 gap-4">
-          <Field label="Employee ID" name="employee_id" />
-          <Field label="Designation" name="designation" />
-          <Field label="Department" name="department" />
-          <Field label="Date of Joining" name="date_of_joining" type="date" />
-          <Field label="Date of Birth" name="date_of_birth" type="date" />
-          <Field label="Gender" name="gender" options={[{value:'',label:'Select'},{value:'male',label:'Male'},{value:'female',label:'Female'},{value:'other',label:'Other'}]} />
-          <Field label="Qualification" name="qualification" />
-          <Field label="Experience (years)" name="experience_years" type="number" />
-          <Field label="Employment Type" name="employment_type" options={[
-            {value:'full_time',label:'Full Time'},{value:'part_time',label:'Part Time'},{value:'contract',label:'Contract'},{value:'probation',label:'Probation'}
-          ]} />
-          <Field label="Employment Status" name="employment_status" options={[
-            {value:'active',label:'Active'},{value:'on_leave',label:'On Leave'},{value:'suspended',label:'Suspended'},{value:'resigned',label:'Resigned'},{value:'terminated',label:'Terminated'}
-          ]} />
-          <Field label="Phone" name="phone" />
-          <Field label="Personal Email" name="personal_email" type="email" />
-        </div>
-      </div>
+          <div className="grid grid-cols-3 gap-4">
+            <Field label="Employee ID" name="employee_id" />
+            <Field label="Designation" name="designation" />
+            <Field label="Department" name="department" />
+            <Field label="Date of Joining" name="date_of_joining" type="date" />
+            <Field label="Date of Birth" name="date_of_birth" type="date" />
+            <Field label="Gender" name="gender" options={[{value:'',label:'Select'},{value:'male',label:'Male'},{value:'female',label:'Female'},{value:'other',label:'Other'}]} />
+            <Field label="Qualification" name="qualification" />
+            <Field label="Experience (years)" name="experience_years" type="number" />
+            <Field label="Employment Type" name="employment_type" options={[
+              {value:'full_time',label:'Full Time'},{value:'part_time',label:'Part Time'},{value:'contract',label:'Contract'},{value:'probation',label:'Probation'}
+            ]} />
+            <Field label="Employment Status" name="employment_status" options={[
+              {value:'active',label:'Active'},{value:'on_leave',label:'On Leave'},{value:'suspended',label:'Suspended'},{value:'resigned',label:'Resigned'},{value:'terminated',label:'Terminated'}
+            ]} />
+            <Field label="Phone" name="phone" />
+            <Field label="Personal Email" name="personal_email" type="email" />
+          </div>
+        </CardContent>
+      </Card>
 
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
-        <h3 className="font-semibold text-gray-900 mb-4">Address</h3>
-        <div className="grid grid-cols-3 gap-4">
-          <div className="col-span-3"><Field label="Address" name="address" /></div>
-          <Field label="City" name="city" />
-          <Field label="State" name="state" />
-        </div>
-      </div>
+      <Card>
+        <CardContent className="p-6">
+          <h3 className="mb-4 font-semibold text-foreground">Address</h3>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="col-span-3"><Field label="Address" name="address" /></div>
+            <Field label="City" name="city" />
+            <Field label="State" name="state" />
+          </div>
+        </CardContent>
+      </Card>
 
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
-        <h3 className="font-semibold text-gray-900 mb-4">Bank & Tax Details</h3>
-        <div className="grid grid-cols-3 gap-4">
-          <Field label="Bank Name" name="bank_name" />
-          <Field label="Account Number" name="bank_account_number" />
-          <Field label="IFSC Code" name="bank_ifsc" />
-          <Field label="PAN Number" name="pan_number" />
-        </div>
-      </div>
+      <Card>
+        <CardContent className="p-6">
+          <h3 className="mb-4 font-semibold text-foreground">Bank &amp; Tax Details</h3>
+          <div className="grid grid-cols-3 gap-4">
+            <Field label="Bank Name" name="bank_name" />
+            <Field label="Account Number" name="bank_account_number" />
+            <Field label="IFSC Code" name="bank_ifsc" />
+            <Field label="PAN Number" name="pan_number" />
+          </div>
+        </CardContent>
+      </Card>
 
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
-        <h3 className="font-semibold text-gray-900 mb-4">Emergency Contact</h3>
-        <div className="grid grid-cols-3 gap-4">
-          <Field label="Contact Name" name="emergency_contact_name" />
-          <Field label="Contact Phone" name="emergency_contact_phone" />
-        </div>
-      </div>
+      <Card>
+        <CardContent className="p-6">
+          <h3 className="mb-4 font-semibold text-foreground">Emergency Contact</h3>
+          <div className="grid grid-cols-3 gap-4">
+            <Field label="Contact Name" name="emergency_contact_name" />
+            <Field label="Contact Phone" name="emergency_contact_phone" />
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -237,64 +274,65 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
 // ── LEAVE TAB ──────────────────────────────────────────────────
 function LeaveTab({ data, balances, staffId, onApprove, onReject, isPending }: any) {
   const STATUS_COLORS: Record<string, string> = {
-    pending: 'bg-amber-100 text-amber-700',
-    approved: 'bg-emerald-100 text-emerald-700',
-    rejected: 'bg-red-100 text-red-700',
-    cancelled: 'bg-gray-100 text-gray-600',
+    pending: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/20',
+    approved: 'bg-success/10 text-success ring-1 ring-inset ring-success/20',
+    rejected: 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/20',
+    cancelled: 'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
   }
 
   return (
     <div className="space-y-5">
       {/* Leave balances */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
         {(balances ?? []).map((b: any) => (
-          <div key={b.leave_type_id} className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-            <p className="text-xs text-gray-400 font-medium">{b.code}</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{b.remaining_days}</p>
-            <p className="text-xs text-gray-400">of {b.total_days} days</p>
-          </div>
+          <Card key={b.leave_type_id}>
+            <CardContent className="p-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground">{b.code}</p>
+              <p className="mt-1 text-2xl font-bold text-foreground">{b.remaining_days}</p>
+              <p className="text-xs text-muted-foreground">of {b.total_days} days</p>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
       {/* Leave requests */}
-      <div className="bg-white rounded-2xl border border-gray-200">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Calendar className="w-4 h-4 text-gray-400" /> Leave History</h3>
-        </div>
-        {(data.recent_leaves ?? []).length === 0 ? (
-          <div className="p-8 text-center text-gray-400">
-            <Calendar className="w-8 h-8 mx-auto mb-2 text-gray-200" />
-            <p className="text-sm font-medium">No leave requests yet</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-50">
-            {(data.recent_leaves ?? []).map((lr: any) => (
-              <div key={lr.id} className="px-6 py-4 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-gray-900">{lr.leave_types?.name ?? 'Leave'}</span>
-                    <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium capitalize', STATUS_COLORS[lr.status])}>{lr.status}</span>
+      <Card>
+        <CardHeader className="border-b border-border">
+          <CardTitle className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /> Leave History</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {(data.recent_leaves ?? []).length === 0 ? (
+            <EmptyState icon={Calendar} title="No leave requests yet" />
+          ) : (
+            <div className="divide-y divide-border">
+              {(data.recent_leaves ?? []).map((lr: any) => (
+                <div key={lr.id} className="flex items-center justify-between px-6 py-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">{lr.leave_types?.name ?? 'Leave'}</span>
+                      <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize', STATUS_COLORS[lr.status])}>{lr.status}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
+                    {lr.reason && <p className="mt-1 text-xs text-muted-foreground">{lr.reason}</p>}
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
-                  {lr.reason && <p className="text-xs text-gray-400 mt-1">{lr.reason}</p>}
+                  {lr.status === 'pending' && (
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => onApprove(lr.id)} disabled={isPending}
+                        className="bg-success/10 text-success shadow-none hover:bg-success/20">
+                        <Check className="h-3.5 w-3.5" /> Approve
+                      </Button>
+                      <Button size="sm" onClick={() => onReject(lr.id)} disabled={isPending}
+                        className="bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20">
+                        <X className="h-3.5 w-3.5" /> Reject
+                      </Button>
+                    </div>
+                  )}
                 </div>
-                {lr.status === 'pending' && (
-                  <div className="flex gap-2">
-                    <button onClick={() => onApprove(lr.id)} disabled={isPending}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-lg hover:bg-emerald-100 disabled:opacity-50">
-                      <Check className="w-3.5 h-3.5" /> Approve
-                    </button>
-                    <button onClick={() => onReject(lr.id)} disabled={isPending}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-red-50 text-red-700 text-xs font-semibold rounded-lg hover:bg-red-100 disabled:opacity-50">
-                      <X className="w-3.5 h-3.5" /> Reject
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -310,9 +348,9 @@ function PayrollTab({ data, staffId, userName }: any) {
   const net = gross - deductions
 
   const PAY_STATUS_COLORS: Record<string, string> = {
-    pending: 'bg-amber-100 text-amber-700',
-    paid: 'bg-emerald-100 text-emerald-700',
-    on_hold: 'bg-red-100 text-red-700',
+    pending: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/20',
+    paid: 'bg-success/10 text-success ring-1 ring-inset ring-success/20',
+    on_hold: 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/20',
   }
 
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -320,79 +358,80 @@ function PayrollTab({ data, staffId, userName }: any) {
   return (
     <div className="space-y-5">
       {/* Salary structure */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-gray-900 flex items-center gap-2"><IndianRupee className="w-4 h-4 text-gray-400" /> Salary Structure</h3>
-          <button onClick={() => setShowSalaryModal(true)} className="flex items-center gap-1.5 text-sm text-indigo-600 font-medium hover:text-indigo-700">
-            <Edit3 className="w-3.5 h-3.5" /> {salary ? 'Update' : 'Set'} Salary
-          </button>
-        </div>
+      <Card>
+        <CardContent className="p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="flex items-center gap-2 font-semibold text-foreground"><IndianRupee className="h-4 w-4 text-muted-foreground" /> Salary Structure</h3>
+            <Button variant="ghost" size="sm" onClick={() => setShowSalaryModal(true)} className="text-primary hover:text-primary/80">
+              <Edit3 className="h-3.5 w-3.5" /> {salary ? 'Update' : 'Set'} Salary
+            </Button>
+          </div>
 
-        {!salary ? (
-          <div className="text-center py-8 text-gray-400">
-            <IndianRupee className="w-8 h-8 mx-auto mb-2 text-gray-200" />
-            <p className="text-sm font-medium">No salary structure set</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-3 gap-x-8 gap-y-3 text-sm">
-            <div><p className="text-xs text-gray-400">Basic Salary</p><p className="font-semibold text-gray-900">₹{Number(salary.basic_salary).toLocaleString('en-IN')}</p></div>
-            <div><p className="text-xs text-gray-400">HRA</p><p className="font-semibold text-gray-900">₹{Number(salary.hra ?? 0).toLocaleString('en-IN')}</p></div>
-            <div><p className="text-xs text-gray-400">DA</p><p className="font-semibold text-gray-900">₹{Number(salary.da ?? 0).toLocaleString('en-IN')}</p></div>
-            <div><p className="text-xs text-gray-400">Conveyance</p><p className="font-semibold text-gray-900">₹{Number(salary.conveyance_allowance ?? 0).toLocaleString('en-IN')}</p></div>
-            <div><p className="text-xs text-gray-400">Medical Allowance</p><p className="font-semibold text-gray-900">₹{Number(salary.medical_allowance ?? 0).toLocaleString('en-IN')}</p></div>
-            <div><p className="text-xs text-gray-400">Other Allowances</p><p className="font-semibold text-gray-900">₹{Number(salary.other_allowances ?? 0).toLocaleString('en-IN')}</p></div>
-            <div className="border-t border-gray-100 pt-3 col-span-3 grid grid-cols-3 gap-x-8">
-              <div><p className="text-xs text-gray-400">Gross Salary</p><p className="font-bold text-emerald-600">₹{gross.toLocaleString('en-IN')}</p></div>
-              <div><p className="text-xs text-gray-400">Total Deductions</p><p className="font-bold text-red-500">₹{deductions.toLocaleString('en-IN')}</p></div>
-              <div><p className="text-xs text-gray-400">Net Salary</p><p className="font-bold text-indigo-600 text-lg">₹{net.toLocaleString('en-IN')}</p></div>
+          {!salary ? (
+            <EmptyState icon={IndianRupee} title="No salary structure set" className="py-8" />
+          ) : (
+            <div className="grid grid-cols-3 gap-x-8 gap-y-3 text-sm">
+              <div><p className="text-xs text-muted-foreground">Basic Salary</p><p className="font-semibold text-foreground">₹{Number(salary.basic_salary).toLocaleString('en-IN')}</p></div>
+              <div><p className="text-xs text-muted-foreground">HRA</p><p className="font-semibold text-foreground">₹{Number(salary.hra ?? 0).toLocaleString('en-IN')}</p></div>
+              <div><p className="text-xs text-muted-foreground">DA</p><p className="font-semibold text-foreground">₹{Number(salary.da ?? 0).toLocaleString('en-IN')}</p></div>
+              <div><p className="text-xs text-muted-foreground">Conveyance</p><p className="font-semibold text-foreground">₹{Number(salary.conveyance_allowance ?? 0).toLocaleString('en-IN')}</p></div>
+              <div><p className="text-xs text-muted-foreground">Medical Allowance</p><p className="font-semibold text-foreground">₹{Number(salary.medical_allowance ?? 0).toLocaleString('en-IN')}</p></div>
+              <div><p className="text-xs text-muted-foreground">Other Allowances</p><p className="font-semibold text-foreground">₹{Number(salary.other_allowances ?? 0).toLocaleString('en-IN')}</p></div>
+              <div className="col-span-3 grid grid-cols-3 gap-x-8 border-t border-border pt-3">
+                <div><p className="text-xs text-muted-foreground">Gross Salary</p><p className="font-bold text-success">₹{gross.toLocaleString('en-IN')}</p></div>
+                <div><p className="text-xs text-muted-foreground">Total Deductions</p><p className="font-bold text-destructive">₹{deductions.toLocaleString('en-IN')}</p></div>
+                <div><p className="text-xs text-muted-foreground">Net Salary</p><p className="text-lg font-bold text-primary">₹{net.toLocaleString('en-IN')}</p></div>
+              </div>
+              <div className="col-span-3 grid grid-cols-3 gap-x-8 border-t border-border pt-2 text-xs text-muted-foreground">
+                <div>PF: ₹{Number(salary.pf_deduction ?? 0).toLocaleString('en-IN')}</div>
+                <div>Prof. Tax: ₹{Number(salary.professional_tax ?? 0).toLocaleString('en-IN')}</div>
+                <div>Other: ₹{Number(salary.other_deductions ?? 0).toLocaleString('en-IN')}</div>
+              </div>
             </div>
-            <div className="col-span-3 grid grid-cols-3 gap-x-8 text-xs text-gray-400 pt-2 border-t border-gray-50">
-              <div>PF: ₹{Number(salary.pf_deduction ?? 0).toLocaleString('en-IN')}</div>
-              <div>Prof. Tax: ₹{Number(salary.professional_tax ?? 0).toLocaleString('en-IN')}</div>
-              <div>Other: ₹{Number(salary.other_deductions ?? 0).toLocaleString('en-IN')}</div>
-            </div>
-          </div>
-        )}
-      </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Payslips history */}
-      <div className="bg-white rounded-2xl border border-gray-200">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-900">Payslip History</h3>
-        </div>
-        {(data.recent_payslips ?? []).length === 0 ? (
-          <div className="p-8 text-center text-gray-400">
-            <IndianRupee className="w-8 h-8 mx-auto mb-2 text-gray-200" />
-            <p className="text-sm font-medium">No payslips generated yet</p>
-            <p className="text-xs mt-1">Generate from HR → Payroll</p>
-          </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="px-6 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">Period</th>
-                <th className="px-6 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">Gross</th>
-                <th className="px-6 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">Deductions</th>
-                <th className="px-6 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">Net Pay</th>
-                <th className="px-6 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {(data.recent_payslips ?? []).map((p: any) => (
-                <tr key={p.id}>
-                  <td className="px-6 py-3 font-medium text-gray-900">{MONTHS[p.month-1]} {p.year}</td>
-                  <td className="px-6 py-3 text-gray-600">₹{Number(p.gross_salary).toLocaleString('en-IN')}</td>
-                  <td className="px-6 py-3 text-gray-600">₹{Number(p.total_deductions).toLocaleString('en-IN')}</td>
-                  <td className="px-6 py-3 font-semibold text-gray-900">₹{Number(p.net_salary).toLocaleString('en-IN')}</td>
-                  <td className="px-6 py-3">
-                    <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium capitalize', PAY_STATUS_COLORS[p.payment_status])}>{p.payment_status.replace('_',' ')}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <Card>
+        <CardHeader className="border-b border-border">
+          <CardTitle>Payslip History</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {(data.recent_payslips ?? []).length === 0 ? (
+            <EmptyState
+              icon={IndianRupee}
+              title="No payslips generated yet"
+              description="Generate from HR → Payroll"
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Period</TableHead>
+                  <TableHead>Gross</TableHead>
+                  <TableHead>Deductions</TableHead>
+                  <TableHead>Net Pay</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(data.recent_payslips ?? []).map((p: any) => (
+                  <TableRow key={p.id} className="cursor-default">
+                    <TableCell className="font-medium text-foreground">{MONTHS[p.month-1]} {p.year}</TableCell>
+                    <TableCell className="text-muted-foreground">₹{Number(p.gross_salary).toLocaleString('en-IN')}</TableCell>
+                    <TableCell className="text-muted-foreground">₹{Number(p.total_deductions).toLocaleString('en-IN')}</TableCell>
+                    <TableCell className="font-semibold text-foreground">₹{Number(p.net_salary).toLocaleString('en-IN')}</TableCell>
+                    <TableCell>
+                      <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize', PAY_STATUS_COLORS[p.payment_status])}>{p.payment_status.replace('_',' ')}</span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
       {showSalaryModal && (
         <SalaryModal staffId={staffId} userName={userName} existing={salary} onClose={() => {
@@ -434,24 +473,23 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
     } finally { setLoading(false) }
   }
 
-  const ic = "w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-gray-50 focus:bg-white"
-
   const Field = ({ label, name }: any) => (
-    <div>
-      <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
-      <input type="number" className={ic} value={(form as any)[name]} onChange={e => setForm(f => ({ ...f, [name]: e.target.value }))} placeholder="0" />
+    <div className="space-y-1">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Input type="number" value={(form as any)[name]} onChange={e => setForm(f => ({ ...f, [name]: e.target.value }))} placeholder="0" />
     </div>
   )
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Salary Structure — {userName}</h2>
-        </div>
-        <div className="px-6 py-5 space-y-4">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Salary Structure — {userName}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
           <div>
-            <p className="text-xs font-semibold text-gray-400 uppercase mb-2">Earnings</p>
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Earnings</p>
             <div className="grid grid-cols-3 gap-3">
               <Field label="Basic Salary *" name="basic_salary" />
               <Field label="HRA" name="hra" />
@@ -462,7 +500,7 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
             </div>
           </div>
           <div>
-            <p className="text-xs font-semibold text-gray-400 uppercase mb-2">Deductions</p>
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Deductions</p>
             <div className="grid grid-cols-3 gap-3">
               <Field label="PF" name="pf_deduction" />
               <Field label="Professional Tax" name="professional_tax" />
@@ -470,14 +508,14 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
             </div>
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSave} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Save Salary Structure
-          </button>
-        </div>
-      </div>
-    </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Save Salary Structure
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -6,6 +6,9 @@ import { cn } from '@/lib/utils'
 import { ArrowLeft, Loader2, Save, Check, ShieldCheck } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 
 // ═══════════════════════════════════════════════════════════════
 // UNIFIED ROLE PERMISSIONS PAGE (v2)
@@ -134,30 +137,29 @@ export default function RolePermissionsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div className="flex items-start gap-4">
-          <Link href="/hr/staff" className="p-2 hover:bg-gray-100 rounded-xl transition-colors mt-1">
-            <ArrowLeft className="w-5 h-5 text-gray-500" />
-          </Link>
+        <div className="flex items-start gap-2">
+          <Button variant="ghost" size="icon" asChild className="mt-1 shrink-0">
+            <Link href="/hr/staff" aria-label="Back to staff"><ArrowLeft className="h-5 w-5" /></Link>
+          </Button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Role Permissions</h1>
-            <p className="text-gray-500 text-sm mt-0.5">Control what each role can do, by fine-grained permission</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Role Permissions</h1>
+            <p className="mt-0.5 text-sm text-muted-foreground">Control what each role can do, by fine-grained permission</p>
           </div>
         </div>
-        <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !activeRoleId}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-60 shadow-sm shadow-indigo-200">
-          {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save Permissions
-        </button>
+        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !activeRoleId}>
+          {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Permissions
+        </Button>
       </div>
 
       {/* Role tabs */}
       {rolesLoading ? (
-        <div className="h-10 bg-gray-100 rounded-xl animate-pulse w-64" />
+        <Skeleton className="h-10 w-64 rounded-xl" />
       ) : (
-        <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl w-fit overflow-x-auto max-w-full">
+        <div className="flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1">
           {editableRoles.map((r: any) => (
             <button key={r.id} onClick={() => setActiveRoleId(r.id)}
-              className={cn('px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap',
-                activeRoleId === r.id ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700')}>
+              className={cn('whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-all',
+                activeRoleId === r.id ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
               {r.name}
             </button>
           ))}
@@ -165,11 +167,11 @@ export default function RolePermissionsPage() {
       )}
 
       {/* Permission grid, grouped by module */}
-      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+      <Card className="overflow-hidden">
         {rolePermsLoading ? (
-          <div className="p-12 text-center"><div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" /></div>
+          <div className="p-12 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" /></div>
         ) : (
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-border">
             {moduleOrder.filter(m => groupedPermissions[m]?.length).map(module => {
               const perms = groupedPermissions[module]
               const allOn = perms.every(p => selectedCodes.has(p.permission_code))
@@ -177,10 +179,10 @@ export default function RolePermissionsPage() {
 
               return (
                 <div key={module} className="px-5 py-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-900">{MODULE_LABELS[module] ?? module}</h3>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-foreground">{MODULE_LABELS[module] ?? module}</h3>
                     <button onClick={() => toggleModule(perms.map(p => p.permission_code), allOn)}
-                      className="text-xs text-indigo-600 font-medium hover:underline">
+                      className="text-xs font-medium text-primary hover:underline">
                       {allOn ? 'Clear all' : 'Select all'}
                     </button>
                   </div>
@@ -190,11 +192,11 @@ export default function RolePermissionsPage() {
                       const actionLabel = ACTION_LABELS[p.action] ?? p.action
                       return (
                         <button key={p.permission_code} onClick={() => toggle(p.permission_code)}
-                          className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all',
-                            checked ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300')}>
-                          <span className={cn('w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0',
-                            checked ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300')}>
-                            {checked && <Check className="w-2.5 h-2.5 text-white" />}
+                          className={cn('flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all',
+                            checked ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border bg-card text-muted-foreground hover:border-foreground/30')}>
+                          <span className={cn('flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded border',
+                            checked ? 'border-primary bg-primary' : 'border-border')}>
+                            {checked && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
                           </span>
                           {actionLabel}
                         </button>
@@ -206,10 +208,10 @@ export default function RolePermissionsPage() {
             })}
           </div>
         )}
-      </div>
+      </Card>
 
-      <div className="flex items-start gap-2 text-xs text-gray-400">
-        <ShieldCheck className="w-4 h-4 flex-shrink-0 mt-0.5" />
+      <div className="flex items-start gap-2 text-xs text-muted-foreground">
+        <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0" />
         <p>
           School Admin always has full access to every module and isn't shown here.
           Changes take effect immediately for all users with this role — they may need to refresh their page to see updated menus.

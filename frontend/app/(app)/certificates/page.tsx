@@ -2,9 +2,39 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { certificateApi, studentsApi } from '@/lib/api'
-import { cn, formatDate } from '@/lib/utils'
-import { Plus, Award, FileText, Eye, Loader2, X, Printer } from 'lucide-react'
+import { formatDate } from '@/lib/utils'
+import { Plus, Award, FileText, Loader2, Printer } from 'lucide-react'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent } from '@/components/ui/card'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { EmptyState } from '@/components/shared/EmptyState'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table'
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
 
 const CERT_TYPES = [
   { value: 'character',     label: 'Character Certificate' },
@@ -53,35 +83,27 @@ export default function CertificatesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Certificates</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Issue and manage student certificates</p>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Certificates</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">Issue and manage student certificates</p>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={() => setShowNewTemplate(true)}
-            className="flex items-center gap-2 border border-gray-200 text-gray-600 px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-all">
-            <FileText className="w-4 h-4" /> New Template
-          </button>
-          <button onClick={() => setShowIssue(true)}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-all">
-            <Plus className="w-4 h-4" /> Issue Certificate
-          </button>
+          <Button variant="outline" onClick={() => setShowNewTemplate(true)}>
+            <FileText className="h-4 w-4" /> New Template
+          </Button>
+          <Button onClick={() => setShowIssue(true)}>
+            <Plus className="h-4 w-4" /> Issue Certificate
+          </Button>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
-        {[
-          { key: 'issue',     label: 'Issue Certificate' },
-          { key: 'templates', label: 'Templates' },
-          { key: 'issued',    label: 'Issued History' },
-        ].map(t => (
-          <button key={t.key} onClick={() => setTab(t.key as any)}
-            className={cn('px-4 py-2 rounded-lg text-sm font-medium transition-all',
-              tab === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs value={tab} onValueChange={v => setTab(v as any)}>
+        <TabsList>
+          <TabsTrigger value="issue">Issue Certificate</TabsTrigger>
+          <TabsTrigger value="templates">Templates</TabsTrigger>
+          <TabsTrigger value="issued">Issued History</TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       {/* Issue Certificate tab */}
       {tab === 'issue' && (
@@ -89,22 +111,25 @@ export default function CertificatesPage() {
           {CERT_TYPES.map(ct => {
             const tmpl = (templates ?? []).find((t: any) => t.certificate_type === ct.value)
             return (
-              <div key={ct.value}
-                className="bg-white rounded-2xl border border-gray-200 p-6 hover:border-indigo-300 hover:shadow-sm transition-all cursor-pointer"
+              <Card key={ct.value}
+                className="cursor-pointer transition-all hover:border-primary/40 hover:shadow-md"
                 onClick={() => setShowIssue(true)}>
-                <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
-                  <Award className="w-6 h-6 text-indigo-600" />
-                </div>
-                <p className="font-semibold text-gray-900">{ct.label}</p>
-                <p className="text-xs text-gray-400 mt-1">
-                  {tmpl ? 'Custom template ready' : 'Default template'}
-                </p>
-                <button
-                  onClick={e => { e.stopPropagation(); setShowIssue(true) }}
-                  className="mt-4 w-full py-2 bg-indigo-50 text-indigo-600 rounded-xl text-sm font-semibold hover:bg-indigo-100 transition-colors">
-                  Issue →
-                </button>
-              </div>
+                <CardContent className="p-6">
+                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10">
+                    <Award className="h-6 w-6 text-primary" />
+                  </div>
+                  <p className="font-semibold text-foreground">{ct.label}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {tmpl ? 'Custom template ready' : 'Default template'}
+                  </p>
+                  <Button
+                    variant="secondary"
+                    className="mt-4 w-full bg-primary/10 text-primary hover:bg-primary/20"
+                    onClick={e => { e.stopPropagation(); setShowIssue(true) }}>
+                    Issue →
+                  </Button>
+                </CardContent>
+              </Card>
             )
           })}
         </div>
@@ -112,82 +137,76 @@ export default function CertificatesPage() {
 
       {/* Templates tab */}
       {tab === 'templates' && (
-        <div className="bg-white rounded-2xl border border-gray-200">
+        <Card>
           {!(templates ?? []).length ? (
-            <div className="p-12 text-center text-gray-400">
-              <FileText className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-              <p className="font-medium">No custom templates yet</p>
-              <p className="text-sm mt-1">Default templates are used when no custom template exists</p>
-              <button onClick={() => setShowNewTemplate(true)}
-                className="mt-4 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700">
-                Create First Template
-              </button>
-            </div>
+            <EmptyState
+              icon={FileText}
+              title="No custom templates yet"
+              description="Default templates are used when no custom template exists"
+              action={<Button onClick={() => setShowNewTemplate(true)}>Create First Template</Button>}
+            />
           ) : (
-            <div className="divide-y divide-gray-50">
+            <div className="divide-y divide-border">
               {(templates ?? []).map((t: any) => (
                 <div key={t.id} className="flex items-center justify-between px-6 py-4">
                   <div>
-                    <p className="font-semibold text-gray-900">{t.name}</p>
-                    <p className="text-xs text-indigo-600 mt-0.5 capitalize">{t.certificate_type.replace('_', ' ')} Certificate</p>
-                    <p className="text-xs text-gray-400 mt-0.5">Created {formatDate(t.created_at)}</p>
+                    <p className="font-semibold text-foreground">{t.name}</p>
+                    <p className="mt-0.5 text-xs capitalize text-primary">{t.certificate_type.replace('_', ' ')} Certificate</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">Created {formatDate(t.created_at)}</p>
                   </div>
-                  <span className="text-xs bg-green-100 text-green-700 px-2.5 py-1 rounded-full font-medium">Active</span>
+                  <Badge variant="success">Active</Badge>
                 </div>
               ))}
             </div>
           )}
-        </div>
+        </Card>
       )}
 
       {/* Issued history tab */}
       {tab === 'issued' && (
-        <div className="bg-white rounded-2xl border border-gray-200">
+        <Card className="overflow-hidden">
           {!(issued ?? []).length ? (
-            <div className="p-12 text-center text-gray-400">
-              <Award className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-              <p className="font-medium">No certificates issued yet</p>
-            </div>
+            <EmptyState icon={Award} title="No certificates issued yet" />
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Cert No.</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Student</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Type</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Issued On</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Issued By</th>
-                  <th className="px-5 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Cert No.</TableHead>
+                  <TableHead>Student</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Issued On</TableHead>
+                  <TableHead>Issued By</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {(issued ?? []).map((c: any) => (
-                  <tr key={c.id} className="hover:bg-gray-50">
-                    <td className="px-5 py-3 font-mono text-xs text-gray-500">{c.certificate_number}</td>
-                    <td className="px-5 py-3 font-medium text-gray-900">
+                  <TableRow key={c.id} className="cursor-default">
+                    <TableCell className="font-mono text-xs text-muted-foreground">{c.certificate_number}</TableCell>
+                    <TableCell className="font-medium text-foreground">
                       {c.students?.first_name} {c.students?.last_name}
-                      <span className="text-xs text-gray-400 ml-2">{c.students?.classes?.name}</span>
-                    </td>
-                    <td className="px-5 py-3">
-                      <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full text-xs font-medium capitalize">
+                      <span className="ml-2 text-xs text-muted-foreground">{c.students?.classes?.name}</span>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary" className="bg-primary/10 capitalize text-primary">
                         {c.certificate_type.replace('_', ' ')}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-gray-500 text-xs">{formatDate(c.created_at)}</td>
-                    <td className="px-5 py-3 text-gray-500 text-xs">{c.users?.full_name}</td>
-                    <td className="px-5 py-3">
-                      <a href={certificateApi.print(c.certificate_number)}
-                        target="_blank" rel="noreferrer"
-                        className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700 font-medium">
-                        <Printer className="w-3 h-3" /> Print
-                      </a>
-                    </td>
-                  </tr>
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{formatDate(c.created_at)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{c.users?.full_name}</TableCell>
+                    <TableCell>
+                      <Button asChild variant="link" size="sm" className="h-auto p-0">
+                        <a href={certificateApi.print(c.certificate_number)} target="_blank" rel="noreferrer">
+                          <Printer className="h-3 w-3" /> Print
+                        </a>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           )}
-        </div>
+        </Card>
       )}
 
       {showNewTemplate && (
@@ -222,51 +241,50 @@ function NewTemplateModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-xl max-h-[90vh] flex flex-col">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Create Certificate Template</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
+    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Create Certificate Template</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Template Name *</label>
-              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="e.g. Standard Character Certificate"
-                className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+            <div className="space-y-1.5">
+              <Label htmlFor="tmpl-name">Template Name *</Label>
+              <Input id="tmpl-name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. Standard Character Certificate" />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Type *</label>
-              <select value={form.certificate_type}
-                onChange={e => setForm(f => ({ ...f, certificate_type: e.target.value, content: DEFAULT_CONTENT[e.target.value] ?? '' }))}
-                className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-                {CERT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-              </select>
+            <div className="space-y-1.5">
+              <Label>Type *</Label>
+              <Select value={form.certificate_type}
+                onValueChange={v => setForm(f => ({ ...f, certificate_type: v, content: DEFAULT_CONTENT[v] ?? '' }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CERT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+          <div className="space-y-1.5">
+            <Label htmlFor="tmpl-content">
               Content *
-              <span className="text-xs text-gray-400 font-normal ml-2">
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
                 Use: {`{{student_name}} {{class}} {{admission_no}} {{date}} {{school_name}} {{father_name}} {{extra_note}}`}
               </span>
-            </label>
-            <textarea rows={10} value={form.content}
+            </Label>
+            <Textarea id="tmpl-content" rows={10} value={form.content}
               onChange={e => setForm(f => ({ ...f, content: e.target.value }))}
-              className="w-full px-4 py-3 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none font-mono" />
+              className="resize-none font-mono" />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSubmit} disabled={loading}
-            className="px-5 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
             Save Template
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -321,60 +339,60 @@ function IssueCertificateModal({ templates, onClose }: { templates: any[], onClo
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Issue Certificate</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Student *</label>
-            <select value={form.student_id}
-              onChange={e => setForm(f => ({ ...f, student_id: e.target.value }))}
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-              <option value="">Select student...</option>
-              {(students ?? []).map((s: any) => (
-                <option key={s.id} value={s.id}>
-                  {s.first_name} {s.last_name} — {s.classes?.name}
-                </option>
-              ))}
-            </select>
+    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Issue Certificate</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Student *</Label>
+            <Select value={form.student_id || undefined}
+              onValueChange={v => setForm(f => ({ ...f, student_id: v }))}>
+              <SelectTrigger><SelectValue placeholder="Select student..." /></SelectTrigger>
+              <SelectContent>
+                {(students ?? []).map((s: any) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.first_name} {s.last_name} — {s.classes?.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Certificate Type *</label>
-            <select value={form.certificate_type}
-              onChange={e => setForm(f => ({ ...f, certificate_type: e.target.value }))}
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-              {CERT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
+          <div className="space-y-1.5">
+            <Label>Certificate Type *</Label>
+            <Select value={form.certificate_type}
+              onValueChange={v => setForm(f => ({ ...f, certificate_type: v }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {CERT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
             {matchingTemplate && (
-              <p className="text-xs text-green-600 mt-1">✓ Using custom template: {matchingTemplate.name}</p>
+              <p className="text-xs text-success">✓ Using custom template: {matchingTemplate.name}</p>
             )}
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Father's Name</label>
-            <input value={form.extra_data.father_name}
+          <div className="space-y-1.5">
+            <Label htmlFor="cert-father">Father&apos;s Name</Label>
+            <Input id="cert-father" value={form.extra_data.father_name}
               onChange={e => setForm(f => ({ ...f, extra_data: { ...f.extra_data, father_name: e.target.value } }))}
-              placeholder="For character/bonafide certificates"
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              placeholder="For character/bonafide certificates" />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Additional Note</label>
-            <textarea rows={2} value={form.extra_data.extra_note}
+          <div className="space-y-1.5">
+            <Label htmlFor="cert-note">Additional Note</Label>
+            <Textarea id="cert-note" rows={2} value={form.extra_data.extra_note}
               onChange={e => setForm(f => ({ ...f, extra_data: { ...f.extra_data, extra_note: e.target.value } }))}
               placeholder="e.g. purpose of certificate, achievement details..."
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none" />
+              className="resize-none" />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleIssue} disabled={loading || !form.student_id}
-            className="px-5 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {loading ? <><Loader2 className="w-4 h-4 animate-spin" /> Issuing...</> : '🎓 Issue & Print'}
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleIssue} disabled={loading || !form.student_id}>
+            {loading ? <><Loader2 className="h-4 w-4 animate-spin" /> Issuing...</> : '🎓 Issue & Print'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -5,6 +5,7 @@ import { hrmsApi, complaintsApi, studentsApi, feeApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
 import { UserX, MessageSquareWarning, FileWarning, Wallet, CalendarCheck, AlertTriangle } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 const todayStr = (() => {
   const d = new Date()
@@ -89,73 +90,79 @@ export function NeedsAttentionToday() {
 
   const attendancePct = attendanceToday?.percentage ?? 0
   const attendanceColor = !attendanceToday?.is_working_day
-    ? 'text-gray-400 bg-gray-50'
-    : attendancePct >= 75 ? 'text-emerald-600 bg-emerald-50'
-    : attendancePct >= 50 ? 'text-amber-600 bg-amber-50'
-    : 'text-rose-600 bg-rose-50'
+    ? 'text-muted-foreground bg-muted'
+    : attendancePct >= 75 ? 'text-success bg-success/10'
+    : attendancePct >= 50 ? 'text-warning bg-warning/10'
+    : 'text-destructive bg-destructive/10'
 
   const unmarkedSections: any[] = attendanceToday?.unmarked_sections ?? []
   const UNMARKED_SHOWN = 8
   const sectionLabel = (s: any) => `${s.class_name ?? 'Unassigned'}${s.section_name ? ` · ${s.section_name}` : ''}`
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6">
-      <div className="flex items-center gap-2 mb-5">
-        <AlertTriangle className="w-4 h-4 text-amber-500" />
-        <h3 className="font-semibold text-gray-900">Needs Attention Today</h3>
-      </div>
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        {tiles.map(t => (
-          <Link key={t.key} href={t.href}
-            className="group rounded-xl border border-gray-100 p-4 hover:border-gray-200 hover:shadow-sm transition-all">
-            <div className="flex items-center justify-between mb-2">
-              <t.icon className={cn('w-4 h-4', t.count > 0 ? 'text-amber-500' : 'text-gray-300')} />
-              <span className={cn('text-2xl font-bold', t.count > 0 ? 'text-gray-900' : 'text-gray-300')}>{t.count}</span>
-            </div>
-            <p className="text-xs font-medium text-gray-600">{t.label}</p>
-            <p className="text-[11px] text-gray-400 mt-0.5 truncate">{t.sub}</p>
-          </Link>
-        ))}
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-warning" /> Needs Attention Today
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+          {tiles.map(t => (
+            <Link
+              key={t.key}
+              href={t.href}
+              className="group rounded-xl border border-border p-4 transition-all hover:shadow-sm hover:bg-muted/40"
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <t.icon className={cn('h-4 w-4', t.count > 0 ? 'text-warning' : 'text-muted-foreground/50')} />
+                <span className={cn('text-2xl font-bold', t.count > 0 ? 'text-foreground' : 'text-muted-foreground/50')}>{t.count}</span>
+              </div>
+              <p className="text-xs font-medium text-foreground">{t.label}</p>
+              <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{t.sub}</p>
+            </Link>
+          ))}
 
-        {canAttendance && (
-          <Link href="/attendance" className="group rounded-xl border border-gray-100 p-4 hover:border-gray-200 hover:shadow-sm transition-all">
-            <div className="flex items-center justify-between mb-2">
-              <CalendarCheck className={cn('w-4 h-4', attendanceColor.split(' ')[0])} />
-              <span className={cn('text-xs font-bold px-2 py-0.5 rounded-full', attendanceColor)}>
-                {attendanceToday?.is_working_day ? `${attendancePct}%` : 'Off'}
-              </span>
-            </div>
-            <p className="text-xs font-medium text-gray-600">Today's Attendance</p>
-            <p className="text-[11px] text-gray-400 mt-0.5">
-              {!attendanceToday
-                ? 'Loading...'
-                : !attendanceToday.is_working_day
-                ? 'Holiday / weekly off'
-                : `${attendanceToday.sections_marked}/${attendanceToday.sections_total} sections marked`}
-            </p>
-          </Link>
-        )}
-      </div>
-
-      {canAttendance && attendanceToday?.is_working_day && unmarkedSections.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-gray-100">
-          <p className="text-xs font-medium text-rose-600 mb-2">
-            {unmarkedSections.length} class{unmarkedSections.length !== 1 ? 'es' : ''}/section{unmarkedSections.length !== 1 ? 's' : ''} haven't marked attendance yet
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {unmarkedSections.slice(0, UNMARKED_SHOWN).map((s: any, i: number) => (
-              <span key={i} className="px-2 py-1 rounded-lg text-[11px] font-medium bg-rose-50 text-rose-600 border border-rose-100">
-                {sectionLabel(s)}
-              </span>
-            ))}
-            {unmarkedSections.length > UNMARKED_SHOWN && (
-              <Link href="/attendance" className="px-2 py-1 rounded-lg text-[11px] font-medium text-gray-500 hover:text-gray-700">
-                +{unmarkedSections.length - UNMARKED_SHOWN} more →
-              </Link>
-            )}
-          </div>
+          {canAttendance && (
+            <Link href="/attendance" className="group rounded-xl border border-border p-4 transition-all hover:shadow-sm hover:bg-muted/40">
+              <div className="mb-2 flex items-center justify-between">
+                <CalendarCheck className={cn('h-4 w-4', attendanceColor.split(' ')[0])} />
+                <span className={cn('rounded-full px-2 py-0.5 text-xs font-bold', attendanceColor)}>
+                  {attendanceToday?.is_working_day ? `${attendancePct}%` : 'Off'}
+                </span>
+              </div>
+              <p className="text-xs font-medium text-foreground">Today&apos;s Attendance</p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {!attendanceToday
+                  ? 'Loading...'
+                  : !attendanceToday.is_working_day
+                  ? 'Holiday / weekly off'
+                  : `${attendanceToday.sections_marked}/${attendanceToday.sections_total} sections marked`}
+              </p>
+            </Link>
+          )}
         </div>
-      )}
-    </div>
+
+        {canAttendance && attendanceToday?.is_working_day && unmarkedSections.length > 0 && (
+          <div className="mt-4 border-t border-border pt-4">
+            <p className="mb-2 text-xs font-medium text-destructive">
+              {unmarkedSections.length} class{unmarkedSections.length !== 1 ? 'es' : ''}/section{unmarkedSections.length !== 1 ? 's' : ''} haven&apos;t marked attendance yet
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {unmarkedSections.slice(0, UNMARKED_SHOWN).map((s: any, i: number) => (
+                <span key={i} className="rounded-lg border border-destructive/20 bg-destructive/10 px-2 py-1 text-[11px] font-medium text-destructive">
+                  {sectionLabel(s)}
+                </span>
+              ))}
+              {unmarkedSections.length > UNMARKED_SHOWN && (
+                <Link href="/attendance" className="rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground">
+                  +{unmarkedSections.length - UNMARKED_SHOWN} more →
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }

@@ -1,24 +1,35 @@
 'use client'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, LabelList } from 'recharts'
 import { TrendingUp, Users } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 // Sequential pipeline stages, in the order a real inquiry actually moves
 // through. Rejected/Lost are deliberately excluded from this chart — they
 // are exits from the pipeline, not a step in it, and mixing them into a
 // left-to-right stage order would misread as "the pipeline gets worse at
 // the end" rather than "these are the ones that left".
+// Series colors use fixed HSL values that read well in both light and dark mode.
 const STAGE_ORDER = [
-  { key: 'new', label: 'New', color: '#3b82f6' },
-  { key: 'follow_up', label: 'Follow Up', color: '#eab308' },
-  { key: 'interested', label: 'Interested', color: '#a855f7' },
-  { key: 'documents_submitted', label: 'Docs Submitted', color: '#f97316' },
-  { key: 'approved', label: 'Approved', color: '#14b8a6' },
-  { key: 'admitted', label: 'Admitted', color: '#22c55e' },
+  { key: 'new', label: 'New', color: 'hsl(243 75% 62%)' },
+  { key: 'follow_up', label: 'Follow Up', color: 'hsl(38 92% 55%)' },
+  { key: 'interested', label: 'Interested', color: 'hsl(262 70% 62%)' },
+  { key: 'documents_submitted', label: 'Docs Submitted', color: 'hsl(280 65% 65%)' },
+  { key: 'approved', label: 'Approved', color: 'hsl(173 58% 45%)' },
+  { key: 'admitted', label: 'Admitted', color: 'hsl(152 62% 45%)' },
 ]
 const EXIT_STAGES = [
-  { key: 'rejected', label: 'Rejected', color: '#ef4444' },
-  { key: 'lost', label: 'Lost', color: '#9ca3af' },
+  { key: 'rejected', label: 'Rejected', color: 'hsl(0 84% 62%)' },
+  { key: 'lost', label: 'Lost', color: 'hsl(var(--muted-foreground))' },
 ]
+
+const TOOLTIP_STYLE = {
+  border: '1px solid hsl(var(--border))',
+  borderRadius: 12,
+  fontSize: 13,
+  background: 'hsl(var(--popover))',
+  color: 'hsl(var(--popover-foreground))',
+  boxShadow: '0 8px 24px -8px rgb(0 0 0 / 0.2)',
+}
 
 export function PipelineCharts({ stats }: { stats: any }) {
   const byStatus = stats?.by_status ?? []
@@ -36,70 +47,78 @@ export function PipelineCharts({ stats }: { stats: any }) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Pipeline distribution */}
-      <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-200 p-6">
-        <div className="flex items-center justify-between mb-1">
-          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-gray-400" /> Pipeline Distribution
-          </h3>
-          {exitTotal > 0 && (
-            <span className="text-xs text-gray-400">
-              {exitData.map(s => `${s.count} ${s.label.toLowerCase()}`).join(' · ')}
-            </span>
-          )}
-        </div>
-        <p className="text-xs text-gray-400 mb-4">Inquiries currently sitting at each stage</p>
-        {!hasPipelineData ? (
-          <div className="h-[220px] flex flex-col items-center justify-center text-gray-300">
-            <TrendingUp className="w-10 h-10 mb-2" />
-            <p className="text-sm text-gray-400">No inquiries in the pipeline yet</p>
+      <Card className="lg:col-span-2">
+        <CardHeader className="space-y-1 pb-4">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-muted-foreground" /> Pipeline Distribution
+            </CardTitle>
+            {exitTotal > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {exitData.map(s => `${s.count} ${s.label.toLowerCase()}`).join(' · ')}
+              </span>
+            )}
           </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={pipelineData} margin={{ top: 8, right: 24, left: -10 }}>
-              <CartesianGrid vertical={false} stroke="#f3f4f6" />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={28} allowDecimals={false} />
-              <Tooltip
-                contentStyle={{ border: '1px solid #e5e7eb', borderRadius: 10, fontSize: 13, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)' }}
-                cursor={{ fill: '#f9fafb', radius: 6 }}
-                formatter={(value: any) => [value, 'Inquiries']}
-              />
-              <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={56}>
-                {pipelineData.map((s, i) => <Cell key={i} fill={s.color} />)}
-                <LabelList dataKey="count" position="top" style={{ fontSize: 12, fontWeight: 600, fill: '#374151' }} />
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </div>
+          <p className="text-xs text-muted-foreground">Inquiries currently sitting at each stage</p>
+        </CardHeader>
+        <CardContent>
+          {!hasPipelineData ? (
+            <div className="h-[220px] flex flex-col items-center justify-center text-muted-foreground">
+              <TrendingUp className="w-10 h-10 mb-2 opacity-40" />
+              <p className="text-sm">No inquiries in the pipeline yet</p>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={pipelineData} margin={{ top: 8, right: 24, left: -10 }}>
+                <CartesianGrid vertical={false} stroke="hsl(var(--border))" />
+                <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} width={28} allowDecimals={false} />
+                <Tooltip
+                  contentStyle={TOOLTIP_STYLE}
+                  cursor={{ fill: 'hsl(var(--muted))', radius: 6 }}
+                  formatter={(value: any) => [value, 'Inquiries']}
+                />
+                <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={56}>
+                  {pipelineData.map((s, i) => <Cell key={i} fill={s.color} />)}
+                  <LabelList dataKey="count" position="top" style={{ fontSize: 12, fontWeight: 600, fill: 'hsl(var(--foreground))' }} />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Source breakdown */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
-        <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-1">
-          <Users className="w-4 h-4 text-gray-400" /> Inquiries by Source
-        </h3>
-        <p className="text-xs text-gray-400 mb-4">Where leads are coming from</p>
-        {!hasSourceData ? (
-          <div className="h-[220px] flex flex-col items-center justify-center text-gray-300">
-            <Users className="w-10 h-10 mb-2" />
-            <p className="text-sm text-gray-400">No inquiries yet</p>
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={Math.max(200, sourceData.length * 34)}>
-            <BarChart data={sourceData} layout="vertical" margin={{ left: 8, right: 24 }}>
-              <CartesianGrid horizontal={false} stroke="#f3f4f6" />
-              <XAxis type="number" tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} allowDecimals={false} />
-              <YAxis type="category" dataKey="source" tick={{ fontSize: 12, fill: '#4b5563' }} tickLine={false} axisLine={false} width={110} />
-              <Tooltip
-                contentStyle={{ border: '1px solid #e5e7eb', borderRadius: 10, fontSize: 13, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)' }}
-                cursor={{ fill: '#f9fafb' }}
-                formatter={(value: any) => [value, 'Inquiries']}
-              />
-              <Bar dataKey="count" fill="#6366f1" radius={[0, 6, 6, 0]} maxBarSize={20} />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </div>
+      <Card>
+        <CardHeader className="space-y-1 pb-4">
+          <CardTitle className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-muted-foreground" /> Inquiries by Source
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">Where leads are coming from</p>
+        </CardHeader>
+        <CardContent>
+          {!hasSourceData ? (
+            <div className="h-[220px] flex flex-col items-center justify-center text-muted-foreground">
+              <Users className="w-10 h-10 mb-2 opacity-40" />
+              <p className="text-sm">No inquiries yet</p>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={Math.max(200, sourceData.length * 34)}>
+              <BarChart data={sourceData} layout="vertical" margin={{ left: 8, right: 24 }}>
+                <CartesianGrid horizontal={false} stroke="hsl(var(--border))" />
+                <XAxis type="number" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} allowDecimals={false} />
+                <YAxis type="category" dataKey="source" tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} width={110} />
+                <Tooltip
+                  contentStyle={TOOLTIP_STYLE}
+                  cursor={{ fill: 'hsl(var(--muted))' }}
+                  formatter={(value: any) => [value, 'Inquiries']}
+                />
+                <Bar dataKey="count" fill="hsl(var(--primary))" radius={[0, 6, 6, 0]} maxBarSize={20} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }
