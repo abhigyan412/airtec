@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { GraduationCap, Eye, EyeOff, Loader2 } from 'lucide-react'
-import { useAuth } from '@/lib/auth'
+import { useAuth, NON_STAFF_ROLES } from '@/lib/auth'
 import { toast } from 'sonner'
 import Link from 'next/link'
 
@@ -19,9 +19,9 @@ export default function LoginPage() {
     if (!email || !password) return
     setIsLoading(true)
     try {
-      await login(email, password)
+      const user = await login(email, password)
       toast.success('Welcome back!')
-      router.push('/dashboard')
+      router.push(NON_STAFF_ROLES.includes(user.role) ? '/portal' : '/dashboard')
     } catch (err: any) {
       toast.error(err?.response?.data?.error ?? 'Invalid email or password')
     } finally {

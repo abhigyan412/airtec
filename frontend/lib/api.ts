@@ -84,6 +84,8 @@ export const studentsApi = {
     api.get('/students', { params }).then(r => r.data),
   get: (id: string) =>
     api.get(`/students/${id}`).then(r => r.data),
+  me: () =>
+    api.get('/students/me').then(r => r.data),
   create: (data: any) =>
     api.post('/students', data).then(r => r.data),
   update: (id: string, data: any) =>
@@ -322,6 +324,15 @@ export const complaintsApi = {
     api.get(`/students/complaints/${id}/comments`).then(r => r.data),
   addComment: (id: string, comment: string) =>
     api.post(`/students/complaints/${id}/comments`, { comment }).then(r => r.data),
+}
+
+export const notificationsApi = {
+  list: (params?: { page?: number; limit?: number; unread_only?: boolean }) =>
+    api.get('/notifications', { params }).then(r => r.data),
+  unreadCount: () => api.get('/notifications/unread-count').then(r => r.data),
+  markRead: (id: string) => api.patch(`/notifications/${id}/read`).then(r => r.data),
+  markAllRead: () => api.patch('/notifications/read-all').then(r => r.data),
+  runFeeReminders: () => api.post('/notifications/run-fee-reminders').then(r => r.data),
 }
 
 export const hrmsApi = {

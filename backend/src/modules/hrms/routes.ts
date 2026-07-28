@@ -7,6 +7,7 @@ import { getPermissionsForRole } from '../../shared/middleware/permissions'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { assignDefaultUserRole } from '../rbac/seed'
 import { getNonWorkingDaySets, countWorkingDays, isWorkingDate, dateRangeStrings } from '../../shared/utils/academicCalendar'
+import { createNotification } from '../../shared/utils/notifications'
 
 const router = Router()
 router.use(authenticate)
@@ -460,6 +461,23 @@ router.patch('/leave-requests/:id', asyncHandler(async (req: AuthRequest, res: R
         total_days: total_days_allowed, used_days: leaveReq.total_days,
       })
       exceeds_balance = leaveReq.total_days > total_days_allowed
+    }
+  }
+
+  if (result.completed) {
+    try {
+      await createNotification({
+        schoolId: school_id, userId: leaveReq.user_id,
+        type: result.instance.status === 'approved' ? 'leave_approved' : 'leave_rejected',
+        title: result.instance.status === 'approved' ? 'Leave request approved' : 'Leave request rejected',
+        message: result.instance.status === 'approved'
+          ? `Your leave request for ${leaveReq.from_date} to ${leaveReq.to_date} was approved.`
+          : `Your leave request for ${leaveReq.from_date} to ${leaveReq.to_date} was rejected.${rejection_reason ? ` Reason: ${rejection_reason}` : ''}`,
+        link: '/hr/my-leave',
+        relatedEntityType: 'leave_request', relatedEntityId: id,
+      })
+    } catch (notifyErr) {
+      console.error('Failed to create leave notification:', notifyErr)
     }
   }
 

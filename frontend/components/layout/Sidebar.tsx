@@ -10,6 +10,7 @@ import {
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
+import { NotificationBell } from './NotificationBell'
 
 // `permission` is the new role_permissions_v2 permission_code that
 // gates this nav item's visibility. `null` means always visible
@@ -60,10 +61,11 @@ export function Sidebar() {
           <div className="w-8 h-8 rounded-[9px] bg-gradient-to-br from-[#7C6FF0] to-[#5B5BD6] flex items-center justify-center shadow-[0_4px_12px_rgba(124,111,240,0.35)] flex-shrink-0">
             <GraduationCap className="w-[18px] h-[18px] text-white" />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="font-semibold text-white text-[13px] leading-tight">AIRTEC</p>
             <p className="text-[11px] text-[#8A8A99] truncate leading-tight">{schoolName}</p>
           </div>
+          <NotificationBell />
         </div>
       </div>
 

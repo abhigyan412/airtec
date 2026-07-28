@@ -4,6 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { authenticate, AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
+import { createNotifications, getRecipientUserIdsForStudents } from '../../shared/utils/notifications'
 
 const router = Router()
 router.use(authenticate)
@@ -143,6 +144,29 @@ router.post('/homework', requirePermissionV2('homework.create'),
         await supabase.from('homework').delete().eq('id', homework.id)
         return res.status(400).json({ success: false, error: linkErr.message })
       }
+    }
+
+    try {
+      let targetStudentIds: string[] = []
+      if (body.assignment_type === 'individual') {
+        targetStudentIds = body.student_ids ?? []
+      } else {
+        let studentsQuery = supabase.from('students').select('id')
+          .eq('school_id', school_id).eq('class_id', body.class_id).eq('status', 'active')
+        if (body.section_id) studentsQuery = studentsQuery.eq('section_id', body.section_id)
+        const { data: classStudents } = await studentsQuery
+        targetStudentIds = (classStudents ?? []).map(s => s.id)
+      }
+      const recipients = await getRecipientUserIdsForStudents(targetStudentIds)
+      await createNotifications(recipients, {
+        schoolId: school_id, type: 'homework_assigned',
+        title: `New ${body.type === 'classwork' ? 'classwork' : 'homework'}: ${body.subject_name}`,
+        message: `"${body.title}"${body.due_date ? ` — due ${body.due_date}` : ''}`,
+        link: '/portal/homework',
+        relatedEntityType: 'homework', relatedEntityId: homework.id,
+      })
+    } catch (notifyErr) {
+      console.error('Failed to create homework notifications:', notifyErr)
     }
 
     res.status(201).json({ success: true, data: homework })

@@ -18,10 +18,15 @@ interface User {
 interface AuthContextType {
   user: User | null
   isLoading: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<User>
   logout: () => void
   isRole: (...roles: string[]) => boolean
 }
+
+// Roles that get an ownership-scoped view of their own child's data
+// (see backend NON_STAFF_ROLES) rather than the staff admin tooling —
+// they land in the (portal) route group, not (app).
+export const NON_STAFF_ROLES = ['parent', 'student']
 
 const AuthContext = createContext<AuthContextType | null>(null)
 
@@ -49,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('airtec_token', res.data.access_token)
     localStorage.setItem('airtec_user', JSON.stringify(res.data.user))
     setUser(res.data.user)
+    return res.data.user as User
   }
 
   const logout = () => {
