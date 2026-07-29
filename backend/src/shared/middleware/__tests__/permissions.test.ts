@@ -20,7 +20,7 @@ vi.mock('../../db/client', () => ({
 }))
 
 const { requirePermission, getPermissionsForRole } = await import('../permissions')
-const { getPermissionsForUser, requirePermissionV2, requireAnyPermissionV2 } = await import('../permissions-v2')
+const { getPermissionsForUser, requirePermissionV2, requireAnyPermissionV2, invalidateAllPermissions, invalidatePermissionsForUser } = await import('../permissions-v2')
 
 const mockRes = () => {
   const res: any = {}
@@ -30,7 +30,13 @@ const mockRes = () => {
 }
 const reqAs = (role: string) => ({ user: { id: 'u1', school_id: 's1', role } } as any)
 
-beforeEach(() => { for (const k of Object.keys(results)) delete results[k] })
+// invalidateAllPermissions is load-bearing, not tidiness: resolved permissions
+// are cached per user, and every case below uses the same u1/s1 pair — without
+// it the first case's permission set would answer every later one.
+beforeEach(() => {
+  for (const k of Object.keys(results)) delete results[k]
+  invalidateAllPermissions()
+})
 
 describe('requirePermission (legacy module/action)', () => {
   it.each(['school_admin', 'principal'])('lets %s through without consulting the table', async role => {
@@ -112,8 +118,7 @@ describe('getPermissionsForUser (RBAC v2)', () => {
 
   it('flags School Admin as a super role', async () => {
     results['user_roles'] = { data: [{ role_id: 'r1', roles: { id: 'r1', name: 'School Admin' } }], error: null }
-    results['role_permissions_v2'] = { data: [{ permission_id: 'p1' }], error: null }
-    results['permissions'] = { data: [{ permission_code: 'fee.view' }], error: null }
+    results['role_permissions_v2'] = { data: [{ permissions: { permission_code: 'fee.view' } }], error: null }
     const r = await getPermissionsForUser('u1', 's1')
     expect(r.isSuperRole).toBe(true)
     expect(r.roleNames).toContain('School Admin')
@@ -126,8 +131,12 @@ describe('getPermissionsForUser (RBAC v2)', () => {
         { role_id: 'r2', roles: { id: 'r2', name: 'Class Teacher' } },
       ], error: null,
     }
-    results['role_permissions_v2'] = { data: [{ permission_id: 'p1' }, { permission_id: 'p2' }, { permission_id: 'p1' }], error: null }
-    results['permissions'] = { data: [{ permission_code: 'student.view' }, { permission_code: 'exam.marks_entry' }], error: null }
+    // Duplicate rows across roles must still collapse to a unique code set.
+    results['role_permissions_v2'] = { data: [
+      { permissions: { permission_code: 'student.view' } },
+      { permissions: { permission_code: 'exam.marks_entry' } },
+      { permissions: { permission_code: 'student.view' } },
+    ], error: null }
     const r = await getPermissionsForUser('u1', 's1')
     expect(r.roleIds).toEqual(['r1', 'r2'])
     expect([...r.permissionCodes].sort()).toEqual(['exam.marks_entry', 'student.view'])
@@ -148,8 +157,7 @@ describe('getPermissionsForUser (RBAC v2)', () => {
 
   it('returns no codes when resolving permission ids fails', async () => {
     results['user_roles'] = { data: [{ role_id: 'r1', roles: { id: 'r1', name: 'Teacher' } }], error: null }
-    results['role_permissions_v2'] = { data: [{ permission_id: 'p1' }], error: null }
-    results['permissions'] = { data: null, error: { message: 'boom' } }
+    results['role_permissions_v2'] = { data: null, error: { message: 'boom' } }
     expect((await getPermissionsForUser('u1', 's1')).permissionCodes.size).toBe(0)
   })
 })
@@ -157,8 +165,7 @@ describe('getPermissionsForUser (RBAC v2)', () => {
 describe('requirePermissionV2', () => {
   const teacherWith = (codes: string[]) => {
     results['user_roles'] = { data: [{ role_id: 'r1', roles: { id: 'r1', name: 'Teacher' } }], error: null }
-    results['role_permissions_v2'] = { data: codes.map((_, i) => ({ permission_id: `p${i}` })), error: null }
-    results['permissions'] = { data: codes.map(c => ({ permission_code: c })), error: null }
+    results['role_permissions_v2'] = { data: codes.map(c => ({ permissions: { permission_code: c } })), error: null }
   }
 
   it('allows a user holding the code', async () => {
@@ -188,8 +195,7 @@ describe('requirePermissionV2', () => {
 describe('requireAnyPermissionV2', () => {
   it('allows when the user holds any one of the codes', async () => {
     results['user_roles'] = { data: [{ role_id: 'r1', roles: { id: 'r1', name: 'Teacher' } }], error: null }
-    results['role_permissions_v2'] = { data: [{ permission_id: 'p1' }], error: null }
-    results['permissions'] = { data: [{ permission_code: 'exam.view' }], error: null }
+    results['role_permissions_v2'] = { data: [{ permissions: { permission_code: 'exam.view' } }], error: null }
     const next = vi.fn()
     await requireAnyPermissionV2('fee.collect', 'exam.view')(reqAs('teacher'), mockRes() as Response, next as NextFunction)
     expect(next).toHaveBeenCalled()
@@ -210,5 +216,44 @@ describe('requireAnyPermissionV2', () => {
     const next = vi.fn()
     await requireAnyPermissionV2('a', 'b')(reqAs('school_admin'), mockRes() as Response, next as NextFunction)
     expect(next).toHaveBeenCalled()
+  })
+})
+
+// The permission cache removes ~735ms (three sequential queries) from every
+// permission-gated route and every page load. These pin the trade-off.
+describe('permission cache', () => {
+  const withRole = () => {
+    results['user_roles'] = { data: [{ role_id: 'r1', roles: { id: 'r1', name: 'Accountant' } }], error: null }
+    results['role_permissions_v2'] = { data: [{ permissions: { permission_code: 'fee.view' } }], error: null }
+  }
+
+  it('resolves once, then serves the cached set', async () => {
+    withRole()
+    const a = await getPermissionsForUser('u1', 's1')
+    // Data yanked out from under it — a second resolve would now come back empty.
+    results['user_roles'] = { data: [], error: null }
+    const b = await getPermissionsForUser('u1', 's1')
+    expect(a.permissionCodes.has('fee.view')).toBe(true)
+    expect(b.permissionCodes.has('fee.view')).toBe(true)
+  })
+
+  it('re-resolves after invalidation, so a revoked permission actually goes away', async () => {
+    withRole()
+    expect((await getPermissionsForUser('u1', 's1')).permissionCodes.has('fee.view')).toBe(true)
+
+    results['role_permissions_v2'] = { data: [], error: null }
+    invalidatePermissionsForUser('u1', 's1')
+
+    expect((await getPermissionsForUser('u1', 's1')).permissionCodes.has('fee.view')).toBe(false)
+  })
+
+  it('caches per user and school, not globally', async () => {
+    withRole()
+    await getPermissionsForUser('u1', 's1')
+
+    results['role_permissions_v2'] = { data: [{ permissions: { permission_code: 'exam.view' } }], error: null }
+    const other = await getPermissionsForUser('u2', 's1')
+    expect(other.permissionCodes.has('exam.view')).toBe(true)
+    expect(other.permissionCodes.has('fee.view')).toBe(false)
   })
 })

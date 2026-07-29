@@ -124,15 +124,17 @@ router.get('/attendance/today', asyncHandler(async (req: AuthRequest, res: Respo
   const school_id = req.user!.school_id
   const today = toLocalDateStr(new Date())
 
-  const nonWorkingSets = await getNonWorkingDaySets(school_id, today, today)
+  // The holiday/weekly-off lookup does not depend on the roster or the
+  // register, so it joins the same batch instead of running before it.
+  const [nonWorkingSets, { data: students, error: studentsErr }, { data: records, error: attErr }] =
+    await Promise.all([
+      getNonWorkingDaySets(school_id, today, today),
+      supabase.from('students')
+        .select('id, class_id, section_id, classes(name), sections(name)')
+        .eq('school_id', school_id).eq('status', 'active'),
+      supabase.from('attendance').select('student_id, status').eq('school_id', school_id).eq('date', today),
+    ])
   const is_working_day = isWorkingDate(today, nonWorkingSets)
-
-  const [{ data: students, error: studentsErr }, { data: records, error: attErr }] = await Promise.all([
-    supabase.from('students')
-      .select('id, class_id, section_id, classes(name), sections(name)')
-      .eq('school_id', school_id).eq('status', 'active'),
-    supabase.from('attendance').select('student_id, status').eq('school_id', school_id).eq('date', today),
-  ])
   if (studentsErr) return res.status(500).json({ success: false, error: studentsErr.message })
   if (attErr) return res.status(500).json({ success: false, error: attErr.message })
 

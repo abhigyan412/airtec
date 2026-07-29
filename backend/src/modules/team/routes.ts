@@ -40,16 +40,21 @@ router.get('/', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
 
-    const { data: users, error } = await supabase
-      .from('users')
-      .select('id, full_name, email, role, phone, is_active, created_at')
-      .eq('school_id', school_id)
-      .order('created_at', { ascending: false })
+    // Both reads are independent, so they run together rather than back to
+    // back — each round-trip to Supabase is ~245ms here, and listUsers is the
+    // slower of the two.
+    const [{ data: users, error }, { data: authUsers }] = await Promise.all([
+      supabase
+        .from('users')
+        .select('id, full_name, email, role, phone, is_active, created_at')
+        .eq('school_id', school_id)
+        .order('created_at', { ascending: false }),
+      supabaseAdmin.auth.admin.listUsers({ perPage: 1000 }),
+    ])
 
     if (error) return res.status(500).json({ success: false, error: error.message })
 
-    // Check which users have a matching auth account
-    const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+    // Which users have a matching auth account
     const authIds = new Set((authUsers?.users ?? []).map(u => u.id))
 
     const result = (users ?? []).map(u => ({

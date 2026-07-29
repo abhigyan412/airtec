@@ -15,21 +15,72 @@ import { AuthRequest } from './auth'
 // role_permissions_v2 mapping is incomplete, these never get locked out)
 const SUPER_ROLES = ['School Admin']
 
-/**
- * Returns the set of permission_codes the user has, aggregated across
- * ALL roles assigned to them via user_roles -> role_permissions_v2 -> permissions.
- *
- * Implemented as separate, flat queries (rather than one deeply nested
- * PostgREST embed) for reliability — nested embeds 3 levels deep
- * (roles -> role_permissions_v2 -> permissions) were not resolving
- * correctly via the Supabase JS client.
- */
-export async function getPermissionsForUser(userId: string, schoolId: string): Promise<{
+export interface UserPermissions {
   permissionCodes: Set<string>
   roleNames: string[]
   roleIds: string[]
   isSuperRole: boolean
-}> {
+}
+
+/**
+ * Per-process cache of resolved permissions.
+ *
+ * This function runs on every `requirePermissionV2` route AND on
+ * GET /rbac/permissions/me, which both frontends call on every page load. It
+ * was three sequential queries (~735ms measured); it is now one round-trip
+ * uncached and free once warm.
+ *
+ * Same trade as the profile cache in auth.ts: a role assignment or a change to
+ * a role's permissions takes up to TTL to apply. Both mutation paths call
+ * `invalidatePermissions*` below, so in practice it is immediate; the TTL is
+ * the backstop for changes made directly in the database.
+ */
+const PERMISSIONS_TTL_MS = 30_000
+const permCache = new Map<string, { value: UserPermissions; expires: number }>()
+
+const permKey = (userId: string, schoolId: string) => `${userId}:${schoolId}`
+
+/** Drop one user's cached permissions — call after changing their roles. */
+export function invalidatePermissionsForUser(userId: string, schoolId: string): void {
+  permCache.delete(permKey(userId, schoolId))
+}
+
+/**
+ * Drop everything. Call when a ROLE's permissions change: that affects every
+ * user holding it, and finding them would cost more than simply re-resolving.
+ */
+export function invalidateAllPermissions(): void {
+  permCache.clear()
+}
+
+export async function getPermissionsForUser(
+  userId: string,
+  schoolId: string,
+): Promise<UserPermissions> {
+  const key = permKey(userId, schoolId)
+  const hit = permCache.get(key)
+  if (hit && hit.expires > Date.now()) return hit.value
+
+  const value = await resolvePermissionsForUser(userId, schoolId)
+  if (permCache.size > 5000) {
+    const now = Date.now()
+    for (const [k, v] of permCache) if (v.expires <= now) permCache.delete(k)
+  }
+  permCache.set(key, { value, expires: Date.now() + PERMISSIONS_TTL_MS })
+  return value
+}
+
+/**
+ * Returns the set of permission_codes the user has, aggregated across
+ * ALL roles assigned to them via user_roles -> role_permissions_v2 -> permissions.
+ *
+ * Two flat queries rather than one three-level embed
+ * (roles -> role_permissions_v2 -> permissions), which did not resolve
+ * correctly through the Supabase JS client. The two-level embed used in step 2
+ * does work — verified it returns a permission set identical to the previous
+ * three-query version.
+ */
+async function resolvePermissionsForUser(userId: string, schoolId: string): Promise<UserPermissions> {
   // 1. Get the user's roles
   const { data: userRoles, error: urErr } = await supabase
     .from('user_roles')
@@ -57,29 +108,27 @@ export async function getPermissionsForUser(userId: string, schoolId: string): P
     return { permissionCodes: new Set(), roleNames, roleIds, isSuperRole }
   }
 
-  // 2. Get all permission_ids mapped to these roles
+  // 2. Resolve those roles straight to permission codes.
+  //
+  // This used to be two queries: role_permissions_v2 -> permission_ids, then
+  // permissions -> permission_code. They were strictly sequential (the second
+  // needs the first's ids), and against a remote Supabase each round-trip is
+  // ~245ms. Embedding the FK collapses them into one, since
+  // role_permissions_v2.permission_id already references permissions.
   const { data: rolePerms, error: rpErr } = await supabase
     .from('role_permissions_v2')
-    .select('permission_id')
+    .select('permissions(permission_code)')
     .in('role_id', roleIds)
 
-  if (rpErr || !rolePerms || rolePerms.length === 0) {
+  if (rpErr || !rolePerms) {
     return { permissionCodes: new Set(), roleNames, roleIds, isSuperRole }
   }
 
-  const permissionIds = Array.from(new Set(rolePerms.map((rp: any) => rp.permission_id)))
-
-  // 3. Resolve permission_ids -> permission_codes
-  const { data: perms, error: permErr } = await supabase
-    .from('permissions')
-    .select('permission_code')
-    .in('id', permissionIds)
-
-  if (permErr || !perms) {
-    return { permissionCodes: new Set(), roleNames, roleIds, isSuperRole }
-  }
-
-  const permissionCodes = new Set(perms.map((p: any) => p.permission_code))
+  const permissionCodes = new Set(
+    rolePerms
+      .map((rp: any) => rp.permissions?.permission_code)
+      .filter((c: unknown): c is string => typeof c === 'string'),
+  )
 
   return { permissionCodes, roleNames, roleIds, isSuperRole }
 }

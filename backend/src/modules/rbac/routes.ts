@@ -2,7 +2,7 @@ import { Router, Response } from 'express'
 import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler } from '../../shared/utils/helpers'
-import { getPermissionsForUser } from '../../shared/middleware/permissions-v2'
+import { getPermissionsForUser, invalidateAllPermissions } from '../../shared/middleware/permissions-v2'
 
 const router = Router()
 router.use(authenticate)
@@ -108,6 +108,10 @@ router.put('/roles/:id/permissions', requireRole('school_admin', 'principal'),
       const { error: insErr } = await supabase.from('role_permissions_v2').insert(rows)
       if (insErr) return res.status(500).json({ success: false, error: insErr.message })
     }
+
+    // This role's permissions just changed, which affects every user holding
+    // it. Finding them costs more than simply re-resolving on next request.
+    invalidateAllPermissions()
 
     res.json({ success: true, data: { role, permission_count: perms?.length ?? 0 } })
   })
