@@ -34,8 +34,8 @@ function CollectionMeter({ stats }: { stats: any }) {
       </CardHeader>
       <CardContent className="pt-5">
         <div className="mb-2 flex items-end justify-between">
-          <span className={cn('text-3xl font-bold', ramp.text)}>{pct}%</span>
-          <span className="text-xs text-muted-foreground">of {formatCurrency(billed)} billed</span>
+          <span className={cn('text-3xl font-bold tabular-nums', ramp.text)}>{pct}%</span>
+          <span className="text-xs tabular-nums text-muted-foreground">of {formatCurrency(billed)} billed</span>
         </div>
         <div className={cn('h-3 overflow-hidden rounded-full', ramp.track)}>
           <div className={cn('h-full rounded-full transition-all', ramp.fill)} style={{ width: `${Math.min(100, pct)}%` }} />
@@ -44,11 +44,11 @@ function CollectionMeter({ stats }: { stats: any }) {
         <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-border pt-5">
           <div>
             <p className="text-xs text-muted-foreground">Collected</p>
-            <p className="text-lg font-bold text-success">{formatCurrency(collected)}</p>
+            <p className="text-lg font-bold tabular-nums text-success">{formatCurrency(collected)}</p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Outstanding</p>
-            <p className="text-lg font-bold text-destructive">{formatCurrency(due)}</p>
+            <p className="text-lg font-bold tabular-nums text-destructive">{formatCurrency(due)}</p>
           </div>
         </div>
       </CardContent>
@@ -122,7 +122,14 @@ function ClassWiseDues() {
         {isLoading ? (
           <Skeleton className="h-[220px] w-full rounded-xl" />
         ) : data.length === 0 ? (
-          <EmptyState icon={BarChart3} title="No outstanding dues 🎉" className="py-12" />
+          <EmptyState
+            icon={BarChart3}
+            title="No outstanding dues 🎉"
+            description={classId
+              ? 'Every student in this class has cleared their invoices — pick another class to compare.'
+              : 'Nothing is unpaid right now. Classes with dues will be ranked here.'}
+            className="py-12"
+          />
         ) : (
           <ResponsiveContainer width="100%" height={Math.max(200, data.length * 32)}>
             <BarChart data={data} layout="vertical" margin={{ left: 8, right: 24 }}>

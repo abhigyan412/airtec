@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { feeApi, studentsApi, classesApi, academicYearsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, STATUS_COLORS, formatCurrency, formatDate } from '@/lib/utils'
-import { CreditCard, AlertCircle, CheckCircle, Clock, Plus, X, Loader2, Tag, Check, XCircle, AlertTriangle, Pencil } from 'lucide-react'
+import { CreditCard, AlertCircle, CheckCircle, Clock, Plus, X, Loader2, Tag, Check, XCircle, AlertTriangle, Pencil, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowRightLeft } from 'lucide-react'
@@ -21,24 +21,37 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { StatCard } from '@/components/shared/StatCard'
 import { EmptyState } from '@/components/shared/EmptyState'
+
+/** Table-shaped placeholder so rows don't jump in when a fee query lands. */
+function TableSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <div className="space-y-3 p-6">
+      {Array.from({ length: rows }).map((_, i) => (
+        <Skeleton key={i} className="h-12 w-full" />
+      ))}
+    </div>
+  )
+}
 
 export default function FeesPage() {
   const [tab, setTab] = useState<'invoices' | 'dues' | 'structures' | 'discounts'>('invoices')
 
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['fee-stats'],
     queryFn: () => feeApi.stats().then(r => r.data),
   })
 
-  const { data: invoices } = useQuery({
+  const { data: invoices, isLoading: invoicesLoading } = useQuery({
     queryKey: ['invoices'],
     queryFn: () => feeApi.invoices.list({ limit: 50 }).then(r => r),
     enabled: tab === 'invoices',
   })
 
-  const { data: dues } = useQuery({
+  const { data: dues, isLoading: duesLoading } = useQuery({
     queryKey: ['dues'],
     queryFn: () => feeApi.dues().then(r => r),
     enabled: tab === 'dues',
@@ -46,28 +59,37 @@ export default function FeesPage() {
 
   return (
     <div className="animate-fade-in space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Fee Management</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Track collections, invoices, and dues</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="outline">
-            <Link href="/fees/arrears"><ArrowRightLeft className="h-4 w-4" /> Arrears</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/fees/collections"><AlertTriangle className="h-4 w-4" /> Collections &amp; Dues</Link>
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Fee Management"
+        description="Track collections, invoices, and dues"
+        icon={Wallet}
+        actions={
+          <>
+            <Button asChild variant="outline">
+              <Link href="/fees/arrears"><ArrowRightLeft className="h-4 w-4" /> Arrears</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/fees/collections"><AlertTriangle className="h-4 w-4" /> Collections &amp; Dues</Link>
+            </Button>
+          </>
+        }
+      />
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Total Billed" value={formatCurrency(stats?.total_billed ?? 0)} icon={CreditCard} accent="primary" />
-        <StatCard label="Collected" value={formatCurrency(stats?.total_collected ?? 0)} icon={CheckCircle} accent="success" />
-        <StatCard label="Due" value={formatCurrency(stats?.total_due ?? 0)} icon={AlertCircle} accent="destructive" />
-        <StatCard label="Partial Paid" value={stats?.partial_invoices ?? 0} icon={Clock} accent="warning" />
-      </div>
+      {statsLoading ? (
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[120px] rounded-xl" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <StatCard label="Total Billed" value={formatCurrency(stats?.total_billed ?? 0)} icon={CreditCard} accent="primary" />
+          <StatCard label="Collected" value={formatCurrency(stats?.total_collected ?? 0)} icon={CheckCircle} accent="success" />
+          <StatCard label="Due" value={formatCurrency(stats?.total_due ?? 0)} icon={AlertCircle} accent="destructive" />
+          <StatCard label="Partial Paid" value={stats?.partial_invoices ?? 0} icon={Clock} accent="warning" />
+        </div>
+      )}
 
       {/* Analytics */}
       <FeeAnalytics stats={stats} />
@@ -83,10 +105,10 @@ export default function FeesPage() {
         </TabsList>
 
         <TabsContent value="invoices">
-          <InvoicesTable data={invoices?.data ?? []} />
+          <InvoicesTable data={invoices?.data ?? []} isLoading={invoicesLoading} />
         </TabsContent>
         <TabsContent value="dues">
-          <DuesTable data={dues?.data ?? []} />
+          <DuesTable data={dues?.data ?? []} isLoading={duesLoading} />
         </TabsContent>
         <TabsContent value="structures">
           <Card><CardContent className="p-4"><FeeStructures /></CardContent></Card>
@@ -196,8 +218,17 @@ function RecordInvoicePaymentModal({ invoice, onClose }: { invoice: any, onClose
   )
 }
 
-function InvoicesTable({ data }: { data: any[] }) {
-  if (!data.length) return <Card><EmptyState icon={CreditCard} title="No invoices yet" /></Card>
+function InvoicesTable({ data, isLoading }: { data: any[], isLoading?: boolean }) {
+  if (isLoading) return <Card><CardContent className="p-0"><TableSkeleton /></CardContent></Card>
+  if (!data.length) return (
+    <Card>
+      <EmptyState
+        icon={CreditCard}
+        title="No invoices yet"
+        description="Invoices appear here once fee structures are set up and billing is generated for a class."
+      />
+    </Card>
+  )
   return (
     <Card>
       <CardContent className="p-0">
@@ -206,7 +237,7 @@ function InvoicesTable({ data }: { data: any[] }) {
             <TableRow className="hover:bg-transparent">
               <TableHead>Invoice</TableHead>
               <TableHead>Student</TableHead>
-              <TableHead>Amount</TableHead>
+              <TableHead className="text-right">Amount</TableHead>
               <TableHead>Due Date</TableHead>
               <TableHead>Status</TableHead>
             </TableRow>
@@ -221,7 +252,7 @@ function InvoicesTable({ data }: { data: any[] }) {
                   </p>
                   <p className="text-xs text-muted-foreground">{inv.students?.classes?.name}</p>
                 </TableCell>
-                <TableCell className="font-semibold text-foreground">{formatCurrency(inv.total_amount)}</TableCell>
+                <TableCell className="text-right font-semibold tabular-nums text-foreground">{formatCurrency(inv.total_amount)}</TableCell>
                 <TableCell className="text-muted-foreground">{inv.due_date ? formatDate(inv.due_date) : '—'}</TableCell>
                 <TableCell>
                   <span className={cn('rounded-full px-2 py-1 text-xs font-medium', STATUS_COLORS[inv.status])}>
@@ -237,9 +268,18 @@ function InvoicesTable({ data }: { data: any[] }) {
   )
 }
 
-function DuesTable({ data }: { data: any[] }) {
+function DuesTable({ data, isLoading }: { data: any[], isLoading?: boolean }) {
   const [payTarget, setPayTarget] = useState<any>(null)
-  if (!data.length) return <Card><EmptyState icon={CheckCircle} title="No pending dues 🎉" /></Card>
+  if (isLoading) return <Card><CardContent className="p-0"><TableSkeleton /></CardContent></Card>
+  if (!data.length) return (
+    <Card>
+      <EmptyState
+        icon={CheckCircle}
+        title="No pending dues 🎉"
+        description="Every issued invoice has been paid in full. New dues show up here as invoices fall due."
+      />
+    </Card>
+  )
   return (
     <>
       <Card>
@@ -249,7 +289,7 @@ function DuesTable({ data }: { data: any[] }) {
               <TableRow className="hover:bg-transparent">
                 <TableHead>Student</TableHead>
                 <TableHead>Class</TableHead>
-                <TableHead>Amount Due</TableHead>
+                <TableHead className="text-right">Amount Due</TableHead>
                 <TableHead>Invoice</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead />
@@ -262,7 +302,7 @@ function DuesTable({ data }: { data: any[] }) {
                     {inv.students?.first_name} {inv.students?.last_name}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{inv.students?.classes?.name}</TableCell>
-                  <TableCell className="font-semibold text-destructive">{formatCurrency(inv.amount_due)}</TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums text-destructive">{formatCurrency(inv.amount_due)}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{inv.invoice_number}</TableCell>
                   <TableCell>
                     <span className={cn('rounded-full px-2 py-1 text-xs font-medium', STATUS_COLORS[inv.status])}>
@@ -381,11 +421,23 @@ function FeeStructures() {
       </div>
 
       {(headsLoading || structuresLoading) ? (
-        <div className="py-12 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" /></div>
+        <TableSkeleton rows={5} />
       ) : !(heads ?? []).length ? (
-        <EmptyState icon={Tag} title="No fee categories configured yet — add one to get started" />
+        <EmptyState
+          icon={Tag}
+          title="No fee categories yet"
+          description="Categories are the fee heads you bill against — Tuition, Exam, Transport. Add one, then set a per-class amount for it."
+          action={<Button onClick={() => setShowAddCategory(true)}><Plus className="h-4 w-4" /> Add Category</Button>}
+        />
       ) : !rows.length ? (
-        <EmptyState icon={Tag} title={selectedHeadName ? `No classes configured under ${selectedHeadName} yet` : 'No fee structures configured yet'} />
+        <EmptyState
+          icon={Tag}
+          title={selectedHeadName ? `No classes configured under ${selectedHeadName}` : 'No fee structures configured yet'}
+          description={selectedHeadName
+            ? `Add the amount each class pays for ${selectedHeadName}, or pick a different category above.`
+            : 'Set what each class pays for each category so invoices can be generated.'}
+          action={<Button onClick={() => setShowAddAmount(true)}><Plus className="h-4 w-4" /> Add Class Amount</Button>}
+        />
       ) : (
         <Table>
           <TableHeader>
@@ -410,7 +462,7 @@ function FeeStructures() {
                       <Input type="number" autoFocus className="h-8 w-28"
                         value={editAmount} onChange={e => setEditAmount(e.target.value)} />
                     ) : (
-                      <span className="font-semibold text-foreground">
+                      <span className="font-semibold tabular-nums text-foreground">
                         {formatCurrency(s.amount)}{s.is_optional && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(optional)</span>}
                       </span>
                     )}
@@ -661,16 +713,21 @@ function DiscountsTab() {
       </div>
 
       {isLoading ? (
-        <div className="py-12 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" /></div>
+        <TableSkeleton rows={5} />
       ) : !(discounts ?? []).length ? (
-        <EmptyState icon={Tag} title="No discounts created yet" />
+        <EmptyState
+          icon={Tag}
+          title="No discounts created yet"
+          description="Record sibling, staff-ward or hardship concessions here so they're applied to the student's invoices."
+          action={<Button onClick={() => setShowCreate(true)}><Plus className="h-4 w-4" /> New Discount</Button>}
+        />
       ) : (
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Student</TableHead>
               <TableHead>Fee Head</TableHead>
-              <TableHead>Discount</TableHead>
+              <TableHead className="text-right">Discount</TableHead>
               <TableHead>Reason</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Created</TableHead>
@@ -687,7 +744,7 @@ function DiscountsTab() {
                     {d.students?.first_name} {d.students?.last_name}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{d.fee_heads?.name ?? 'All fees'}</TableCell>
-                  <TableCell className="font-semibold text-foreground">
+                  <TableCell className="text-right font-semibold tabular-nums text-foreground">
                     {d.discount_type === 'percentage' ? `${d.discount_value}%` : formatCurrency(d.discount_value)}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{d.reason}</TableCell>

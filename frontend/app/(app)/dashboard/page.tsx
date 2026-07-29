@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
-import { Users, UserPlus, CreditCard, AlertCircle, LayoutDashboard, ArrowRight } from 'lucide-react'
+import { Users, UserPlus, CreditCard, AlertCircle, LayoutDashboard, ArrowRight, Plus } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { studentsApi, admissionApi, feeApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -11,6 +11,8 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { StatCard } from '@/components/shared/StatCard'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { NeedsAttentionToday } from '@/components/dashboard/NeedsAttentionToday'
@@ -53,7 +55,7 @@ export default function DashboardPage() {
     queryFn: () => studentsApi.stats().then((r) => r.data),
     enabled: canViewStudents,
   })
-  const { data: inquiryStats } = useQuery({
+  const { data: inquiryStats, isLoading: inquiryLoading } = useQuery({
     queryKey: ['inquiry-stats'],
     queryFn: () => admissionApi.inquiries.stats().then((r) => r.data),
     enabled: canViewAdmission,
@@ -63,12 +65,12 @@ export default function DashboardPage() {
     queryFn: () => feeApi.stats().then((r) => r.data),
     enabled: canViewFees,
   })
-  const { data: recentStudents } = useQuery({
+  const { data: recentStudents, isLoading: recentLoading } = useQuery({
     queryKey: ['recent-students'],
     queryFn: () => studentsApi.list({ limit: 5, page: 1 }).then((r) => r.data),
     enabled: canViewStudents,
   })
-  const { data: dues } = useQuery({
+  const { data: dues, isLoading: duesLoading } = useQuery({
     queryKey: ['fee-dues'],
     queryFn: () => feeApi.dues().then((r) => r.data),
     enabled: canViewFees,
@@ -113,53 +115,62 @@ export default function DashboardPage() {
         <>
           <NeedsAttentionToday />
 
-          {/* KPI cards */}
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            {canViewStudents && (
-              <Link href="/students">
-                <StatCard
-                  label="Total Students"
-                  value={studentStats?.total_students ?? '—'}
-                  icon={Users}
-                  accent="primary"
-                  hint={`${studentStats?.active_students ?? 0} active · +${studentStats?.new_this_month ?? 0} this month`}
-                />
-              </Link>
-            )}
-            {canViewAdmission && (
-              <Link href="/admission">
-                <StatCard
-                  label="Inquiries"
-                  value={inquiryStats?.total ?? '—'}
-                  icon={UserPlus}
-                  accent="info"
-                  hint={`${inquiryStats?.conversion_rate ?? 0}% converted`}
-                />
-              </Link>
-            )}
-            {canViewFees && (
-              <>
-                <Link href="/fees">
+          {/* KPI cards — skeletons until permissions resolve, otherwise the
+              grid renders empty for a beat and the page jumps when it fills. */}
+          {permLoading ? (
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-[104px] rounded-xl" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              {canViewStudents && (
+                <Link href="/students">
                   <StatCard
-                    label="Fee Collected"
-                    value={feeStats ? formatCurrency(feeStats.total_collected) : '—'}
-                    icon={CreditCard}
-                    accent="success"
-                    hint={`${feeStats?.paid_invoices ?? 0} paid invoices`}
+                    label="Total Students"
+                    value={studentStats?.total_students ?? '—'}
+                    icon={Users}
+                    accent="primary"
+                    hint={`${studentStats?.active_students ?? 0} active · +${studentStats?.new_this_month ?? 0} this month`}
                   />
                 </Link>
-                <Link href="/fees/arrears">
+              )}
+              {canViewAdmission && (
+                <Link href="/admission">
                   <StatCard
-                    label="Pending Dues"
-                    value={feeStats ? formatCurrency(feeStats.total_due) : '—'}
-                    icon={AlertCircle}
-                    accent="destructive"
-                    hint={`${feeStats?.unpaid_invoices ?? 0} unpaid invoices`}
+                    label="Inquiries"
+                    value={inquiryStats?.total ?? '—'}
+                    icon={UserPlus}
+                    accent="info"
+                    hint={`${inquiryStats?.conversion_rate ?? 0}% converted`}
                   />
                 </Link>
-              </>
-            )}
-          </div>
+              )}
+              {canViewFees && (
+                <>
+                  <Link href="/fees">
+                    <StatCard
+                      label="Fee Collected"
+                      value={feeStats ? formatCurrency(feeStats.total_collected) : '—'}
+                      icon={CreditCard}
+                      accent="success"
+                      hint={`${feeStats?.paid_invoices ?? 0} paid invoices`}
+                    />
+                  </Link>
+                  <Link href="/fees/arrears">
+                    <StatCard
+                      label="Pending Dues"
+                      value={feeStats ? formatCurrency(feeStats.total_due) : '—'}
+                      icon={AlertCircle}
+                      accent="destructive"
+                      hint={`${feeStats?.unpaid_invoices ?? 0} unpaid invoices`}
+                    />
+                  </Link>
+                </>
+              )}
+            </div>
+          )}
 
           {/* Pipeline + dues */}
           {(canViewAdmission || canViewFees) && (
@@ -174,7 +185,9 @@ export default function DashboardPage() {
                     <ViewAll href="/admission" />
                   </CardHeader>
                   <CardContent>
-                    {pipelineData.length > 0 ? (
+                    {inquiryLoading ? (
+                      <Skeleton className="h-[220px] w-full rounded-xl" />
+                    ) : pipelineData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={220}>
                         <BarChart data={pipelineData} barSize={36} barGap={4}>
                           <XAxis
@@ -208,7 +221,12 @@ export default function DashboardPage() {
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <EmptyState icon={UserPlus} title="No inquiries yet" className="py-12" />
+                      <EmptyState
+                        icon={UserPlus}
+                        title="No inquiries yet"
+                        description="New admission inquiries will appear here as they come in."
+                        className="py-12"
+                      />
                     )}
                   </CardContent>
                 </Card>
@@ -224,7 +242,13 @@ export default function DashboardPage() {
                     <ViewAll href="/fees/arrears" />
                   </CardHeader>
                   <CardContent>
-                    {(dues ?? []).length > 0 ? (
+                    {duesLoading ? (
+                      <div className="space-y-2">
+                        {Array.from({ length: 5 }).map((_, i) => (
+                          <Skeleton key={i} className="h-11 w-full rounded-lg" />
+                        ))}
+                      </div>
+                    ) : (dues ?? []).length > 0 ? (
                       <div className="max-h-[250px] space-y-1 overflow-y-auto pr-1">
                         {(dues ?? []).slice(0, 8).map((inv: any) => (
                           <div
@@ -247,7 +271,12 @@ export default function DashboardPage() {
                         ))}
                       </div>
                     ) : (
-                      <EmptyState icon={CreditCard} title="No pending dues 🎉" className="py-12" />
+                      <EmptyState
+                        icon={CreditCard}
+                        title="No pending dues 🎉"
+                        description="Every invoice raised so far has been paid in full."
+                        className="py-12"
+                      />
                     )}
                   </CardContent>
                 </Card>
@@ -263,15 +292,23 @@ export default function DashboardPage() {
                 <ViewAll href="/students" />
               </CardHeader>
               <CardContent className="p-0">
-                {(recentStudents ?? []).length === 0 ? (
+                {recentLoading ? (
+                  <div className="space-y-3 p-6">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <Skeleton key={i} className="h-12 w-full" />
+                    ))}
+                  </div>
+                ) : (recentStudents ?? []).length === 0 ? (
                   <EmptyState
                     icon={Users}
                     title="No students added yet"
-                    description="Add your first student to get started."
+                    description="Add your first student and the newest admissions will show up here."
                     action={
-                      <Link href="/students/new" className="text-xs font-medium text-primary hover:underline">
-                        Add your first student →
-                      </Link>
+                      <Button asChild>
+                        <Link href="/students/new">
+                          <Plus className="h-4 w-4" /> Add Student
+                        </Link>
+                      </Button>
                     }
                   />
                 ) : (

@@ -192,7 +192,7 @@ export default function RegisterPage() {
             {step === 1 && (
               <div className="space-y-5">
                 <div>
-                  <button onClick={() => setStep(0)} className="mb-4 flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
+                  <button onClick={() => setStep(0)} className="mb-4 flex items-center gap-1 rounded text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                     <ArrowLeft className="h-3.5 w-3.5" /> Back
                   </button>
                   <h1 className="text-xl font-bold text-foreground">Admin account</h1>

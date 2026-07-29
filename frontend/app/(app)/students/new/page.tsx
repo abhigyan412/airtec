@@ -2,10 +2,11 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Loader2, CheckCircle, User, BookOpen, Phone } from 'lucide-react'
+import { ArrowLeft, Loader2, CheckCircle, User, BookOpen, Phone, UserPlus } from 'lucide-react'
 import { studentsApi, admissionApi } from '@/lib/api'
 import { toast } from 'sonner'
 import Link from 'next/link'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input as UiInput } from '@/components/ui/input'
@@ -85,16 +86,18 @@ export default function NewStudentPage() {
 
   return (
     <div className="max-w-3xl space-y-6">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild aria-label="Back to students">
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="icon" asChild aria-label="Back to students" className="mt-1 shrink-0">
           <Link href="/students">
             <ArrowLeft className="h-5 w-5" />
           </Link>
         </Button>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Add New Student</h1>
-          <p className="text-sm text-muted-foreground">Fill in student details to enrol</p>
-        </div>
+        <PageHeader
+          className="mb-0 flex-1"
+          title="Add New Student"
+          description="Fill in student details to enrol"
+          icon={UserPlus}
+        />
       </div>
 
       {/* Section tabs */}

@@ -4,13 +4,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, Plus, Calendar, Check, X, AlertTriangle, Ban } from 'lucide-react'
+import { ArrowLeft, Plus, Calendar, Check, X, AlertTriangle, Ban, ClipboardList } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { ApplyLeaveModal } from '@/components/hr/ApplyLeaveModal'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -27,7 +28,7 @@ export default function LeavePage() {
   const [showApply, setShowApply] = useState(false)
   const isAdmin = ['school_admin', 'principal'].includes(user?.role ?? '')
 
-  const { data: balances } = useQuery({
+  const { data: balances, isLoading: balancesLoading } = useQuery({
     queryKey: ['leave-balances', user?.id],
     queryFn: () => hrmsApi.leaveBalances(user!.id).then(r => r.data),
     enabled: !!user?.id,
@@ -69,32 +70,36 @@ export default function LeavePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-start gap-4">
-          <Button variant="ghost" size="icon" asChild className="mt-1">
-            <Link href="/hr/staff" aria-label="Back to staff directory"><ArrowLeft className="h-5 w-5" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Leave Management</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">Apply for leave and track your balances</p>
-          </div>
-        </div>
-        <Button onClick={() => setShowApply(true)}>
-          <Plus className="h-4 w-4" /> Apply for Leave
+      <div>
+        <Button variant="ghost" size="sm" asChild className="-ml-2 mb-3 text-muted-foreground">
+          <Link href="/hr/staff"><ArrowLeft className="h-4 w-4" /> Staff Directory</Link>
         </Button>
+        <PageHeader
+          className="mb-0"
+          title="Leave Management"
+          description="Apply for leave and track your balances"
+          icon={ClipboardList}
+          actions={
+            <Button onClick={() => setShowApply(true)}>
+              <Plus className="h-4 w-4" /> Apply for Leave
+            </Button>
+          }
+        />
       </div>
 
       {/* My leave balances */}
       <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
-        {(balances ?? []).map((b: any) => (
-          <Card key={b.leave_type_id}>
-            <CardContent className="p-4 text-center">
-              <p className="text-xs font-medium text-muted-foreground">{b.code}</p>
-              <p className={cn('mt-1 text-2xl font-bold', b.remaining_days < 0 ? 'text-destructive' : 'text-foreground')}>{b.remaining_days}</p>
-              <p className="text-xs text-muted-foreground">of {b.total_days} days</p>
-            </CardContent>
-          </Card>
-        ))}
+        {balancesLoading
+          ? Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[98px] rounded-xl" />)
+          : (balances ?? []).map((b: any) => (
+              <Card key={b.leave_type_id}>
+                <CardContent className="p-4 text-center">
+                  <p className="text-xs font-medium text-muted-foreground">{b.code}</p>
+                  <p className={cn('mt-1 text-2xl font-bold', b.remaining_days < 0 ? 'text-destructive' : 'text-foreground')}>{b.remaining_days}</p>
+                  <p className="text-xs text-muted-foreground">of {b.total_days} days</p>
+                </CardContent>
+              </Card>
+            ))}
       </div>
 
       {/* Pending approvals (admin only) */}
@@ -150,7 +155,16 @@ export default function LeavePage() {
               {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
           ) : (myRequests ?? []).length === 0 ? (
-            <EmptyState icon={Calendar} title="No leave requests yet" />
+            <EmptyState
+              icon={Calendar}
+              title="No leave requests yet"
+              description="Apply for leave and it will show up here with its approval status."
+              action={
+                <Button onClick={() => setShowApply(true)}>
+                  <Plus className="h-4 w-4" /> Apply for Leave
+                </Button>
+              }
+            />
           ) : (
             <div className="divide-y divide-border">
               {(myRequests ?? []).map((lr: any) => (

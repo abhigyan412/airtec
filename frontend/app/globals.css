@@ -14,7 +14,11 @@
     --popover-foreground: 240 10% 10%;
 
     --border: 240 6% 88%;
-    --input: 240 6% 88%;
+    /* Splits from --border deliberately: an input's boundary is a UI component
+       boundary and owes 3:1 (WCAG 1.4.11). At 88% it measured 1.33:1, so the
+       field edge was effectively invisible. --border stays soft for decorative
+       card edges, which carry no such requirement. */
+    --input: 240 6% 60%;
     --ring: 243 75% 59%;
 
     --primary: 243 75% 59%;
@@ -29,16 +33,37 @@
     --accent: 243 60% 95%;
     --accent-foreground: 243 75% 40%;
 
-    --destructive: 0 84% 60%;
+    /* Semantic trio, retuned for contrast. These are used as TEXT far more
+       often than as fills (status pills, dues, "Absent", "Partial"), and the
+       conventional lightness values fail WCAG AA badly in that role:
+         old --warning     38 92% 50%  =  2.14:1 on white  (needs 4.5)
+         old --success    152 62% 40%  =  3.14:1
+         old --destructive  0 84% 60%  =  3.78:1
+       Worse on the `bg-X/10 text-X` pill this app uses ~275 times, where the
+       tint lifts the background: warning bottomed out at 1.98:1.
+       Measured at these values: text 5.19-5.42:1, pill 4.54-4.72:1, and white
+       labels on the solid fills clear 4.5:1 too. Hues are untouched, so the
+       colours still read as the same green/amber/red. */
+    --destructive: 0 84% 45%;
     --destructive-foreground: 0 0% 100%;
 
-    --success: 152 62% 40%;
+    --success: 152 62% 30%;
     --success-foreground: 0 0% 100%;
 
-    --warning: 38 92% 50%;
-    --warning-foreground: 40 60% 12%;
+    --warning: 38 92% 30%;
+    --warning-foreground: 0 0% 100%;
 
     --radius: 0.75rem;
+
+    /* Motion vocabulary, shared verbatim with the family portal so the two
+       apps accelerate and settle identically. Authored curves rather than the
+       CSS defaults, which are too weak to read as intentional. */
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+    --duration-press: 120ms;
+    --duration-fast: 180ms;
+    --duration-base: 240ms;
 
     --sidebar: 0 0% 100%;
     --sidebar-foreground: 240 10% 10%;
@@ -58,11 +83,14 @@
     --popover-foreground: 213 31% 91%;
 
     --border: 216 34% 17%;
-    --input: 216 34% 17%;
-    --ring: 243 75% 65%;
+    --input: 216 34% 42%;
+    --ring: 243 75% 69%;
 
-    --primary: 243 75% 65%;
-    --primary-foreground: 0 0% 100%;
+    /* Lifted from 65%: at that value indigo measured 4.11:1 on the dark card,
+       under the 4.5 body-text floor. Lightening the swatch means the label on
+       top must go dark to stay readable. */
+    --primary: 243 75% 69%;
+    --primary-foreground: 224 71% 4%;
 
     --secondary: 222 47% 13%;
     --secondary-foreground: 213 31% 91%;
@@ -73,18 +101,18 @@
     --accent: 222 47% 13%;
     --accent-foreground: 213 31% 91%;
 
-    /* Brighter, cleaner red for dark mode: the old 31%-lightness red was muddy
-       and low-contrast as `text-destructive` (dues, errors, unpaid pills) on the
-       near-black background. 51% reads clearly as text AND still carries white
-       label text as a `bg-destructive` button. */
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
+    /* Dark mode inverts the problem: the swatches must LIGHTEN to stay legible
+       on a near-black card, which in turn means their labels go dark. Old
+       values measured --destructive 3.94:1 as text, and white-on-success just
+       2.70:1 as a solid button. Now 4.88-5.22:1 as text, 5.2-5.57:1 as fills. */
+    --destructive: 0 84% 59%;
+    --destructive-foreground: 224 71% 4%;
 
-    --success: 152 55% 45%;
-    --success-foreground: 0 0% 100%;
+    --success: 152 62% 37%;
+    --success-foreground: 224 71% 4%;
 
-    --warning: 38 90% 55%;
-    --warning-foreground: 40 60% 10%;
+    --warning: 38 92% 37%;
+    --warning-foreground: 224 71% 4%;
 
     --sidebar: 222 47% 6%;
     --sidebar-foreground: 213 31% 91%;
@@ -105,6 +133,36 @@
   }
   html {
     scroll-behavior: smooth;
+  }
+}
+
+/* Reduced motion means gentler, not none: colour and opacity still carry
+   meaning, so only movement, overshoot and smooth-scroll are stripped. This was
+   missing entirely — every Radix overlay entrance played regardless of the OS
+   setting. */
+@media (prefers-reduced-motion: reduce) {
+  /* Strip the travel, keep the fade. Colour and opacity still carry meaning —
+     they are what tells someone their click registered — so only movement and
+     overshoot go. Note the absence of `!important`: a component that needs a
+     specific reduced-motion treatment must still be able to opt back in via
+     Tailwind's `motion-reduce:` variant. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: var(--duration-press);
+    animation-iteration-count: 1;
+    transition-duration: var(--duration-press);
+    /* Zeroes the translate/scale that tailwindcss-animate's enter/exit
+       utilities drive, leaving their opacity component intact. */
+    --tw-enter-translate-x: 0 !important;
+    --tw-enter-translate-y: 0 !important;
+    --tw-exit-translate-x: 0 !important;
+    --tw-exit-translate-y: 0 !important;
+    --tw-enter-scale: 1 !important;
+    --tw-exit-scale: 1 !important;
+  }
+  html {
+    scroll-behavior: auto;
   }
 }
 

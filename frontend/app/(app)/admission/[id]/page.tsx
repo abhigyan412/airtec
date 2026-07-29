@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { admissionApi } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, Phone, Mail, MessageSquare, Calendar, CheckCircle, Loader2, Plus, User, FileCheck } from 'lucide-react'
+import { ArrowLeft, Phone, Mail, MessageSquare, Calendar, CheckCircle, Loader2, Plus, User, FileCheck, UserPlus } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -12,10 +12,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { PageHeader } from '@/components/shared/PageHeader'
 
 const STAGES = [
   { key: 'new',                 label: 'New' },
@@ -27,23 +29,38 @@ const STAGES = [
   { key: 'admitted',            label: 'Admitted' },
 ]
 
-// Theme-aware status pill classes (work in both light and dark mode).
-const STATUS_COLORS: Record<string, string> = {
-  new: 'bg-primary/10 text-primary',
-  follow_up: 'bg-warning/10 text-warning',
-  interested: 'bg-purple-500/10 text-purple-600 dark:text-purple-400',
-  documents_submitted: 'bg-orange-500/10 text-orange-600 dark:text-orange-400',
-  entrance_exam: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
-  approved: 'bg-teal-500/10 text-teal-600 dark:text-teal-400',
-  fee_pending: 'bg-pink-500/10 text-pink-600 dark:text-pink-400',
-  admitted: 'bg-success/10 text-success',
-  rejected: 'bg-destructive/10 text-destructive',
-  lost: 'bg-muted text-muted-foreground',
-}
+// Pipeline stages are categorical (a stage identifies *where* an inquiry is,
+// not whether that is good or bad), so the middle stages stay outside the
+// semantic token scale — but every entry uses a theme-aware pill form
+// (`bg-<hue>-500/10 text-<hue>-600 dark:text-<hue>-400`) so it stays legible in
+// both light and dark mode. Single source of truth for the pill colours and
+// for the "Move to Stage" picker below.
+const ALL_STATUSES = [
+  { key: 'new',                 label: 'New',                 color: 'bg-primary/10 text-primary' },
+  { key: 'follow_up',           label: 'Follow Up',           color: 'bg-warning/10 text-warning' },
+  { key: 'interested',          label: 'Interested',          color: 'bg-purple-500/10 text-purple-600 dark:text-purple-400' },
+  { key: 'documents_submitted', label: 'Documents Submitted', color: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
+  { key: 'entrance_exam',       label: 'Entrance Exam',       color: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400' },
+  { key: 'approved',            label: 'Approved',            color: 'bg-teal-500/10 text-teal-600 dark:text-teal-400' },
+  { key: 'fee_pending',         label: 'Fee Pending',         color: 'bg-pink-500/10 text-pink-600 dark:text-pink-400' },
+  { key: 'admitted',            label: 'Admitted',            color: 'bg-success/10 text-success', locked: true },
+  { key: 'rejected',            label: 'Rejected',            color: 'bg-destructive/10 text-destructive' },
+  { key: 'lost',                label: 'Lost',                color: 'bg-muted text-muted-foreground' },
+]
+
+const STATUS_COLORS: Record<string, string> = Object.fromEntries(
+  ALL_STATUSES.map(s => [s.key, s.color]),
+)
 
 const CHANNEL_ICONS: Record<string, string> = {
   call: '📞', whatsapp: '💬', email: '📧', visit: '🏫', sms: '📱'
 }
+
+// Shared shape for the Quick Actions rows. These are bare <button>s rather than
+// <Button>s (they're full-width list rows), so the focus ring has to be spelled
+// out here — they'd otherwise be invisible to keyboard users.
+const QUICK_ACTION =
+  'w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
 
 export default function InquiryDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -82,18 +99,43 @@ export default function InquiryDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      <div className="max-w-5xl space-y-6">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-10 w-10 rounded-xl" />
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-56" />
+            <Skeleton className="h-4 w-72" />
+          </div>
+        </div>
+        <Skeleton className="h-[132px] w-full rounded-2xl" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="col-span-2 space-y-5">
+            <Skeleton className="h-[260px] w-full rounded-2xl" />
+            <Skeleton className="h-[180px] w-full rounded-2xl" />
+          </div>
+          <div className="space-y-5">
+            <Skeleton className="h-[220px] w-full rounded-2xl" />
+            <Skeleton className="h-[104px] w-full rounded-2xl" />
+          </div>
+        </div>
       </div>
     )
   }
 
   if (!data) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-        <p className="font-medium text-foreground">Inquiry not found</p>
-        <Link href="/admission" className="text-primary text-sm mt-2 hover:underline">Back to CRM</Link>
-      </div>
+      <EmptyState
+        icon={UserPlus}
+        title="Inquiry not found"
+        description="This inquiry may have been deleted, or the link is out of date."
+        action={
+          <Button variant="outline" asChild>
+            <Link href="/admission">
+              <ArrowLeft className="w-4 h-4" /> Back to CRM
+            </Link>
+          </Button>
+        }
+      />
     )
   }
 
@@ -104,38 +146,37 @@ export default function InquiryDetailPage() {
   return (
     <div className="max-w-5xl space-y-6">
       {/* Header */}
-      <div className="flex items-start gap-3">
-        <Button variant="ghost" size="icon" asChild className="mt-1">
-          <Link href="/admission" aria-label="Back to CRM">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-        </Button>
-        <div className="flex-1">
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">{inq.student_name}</h1>
+      <Button variant="ghost" size="sm" asChild className="-ml-3 -mb-2 text-muted-foreground">
+        <Link href="/admission">
+          <ArrowLeft className="w-4 h-4" /> Back to CRM
+        </Link>
+      </Button>
+      <PageHeader
+        title={inq.student_name}
+        description={[
+          inq.inquiry_number,
+          `Added ${formatDate(inq.created_at)}`,
+          inq.classes?.name && `Applying for ${inq.classes.name}`,
+        ].filter(Boolean).join(' · ')}
+        icon={UserPlus}
+        actions={
+          <>
             <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize', STATUS_COLORS[inq.status] ?? 'bg-muted text-muted-foreground')}>
               {inq.status?.replace(/_/g, ' ')}
             </span>
-            <span className="text-xs text-muted-foreground font-mono bg-muted px-2 py-0.5 rounded">{inq.inquiry_number}</span>
-          </div>
-          <p className="text-muted-foreground text-sm mt-1">
-            Added {formatDate(inq.created_at)}
-            {inq.classes?.name && ` · Applying for ${inq.classes.name}`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {!inq.linked_application && inq.status !== 'admitted' && inq.status !== 'rejected' && inq.status !== 'lost' && (
-            <Button onClick={() => convertMutation.mutate()} disabled={convertMutation.isPending}
-              className="bg-success text-success-foreground hover:bg-success/90">
-              {convertMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCheck className="w-4 h-4" />}
-              Convert to Application
-            </Button>
-          )}
-          {!inq.linked_application && (
-            <Button onClick={() => setShowStatusChange(true)}>Move Stage</Button>
-          )}
-        </div>
-      </div>
+            {!inq.linked_application && inq.status !== 'admitted' && inq.status !== 'rejected' && inq.status !== 'lost' && (
+              <Button onClick={() => convertMutation.mutate()} disabled={convertMutation.isPending}
+                className="bg-success text-success-foreground hover:bg-success/90">
+                {convertMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCheck className="w-4 h-4" />}
+                Convert to Application
+              </Button>
+            )}
+            {!inq.linked_application && (
+              <Button onClick={() => setShowStatusChange(true)}>Move Stage</Button>
+            )}
+          </>
+        }
+      />
 
       {/* Pipeline progress — OR link to the live application workflow if converted */}
       {inq.linked_application ? (
@@ -319,29 +360,29 @@ export default function InquiryDetailPage() {
               <div className="space-y-2">
                 {!inq.linked_application && inq.status !== 'admitted' && inq.status !== 'rejected' && inq.status !== 'lost' && (
                   <button onClick={() => convertMutation.mutate()} disabled={convertMutation.isPending}
-                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-success font-medium hover:bg-success/10 transition-colors border border-transparent">
+                    className={cn(QUICK_ACTION, 'text-success hover:bg-success/10')}>
                     Convert to Application <span className="text-success/50">→</span>
                   </button>
                 )}
                 <button onClick={() => setShowFollowUp(true)}
-                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-foreground font-medium hover:bg-muted transition-colors border border-transparent">
+                  className={cn(QUICK_ACTION, 'text-foreground hover:bg-muted')}>
                   Log Follow-up <span className="text-muted-foreground">→</span>
                 </button>
                 {!inq.linked_application && (
                   <>
                     <button onClick={() => setShowStatusChange(true)}
-                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-foreground font-medium hover:bg-muted transition-colors border border-transparent">
+                      className={cn(QUICK_ACTION, 'text-foreground hover:bg-muted')}>
                       Move Pipeline Stage <span className="text-muted-foreground">→</span>
                     </button>
                     {inq.status !== 'rejected' && inq.status !== 'lost' && (
                       <button onClick={() => statusMutation.mutate('rejected')}
-                        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-foreground font-medium hover:bg-destructive/10 hover:text-destructive transition-colors border border-transparent">
+                        className={cn(QUICK_ACTION, 'text-foreground hover:bg-destructive/10 hover:text-destructive')}>
                         Mark as Rejected <span className="text-muted-foreground">→</span>
                       </button>
                     )}
                     {inq.status !== 'lost' && (
                       <button onClick={() => statusMutation.mutate('lost')}
-                        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-foreground font-medium hover:bg-muted transition-colors border border-transparent">
+                        className={cn(QUICK_ACTION, 'text-foreground hover:bg-muted')}>
                         Mark as Lost <span className="text-muted-foreground">→</span>
                       </button>
                     )}
@@ -423,7 +464,9 @@ function FollowUpModal({ inquiryId, onClose }: { inquiryId: string, onClose: () 
                 { key: 'sms', icon: '📱', label: 'SMS' },
               ].map(c => (
                 <button key={c.key} onClick={() => setForm(f => ({ ...f, channel: c.key }))}
+                  aria-pressed={form.channel === c.key}
                   className={cn('flex flex-col items-center gap-1 p-2 rounded-xl border-2 text-xs font-medium transition-all',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                     form.channel === c.key ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-muted-foreground/40')}>
                   <span className="text-lg">{c.icon}</span>
                   {c.label}
@@ -472,19 +515,6 @@ function StatusChangeModal({ currentStatus, onSelect, isPending, onClose }: {
   isPending: boolean
   onClose: () => void
 }) {
-  const ALL_STATUSES = [
-    { key: 'new',                 label: 'New',                color: 'bg-primary/10 text-primary' },
-    { key: 'follow_up',           label: 'Follow Up',          color: 'bg-warning/10 text-warning' },
-    { key: 'interested',          label: 'Interested',         color: 'bg-purple-500/10 text-purple-600 dark:text-purple-400' },
-    { key: 'documents_submitted', label: 'Documents Submitted', color: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
-    { key: 'entrance_exam',       label: 'Entrance Exam',      color: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400' },
-    { key: 'approved',            label: 'Approved',           color: 'bg-teal-500/10 text-teal-600 dark:text-teal-400' },
-    { key: 'fee_pending',         label: 'Fee Pending',        color: 'bg-pink-500/10 text-pink-600 dark:text-pink-400' },
-    { key: 'admitted',            label: 'Admitted',           color: 'bg-success/10 text-success', locked: true },
-    { key: 'rejected',            label: 'Rejected',           color: 'bg-destructive/10 text-destructive' },
-    { key: 'lost',                label: 'Lost',               color: 'bg-muted text-muted-foreground' },
-  ]
-
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="max-w-sm">
@@ -500,6 +530,7 @@ function StatusChangeModal({ currentStatus, onSelect, isPending, onClose }: {
               title={s.locked ? "Admitted can only be set automatically when the linked application's workflow completes" : undefined}
               className={cn(
                 'w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 text-sm font-medium transition-all',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                 s.key === currentStatus
                   ? 'border-primary bg-primary/10 text-primary cursor-default'
                   : s.locked

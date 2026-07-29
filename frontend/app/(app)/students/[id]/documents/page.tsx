@@ -12,6 +12,8 @@ import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import {
   Dialog,
@@ -73,31 +75,35 @@ export default function StudentDocumentsPage() {
     },
   })
 
+  const studentName = [student?.first_name, student?.last_name].filter(Boolean).join(' ')
+
   return (
     <div className="max-w-6xl space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button asChild variant="ghost" size="icon" aria-label="Back to student">
-            <Link href={`/students/${id}`}><ArrowLeft className="h-5 w-5" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Documents — {student?.first_name} {student?.last_name}
-            </h1>
-            <p className="text-muted-foreground text-sm mt-0.5">
-              {(docs ?? []).length} document{(docs ?? []).length !== 1 ? 's' : ''} uploaded
-            </p>
-          </div>
-        </div>
-        <Button onClick={() => setShowUpload(true)}>
-          <Plus className="h-4 w-4" /> Upload Document
+      <div className="flex items-start gap-3">
+        <Button asChild variant="ghost" size="icon" aria-label="Back to student" className="mt-1 shrink-0">
+          <Link href={`/students/${id}`}><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
+        <PageHeader
+          className="mb-0 flex-1"
+          title={studentName ? `Documents — ${studentName}` : 'Documents'}
+          description={`${(docs ?? []).length} document${(docs ?? []).length !== 1 ? 's' : ''} uploaded`}
+          icon={FileText}
+          actions={
+            <Button onClick={() => setShowUpload(true)}>
+              <Plus className="h-4 w-4" /> Upload Document
+            </Button>
+          }
+        />
       </div>
 
       {/* Documents list */}
       <Card className="rounded-2xl">
         {isLoading ? (
-          <div className="p-12 text-center text-muted-foreground">Loading documents...</div>
+          <div className="space-y-4 p-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-14 w-full rounded-2xl" />
+            ))}
+          </div>
         ) : !(docs ?? []).length ? (
           <EmptyState
             icon={FileText}

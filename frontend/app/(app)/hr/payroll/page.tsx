@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatCurrency } from '@/lib/utils'
-import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, AlertTriangle, Wallet } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,9 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { PageHeader } from '@/components/shared/PageHeader'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -84,10 +86,12 @@ export default function PayrollPage() {
         <Button variant="ghost" size="icon" asChild className="mt-1 shrink-0">
           <Link href="/hr/staff" aria-label="Back to staff"><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Payroll</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Generate and manage monthly payslips</p>
-        </div>
+        <PageHeader
+          className="mb-0 flex-1"
+          title="Payroll"
+          description="Generate and manage monthly payslips"
+          icon={Wallet}
+        />
       </div>
 
       {/* Period selector */}
@@ -132,7 +136,7 @@ export default function PayrollPage() {
           ].map(s => (
             <Card key={s.label}>
               <CardContent className="p-4">
-                <p className={cn('text-xl font-bold', s.color)}>{s.value}</p>
+                <p className={cn('text-xl font-bold tabular-nums', s.color)}>{s.value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{s.label}</p>
               </CardContent>
             </Card>
@@ -168,7 +172,11 @@ export default function PayrollPage() {
       {/* Payslips table */}
       <Card className="overflow-hidden">
         {isLoading ? (
-          <div className="p-12 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" /></div>
+          <div className="space-y-3 p-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
+          </div>
         ) : (payslips ?? []).length === 0 ? (
           <EmptyState
             icon={IndianRupee}
@@ -176,51 +184,53 @@ export default function PayrollPage() {
             description='Click "Generate Payslips" to create them from staff salary structures'
           />
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead>Staff</TableHead>
-                <TableHead>Gross</TableHead>
-                <TableHead>Deductions</TableHead>
-                <TableHead>Net Pay</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(payslips ?? []).map((p: any) => (
-                <TableRow key={p.id} className="cursor-default">
-                  <TableCell>
-                    <p className="font-semibold text-foreground">{p.users?.full_name}</p>
-                    <p className="text-xs capitalize text-muted-foreground">{p.users?.role?.replace('_', ' ')}</p>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{formatCurrency(Number(p.gross_salary))}</TableCell>
-                  <TableCell className="text-muted-foreground">{formatCurrency(Number(p.total_deductions))}</TableCell>
-                  <TableCell className="font-semibold text-foreground">{formatCurrency(Number(p.net_salary))}</TableCell>
-                  <TableCell>
-                    <Badge variant={PAY_STATUS_VARIANT[p.payment_status] ?? 'secondary'} className="capitalize">
-                      {p.payment_status.replace('_', ' ')}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {p.payment_status === 'pending' && canApprove && (
-                      <Button size="sm" variant="secondary" onClick={() => approveMutation.mutate({ id: p.id })} disabled={approveMutation.isPending} className="ml-auto">
-                        {approveMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />} Approve
-                      </Button>
-                    )}
-                    {p.payment_status === 'pending' && !canApprove && (
-                      <span className="text-xs text-muted-foreground">Awaiting Principal approval</span>
-                    )}
-                    {p.payment_status === 'approved' && (
-                      <Button size="sm" onClick={() => markPaidMutation.mutate({ id: p.id })} disabled={markPaidMutation.isPending} className="ml-auto bg-success text-success-foreground hover:bg-success/90">
-                        {markPaidMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Mark Paid
-                      </Button>
-                    )}
-                  </TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Staff</TableHead>
+                  <TableHead className="text-right">Gross</TableHead>
+                  <TableHead className="text-right">Deductions</TableHead>
+                  <TableHead className="text-right">Net Pay</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead />
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {(payslips ?? []).map((p: any) => (
+                  <TableRow key={p.id} className="cursor-default">
+                    <TableCell>
+                      <p className="font-semibold text-foreground">{p.users?.full_name}</p>
+                      <p className="text-xs capitalize text-muted-foreground">{p.users?.role?.replace('_', ' ')}</p>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(Number(p.gross_salary))}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(Number(p.total_deductions))}</TableCell>
+                    <TableCell className="text-right font-semibold tabular-nums text-foreground">{formatCurrency(Number(p.net_salary))}</TableCell>
+                    <TableCell>
+                      <Badge variant={PAY_STATUS_VARIANT[p.payment_status] ?? 'secondary'} className="capitalize">
+                        {p.payment_status.replace('_', ' ')}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {p.payment_status === 'pending' && canApprove && (
+                        <Button size="sm" variant="secondary" onClick={() => approveMutation.mutate({ id: p.id })} disabled={approveMutation.isPending} className="ml-auto">
+                          {approveMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />} Approve
+                        </Button>
+                      )}
+                      {p.payment_status === 'pending' && !canApprove && (
+                        <span className="text-xs text-muted-foreground">Awaiting Principal approval</span>
+                      )}
+                      {p.payment_status === 'approved' && (
+                        <Button size="sm" onClick={() => markPaidMutation.mutate({ id: p.id })} disabled={markPaidMutation.isPending} className="ml-auto bg-success text-success-foreground hover:bg-success/90">
+                          {markPaidMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Mark Paid
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </Card>
     </div>

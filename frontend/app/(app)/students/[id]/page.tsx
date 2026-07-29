@@ -5,9 +5,11 @@ import { useParams } from 'next/navigation'
 import { studentsApi, admissionApi, academicYearsApi, documentsApi } from '@/lib/api'
 import { formatDate, formatCurrency, cn, STATUS_COLORS } from '@/lib/utils'
 import { TransferCertificateCard } from '@/components/students/TransferCertificateCard'
-import { ArrowLeft, User, BookOpen, Phone, CreditCard, FileText, Calendar, Droplets, MapPin, Mail, Hash, Camera, Loader2, ArrowRightLeft, X, History } from 'lucide-react'
+import { ArrowLeft, User, BookOpen, Phone, CreditCard, FileText, Calendar, Droplets, MapPin, Mail, Hash, Camera, Loader2, ArrowRightLeft, X, History, Users } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { EmptyState } from '@/components/shared/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card as UICard, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -66,64 +68,60 @@ export default function StudentDetailPage() {
 
   if (!data) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-        <p className="font-medium text-foreground">Student not found</p>
-        <Link href="/students" className="text-primary text-sm mt-2 hover:underline">Back to students</Link>
-      </div>
+      <EmptyState
+        icon={Users}
+        title="Student not found"
+        description="This student may have been removed, or the link is out of date."
+        action={
+          <Button asChild>
+            <Link href="/students">Back to students</Link>
+          </Button>
+        }
+      />
     )
   }
 
   const s = data
   const parent = s.parents?.[0]
   const initials = `${s.first_name?.[0] ?? ''}${s.last_name?.[0] ?? ''}`.toUpperCase()
+  const subtitle = [
+    s.classes?.name ? `${s.classes.name}${s.sections?.name ? ` · ${s.sections.name}` : ''}` : null,
+    s.admission_number ? `#${s.admission_number}` : null,
+  ].filter(Boolean).join(' · ')
 
   return (
     <div className="max-w-5xl space-y-6">
-      <div className="flex items-start gap-4">
+      <div className="flex items-start gap-3">
         <Button asChild variant="ghost" size="icon" className="mt-1 shrink-0" aria-label="Back to students">
           <Link href="/students"><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
-        <div className="flex-1">
-          <div className="flex items-center gap-4">
-            <PhotoUpload studentId={id} currentUrl={s.photo_url} initials={initials} />
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold tracking-tight text-foreground">{s.first_name} {s.last_name}</h1>
-                <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize', STATUS_COLORS[s.status])}>
-                  {s.status}
+        <PhotoUpload studentId={id} currentUrl={s.photo_url} initials={initials} />
+        <PageHeader
+          className="mb-0 flex-1"
+          title={`${s.first_name} ${s.last_name}`}
+          description={subtitle || undefined}
+          actions={
+            <>
+              <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize', STATUS_COLORS[s.status])}>
+                {s.status}
+              </span>
+              {s.houses && (
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ backgroundColor: s.houses.color ?? '#6366f1' }}>
+                  {s.houses.name}
                 </span>
-              </div>
-              <div className="flex items-center gap-4 mt-1">
-                {s.admission_number && (
-                  <span className="text-xs text-muted-foreground font-mono bg-muted px-2 py-0.5 rounded">
-                    #{s.admission_number}
-                  </span>
-                )}
-                {s.classes?.name && (
-                  <span className="text-sm text-muted-foreground">
-                    {s.classes.name}{s.sections?.name ? ` · ${s.sections.name}` : ''}
-                  </span>
-                )}
-                {s.houses && (
-                  <span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ backgroundColor: s.houses.color ?? '#6366f1' }}>
-                    {s.houses.name}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button asChild variant="outline" size="sm">
-            <a href={documentsApi.idCard(id)} target="_blank" rel="noreferrer">ID Card</a>
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)}>
-            <ArrowRightLeft className="h-3.5 w-3.5" /> Transfer
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link href={`/students/${id}/edit`}>Edit profile</Link>
-          </Button>
-        </div>
+              )}
+              <Button asChild variant="outline" size="sm">
+                <a href={documentsApi.idCard(id)} target="_blank" rel="noreferrer">ID Card</a>
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)}>
+                <ArrowRightLeft className="h-3.5 w-3.5" /> Transfer
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/students/${id}/edit`}>Edit profile</Link>
+              </Button>
+            </>
+          }
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

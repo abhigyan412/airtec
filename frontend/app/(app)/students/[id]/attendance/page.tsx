@@ -4,10 +4,12 @@ import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { studentsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react'
 import Link from 'next/link'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 
 const STATUS_COLORS: Record<string, string> = {
   present: 'bg-success text-success-foreground',
@@ -47,6 +49,8 @@ export default function StudentAttendancePage() {
   const firstDay = new Date(year, month - 1, 1).getDay()
   const daysInMonth = new Date(year, month, 0).getDate()
 
+  const studentName = [student?.first_name, student?.last_name].filter(Boolean).join(' ')
+
   const changeMonth = (delta: number) => {
     let m = month + delta
     let y = year
@@ -58,32 +62,40 @@ export default function StudentAttendancePage() {
 
   return (
     <div className="max-w-3xl space-y-6">
-      <div className="flex items-center gap-3">
-        <Button asChild variant="ghost" size="icon" aria-label="Back to student">
+      <div className="flex items-start gap-3">
+        <Button asChild variant="ghost" size="icon" aria-label="Back to student" className="mt-1 shrink-0">
           <Link href={`/students/${id}`}><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            Attendance — {student?.first_name} {student?.last_name}
-          </h1>
-          <p className="text-muted-foreground text-sm mt-0.5">{student?.classes?.name}</p>
-        </div>
+        <PageHeader
+          className="mb-0 flex-1"
+          title={studentName ? `Attendance — ${studentName}` : 'Attendance'}
+          description={`Day-by-day record for this student${student?.classes?.name ? ` · ${student.classes.name}` : ''}`}
+          icon={CalendarDays}
+        />
       </div>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { label: 'Present',    value: summary.present,    color: 'text-success bg-success/10' },
-          { label: 'Absent',     value: summary.absent,     color: 'text-destructive bg-destructive/10' },
-          { label: 'Late',       value: summary.late,       color: 'text-warning bg-warning/10' },
-          { label: 'Attendance', value: `${summary.percentage}%`, color: 'text-primary bg-primary/10' },
-        ].map(s => (
-          <div key={s.label} className={cn('rounded-2xl p-4 text-center', s.color)}>
-            <p className="text-2xl font-bold">{s.value}</p>
-            <p className="text-xs font-medium mt-0.5 opacity-80">{s.label}</p>
-          </div>
-        ))}
-      </div>
+      {isLoading ? (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[88px] rounded-2xl" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { label: 'Present',    value: summary.present,    color: 'text-success bg-success/10' },
+            { label: 'Absent',     value: summary.absent,     color: 'text-destructive bg-destructive/10' },
+            { label: 'Late',       value: summary.late,       color: 'text-warning bg-warning/10' },
+            { label: 'Attendance', value: `${summary.percentage}%`, color: 'text-primary bg-primary/10' },
+          ].map(s => (
+            <div key={s.label} className={cn('rounded-2xl p-4 text-center', s.color)}>
+              <p className="text-2xl font-bold">{s.value}</p>
+              <p className="text-xs font-medium mt-0.5 opacity-80">{s.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Calendar */}
       <Card className="rounded-2xl">
@@ -110,7 +122,11 @@ export default function StudentAttendancePage() {
 
           {/* Calendar grid */}
           {isLoading ? (
-            <div className="py-8 text-center text-muted-foreground text-sm">Loading...</div>
+            <div className="grid grid-cols-7 gap-1">
+              {Array.from({ length: 35 }).map((_, i) => (
+                <Skeleton key={i} className="aspect-square rounded-xl" />
+              ))}
+            </div>
           ) : (
             <div className="grid grid-cols-7 gap-1">
               {/* Empty cells before first day */}

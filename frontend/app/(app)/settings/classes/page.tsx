@@ -4,8 +4,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { classesApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { Plus, X, Pencil, Trash2, Loader2, ShieldOff, GraduationCap } from 'lucide-react'
+import { Plus, X, Pencil, Trash2, Loader2, ShieldOff, GraduationCap, School } from 'lucide-react'
 import { toast } from 'sonner'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -55,18 +56,17 @@ export default function ClassesSettingsPage() {
 
   return (
     <div className="space-y-6">
-      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Settings</p>
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Classes &amp; Sections</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Define your school&apos;s classes and how each is split — letter sections, or streams for 11th/12th
-          </p>
-        </div>
-        <Button onClick={() => setShowAddClass(true)}>
-          <Plus className="h-4 w-4" /> Add Class
-        </Button>
-      </div>
+      <PageHeader
+        title="Classes & Sections"
+        description="Define your school's classes and how each is split — letter sections, or streams for 11th/12th"
+        icon={School}
+        className="mb-0"
+        actions={
+          <Button onClick={() => setShowAddClass(true)}>
+            <Plus className="h-4 w-4" /> Add Class
+          </Button>
+        }
+      />
 
       {isLoading ? (
         <div className="grid gap-3">
@@ -77,7 +77,12 @@ export default function ClassesSettingsPage() {
           <EmptyState
             icon={GraduationCap}
             title="No classes yet"
-            description="Add your first class to get started"
+            description="Classes are the backbone of admissions, timetables and attendance. Add your first one to get started."
+            action={
+              <Button onClick={() => setShowAddClass(true)}>
+                <Plus className="h-4 w-4" /> Add Class
+              </Button>
+            }
           />
         </Card>
       ) : (
@@ -174,13 +179,25 @@ function ClassCard({ cls, onDeleteClass, onChanged }: { cls: any; onDeleteClass:
                 Stream-wise
               </Badge>
             )}
-            <button onClick={() => setEditingName(true)} className="text-muted-foreground transition-colors hover:text-foreground">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 text-muted-foreground hover:text-foreground"
+              onClick={() => setEditingName(true)}
+              aria-label={`Rename ${cls.name}`}
+            >
               <Pencil className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           </div>
-          <button onClick={onDeleteClass} className="text-muted-foreground transition-colors hover:text-destructive">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 text-muted-foreground hover:text-destructive"
+            onClick={onDeleteClass}
+            aria-label={`Delete ${cls.name}`}
+          >
             <Trash2 className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -211,7 +228,7 @@ function ClassCard({ cls, onDeleteClass, onChanged }: { cls: any; onDeleteClass:
             </div>
           ) : (
             <button onClick={() => setAddingSection(true)}
-              className="flex items-center gap-1 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary">
+              className="flex items-center gap-1 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
               <Plus className="h-3 w-3" /> {isSenior ? 'Add Stream' : 'Add Section'}
             </button>
           )}
@@ -248,7 +265,7 @@ function ClassCard({ cls, onDeleteClass, onChanged }: { cls: any; onDeleteClass:
               </div>
             ) : (
               <button onClick={() => setAddingSubject(true)}
-                className="flex items-center gap-1 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-success/40 hover:text-success">
+                className="flex items-center gap-1 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-success/40 hover:text-success focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                 <Plus className="h-3 w-3" /> Add Subject
               </button>
             )}
@@ -266,9 +283,12 @@ function ClassCard({ cls, onDeleteClass, onChanged }: { cls: any; onDeleteClass:
 // ── SUBJECT CHIP ──────────────────────────────────────────────
 function SubjectChip({ subject, onDelete }: { subject: any; onDelete: () => void }) {
   return (
-    <div className="group flex items-center gap-1.5 rounded-lg border border-success/20 bg-success/10 py-1.5 pl-3 pr-1.5 text-xs font-medium text-success">
+    <div className="group flex items-center gap-1.5 rounded-lg border border-success/20 bg-success/10 py-1.5 pl-3 pr-1 text-xs font-medium text-success">
       <span>{subject.name}</span>
-      <button onClick={onDelete} className="text-success/50 opacity-0 transition-all hover:text-destructive group-hover:opacity-100">
+      {/* Revealed on hover, but also on keyboard focus — otherwise the only
+          way to remove a subject is with a mouse. */}
+      <button onClick={onDelete} aria-label={`Remove ${subject.name}`}
+        className="flex h-6 w-6 items-center justify-center rounded text-success/50 opacity-0 transition-all hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100">
         <X className="h-3 w-3" />
       </button>
     </div>
@@ -287,15 +307,19 @@ function SectionChip({ section, onDelete, onRename }: { section: any; onDelete: 
   }
 
   return (
-    <div className="group flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 py-1.5 pl-3 pr-1.5 text-xs font-medium text-primary transition-all">
+    <div className="group flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 py-1.5 pl-3 pr-1 text-xs font-medium text-primary transition-all">
       {editing ? (
         <input autoFocus value={value} onChange={e => setValue(e.target.value)}
           onBlur={commit} onKeyDown={e => e.key === 'Enter' && commit()}
           className="w-16 rounded border border-primary/40 bg-background px-1.5 py-0.5 text-xs text-foreground focus:outline-none" />
       ) : (
-        <button onClick={() => setEditing(true)} className="hover:underline">{section.name}</button>
+        <button onClick={() => setEditing(true)} aria-label={`Rename section ${section.name}`}
+          className="rounded hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{section.name}</button>
       )}
-      <button onClick={onDelete} className="text-primary/50 opacity-0 transition-all hover:text-destructive group-hover:opacity-100">
+      {/* Revealed on hover, but also on keyboard focus — otherwise the only
+          way to remove a section is with a mouse. */}
+      <button onClick={onDelete} aria-label={`Remove section ${section.name}`}
+        className="flex h-6 w-6 items-center justify-center rounded text-primary/50 opacity-0 transition-all hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100">
         <X className="h-3 w-3" />
       </button>
     </div>

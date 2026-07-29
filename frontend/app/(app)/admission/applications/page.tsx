@@ -2,7 +2,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { admissionApi } from '@/lib/api'
 import { formatDate } from '@/lib/utils'
-import { ArrowLeft, FileText, ChevronRight } from 'lucide-react'
+import { ArrowLeft, FileText, ChevronRight, ClipboardList, Plus } from 'lucide-react'
 import Link from 'next/link'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { PageHeader } from '@/components/shared/PageHeader'
 
 const STATUS_VARIANTS: Record<string, 'warning' | 'success' | 'destructive' | 'secondary'> = {
   pending: 'warning',
@@ -25,17 +26,16 @@ export default function ApplicationsListPage() {
 
   return (
     <div className="max-w-5xl space-y-6">
-      <div className="flex items-start gap-3">
-        <Button variant="ghost" size="icon" asChild className="mt-1">
-          <Link href="/admission" aria-label="Back to CRM">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-        </Button>
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Admission Applications</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Applications going through the approval workflow</p>
-        </div>
-      </div>
+      <Button variant="ghost" size="sm" asChild className="-ml-3 -mb-2 text-muted-foreground">
+        <Link href="/admission">
+          <ArrowLeft className="w-4 h-4" /> Back to CRM
+        </Link>
+      </Button>
+      <PageHeader
+        title="Admission Applications"
+        description="Applications going through the approval workflow"
+        icon={ClipboardList}
+      />
 
       <Card className="overflow-hidden">
         {isLoading ? (
@@ -43,7 +43,19 @@ export default function ApplicationsListPage() {
             {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
           </div>
         ) : (data ?? []).length === 0 ? (
-          <EmptyState icon={FileText} title="No applications yet" className="py-16" />
+          <EmptyState
+            icon={FileText}
+            title="No applications yet"
+            description="Nothing has entered the approval workflow. Start one from the Admission CRM, or convert an existing inquiry."
+            action={
+              <Button asChild>
+                <Link href="/admission">
+                  <Plus className="w-4 h-4" /> New Application
+                </Link>
+              </Button>
+            }
+            className="py-16"
+          />
         ) : (
           <Table>
             <TableHeader>

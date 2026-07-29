@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 
 // ═══════════════════════════════════════════════════════════════
 // UNIFIED ROLE PERMISSIONS PAGE (v2)
@@ -136,19 +137,21 @@ export default function RolePermissionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-start gap-2">
-          <Button variant="ghost" size="icon" asChild className="mt-1 shrink-0">
-            <Link href="/hr/staff" aria-label="Back to staff"><ArrowLeft className="h-5 w-5" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Role Permissions</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">Control what each role can do, by fine-grained permission</p>
-          </div>
-        </div>
-        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !activeRoleId}>
-          {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Permissions
+      <div className="flex items-start gap-2">
+        <Button variant="ghost" size="icon" asChild className="mt-1 shrink-0">
+          <Link href="/hr/staff" aria-label="Back to staff"><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
+        <PageHeader
+          className="mb-0 flex-1"
+          title="Role Permissions"
+          description="Control what each role can do, by fine-grained permission"
+          icon={ShieldCheck}
+          actions={
+            <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !activeRoleId}>
+              {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Permissions
+            </Button>
+          }
+        />
       </div>
 
       {/* Role tabs */}
@@ -158,7 +161,7 @@ export default function RolePermissionsPage() {
         <div className="flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1">
           {editableRoles.map((r: any) => (
             <button key={r.id} onClick={() => setActiveRoleId(r.id)}
-              className={cn('whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-all',
+              className={cn('whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                 activeRoleId === r.id ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
               {r.name}
             </button>
@@ -169,7 +172,20 @@ export default function RolePermissionsPage() {
       {/* Permission grid, grouped by module */}
       <Card className="overflow-hidden">
         {rolePermsLoading ? (
-          <div className="p-12 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" /></div>
+          // Mirrors the real grid: a module heading followed by a row of
+          // permission chips, repeated for each module block.
+          <div className="divide-y divide-border">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="px-5 py-4">
+                <Skeleton className="mb-3 h-5 w-40" />
+                <div className="flex flex-wrap gap-2">
+                  {Array.from({ length: 5 }).map((__, j) => (
+                    <Skeleton key={j} className="h-8 w-24 rounded-lg" />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="divide-y divide-border">
             {moduleOrder.filter(m => groupedPermissions[m]?.length).map(module => {
@@ -182,7 +198,7 @@ export default function RolePermissionsPage() {
                   <div className="mb-3 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-foreground">{MODULE_LABELS[module] ?? module}</h3>
                     <button onClick={() => toggleModule(perms.map(p => p.permission_code), allOn)}
-                      className="text-xs font-medium text-primary hover:underline">
+                      className="rounded text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                       {allOn ? 'Clear all' : 'Select all'}
                     </button>
                   </div>
@@ -192,7 +208,8 @@ export default function RolePermissionsPage() {
                       const actionLabel = ACTION_LABELS[p.action] ?? p.action
                       return (
                         <button key={p.permission_code} onClick={() => toggle(p.permission_code)}
-                          className={cn('flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all',
+                          aria-pressed={checked}
+                          className={cn('flex min-h-[32px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                             checked ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border bg-card text-muted-foreground hover:border-foreground/30')}>
                           <span className={cn('flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded border',
                             checked ? 'border-primary bg-primary' : 'border-border')}>

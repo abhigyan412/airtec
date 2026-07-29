@@ -12,6 +12,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import {
   Table,
@@ -68,12 +70,12 @@ export default function CertificatesPage() {
   const [showIssue, setShowIssue]             = useState(false)
   const qc = useQueryClient()
 
-  const { data: templates } = useQuery({
+  const { data: templates, isLoading: templatesLoading } = useQuery({
     queryKey: ['cert-templates'],
     queryFn: () => certificateApi.getTemplates().then(r => r.data),
   })
 
-  const { data: issued } = useQuery({
+  const { data: issued, isLoading: issuedLoading } = useQuery({
     queryKey: ['issued-certs'],
     queryFn: () => certificateApi.getIssued().then(r => r.data),
     enabled: tab === 'issued',
@@ -81,20 +83,21 @@ export default function CertificatesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Certificates</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Issue and manage student certificates</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={() => setShowNewTemplate(true)}>
-            <FileText className="h-4 w-4" /> New Template
-          </Button>
-          <Button onClick={() => setShowIssue(true)}>
-            <Plus className="h-4 w-4" /> Issue Certificate
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Certificates"
+        description="Issue and manage student certificates"
+        icon={Award}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setShowNewTemplate(true)}>
+              <FileText className="h-4 w-4" /> New Template
+            </Button>
+            <Button onClick={() => setShowIssue(true)}>
+              <Plus className="h-4 w-4" /> Issue Certificate
+            </Button>
+          </>
+        }
+      />
 
       {/* Tabs */}
       <Tabs value={tab} onValueChange={v => setTab(v as any)}>
@@ -138,12 +141,25 @@ export default function CertificatesPage() {
       {/* Templates tab */}
       {tab === 'templates' && (
         <Card>
-          {!(templates ?? []).length ? (
+          {templatesLoading ? (
+            <div className="divide-y divide-border">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between px-6 py-4">
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-48" />
+                    <Skeleton className="h-3 w-32" />
+                    <Skeleton className="h-3 w-24" />
+                  </div>
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                </div>
+              ))}
+            </div>
+          ) : !(templates ?? []).length ? (
             <EmptyState
               icon={FileText}
               title="No custom templates yet"
-              description="Default templates are used when no custom template exists"
-              action={<Button onClick={() => setShowNewTemplate(true)}>Create First Template</Button>}
+              description="Default wording is used for every certificate type until you create your own. Add a template to control the exact text."
+              action={<Button onClick={() => setShowNewTemplate(true)}><FileText className="h-4 w-4" /> Create First Template</Button>}
             />
           ) : (
             <div className="divide-y divide-border">
@@ -165,8 +181,19 @@ export default function CertificatesPage() {
       {/* Issued history tab */}
       {tab === 'issued' && (
         <Card className="overflow-hidden">
-          {!(issued ?? []).length ? (
-            <EmptyState icon={Award} title="No certificates issued yet" />
+          {issuedLoading ? (
+            <div className="space-y-3 p-6">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : !(issued ?? []).length ? (
+            <EmptyState
+              icon={Award}
+              title="No certificates issued yet"
+              description="Every certificate you issue is logged here with its number, so you can reprint it later."
+              action={<Button onClick={() => setShowIssue(true)}><Plus className="h-4 w-4" /> Issue Certificate</Button>}
+            />
           ) : (
             <Table>
               <TableHeader>

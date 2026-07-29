@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 
 const WEEKDAYS = [
@@ -81,13 +83,12 @@ export default function AcademicCalendarPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Settings</p>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">Academic Calendar</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          Holidays and weekly off days — attendance % is calculated against these as the real working days
-        </p>
-      </div>
+      <PageHeader
+        title="Academic Calendar"
+        description="Holidays and weekly off days — attendance % is calculated against these as the real working days"
+        icon={CalendarDays}
+        className="mb-0"
+      />
 
       {/* Weekly off */}
       <Card>
@@ -157,9 +158,22 @@ export default function AcademicCalendarPage() {
           </div>
 
           {isLoading ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">Loading...</div>
+            <div className="divide-y divide-border">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3 py-2.5">
+                  <Skeleton className="h-4 w-24 shrink-0" />
+                  <Skeleton className="h-4 w-40" />
+                </div>
+              ))}
+            </div>
           ) : (holidays ?? []).length === 0 ? (
-            <EmptyState icon={CalendarDays} title={`No holidays declared for ${year}`} className="py-10" />
+            <EmptyState
+              icon={CalendarDays}
+              title={`No holidays declared for ${year}`}
+              description="Until a date is listed here it counts as a working day for attendance. Add the ones your school observes."
+              action={<Button onClick={() => setShowAdd(true)}><Plus className="h-4 w-4" /> Add Holiday</Button>}
+              className="py-10"
+            />
           ) : (
             <div className="divide-y divide-border">
               {(holidays ?? []).map((h: any) => (
@@ -170,10 +184,15 @@ export default function AcademicCalendarPage() {
                     </span>
                     <span className="text-sm font-medium text-foreground">{h.name}</span>
                   </div>
-                  <button onClick={() => deleteHolidayMutation.mutate(h.id)}
-                    className="text-muted-foreground transition-colors hover:text-destructive">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => deleteHolidayMutation.mutate(h.id)}
+                    aria-label={`Remove holiday ${h.name}`}
+                  >
                     <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  </Button>
                 </div>
               ))}
             </div>
