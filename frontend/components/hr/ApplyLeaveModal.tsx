@@ -32,7 +32,7 @@ import {
 // truth for that preview now.
 export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
   const { user } = useAuth()
-  const { data: leaveTypes } = useQuery({
+  const { data: leaveTypes, isLoading: leaveTypesLoading } = useQuery({
     queryKey: ['leave-types'],
     queryFn: () => hrmsApi.leaveTypes.list().then(r => r.data),
   })
@@ -135,6 +135,11 @@ export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
             </Select>
             {selectedBalance && (
               <p className="mt-1 text-xs text-muted-foreground">{selectedBalance.remaining_days} of {selectedBalance.total_days} days remaining</p>
+            )}
+            {!leaveTypesLoading && (leaveTypes ?? []).length === 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                No leave types have been configured for this school yet — an administrator needs to add one before leave can be applied for.
+              </p>
             )}
           </div>
 

@@ -38,7 +38,7 @@ export default function ExamsPage() {
   const [showNew, setShowNew] = useState(false)
   const qc = useQueryClient()
 
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['exam-stats'],
     queryFn: () => api.get('/exams/stats').then(r => r.data.data),
   })
@@ -72,12 +72,18 @@ export default function ExamsPage() {
       />
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Exams" value={stats?.total ?? 0} icon={BookOpen} accent="primary" />
-        <StatCard label="Draft" value={stats?.draft ?? 0} icon={Clock} accent="info" />
-        <StatCard label="Ongoing" value={stats?.ongoing ?? 0} icon={FileText} accent="warning" />
-        <StatCard label="Results Declared" value={stats?.completed ?? 0} icon={CheckCircle} accent="success" />
-      </div>
+      {statsLoading ? (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[104px] rounded-xl" />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard label="Total Exams" value={stats?.total ?? 0} icon={BookOpen} accent="primary" />
+          <StatCard label="Draft" value={stats?.draft ?? 0} icon={Clock} accent="info" />
+          <StatCard label="Ongoing" value={stats?.ongoing ?? 0} icon={FileText} accent="warning" />
+          <StatCard label="Results Declared" value={stats?.completed ?? 0} icon={CheckCircle} accent="success" />
+        </div>
+      )}
 
       {/* Exams list */}
       <Card>
@@ -93,7 +99,12 @@ export default function ExamsPage() {
             <EmptyState
               icon={BookOpen}
               title="No exams yet"
-              description="Create your first exam to get started"
+              description="Create an exam to build its datesheet, enter marks and publish results."
+              action={
+                <Button onClick={() => setShowNew(true)}>
+                  <Plus className="h-4 w-4" /> New Exam
+                </Button>
+              }
             />
           ) : (
             <div className="divide-y divide-border">
@@ -112,7 +123,9 @@ export default function ExamsPage() {
                     </div>
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 pl-13 sm:pl-0">
+                  {/* pl-[3.25rem] lines the action row up under the exam name on
+                      mobile (40px icon + 12px gap); on sm+ it sits inline instead. */}
+                  <div className="flex flex-wrap items-center gap-2 pl-[3.25rem] sm:pl-0">
                   <Badge variant={STATUS_VARIANT[exam.status] ?? 'secondary'} className="shrink-0 capitalize">
                     {exam.status?.replace('_', ' ')}
                   </Badge>

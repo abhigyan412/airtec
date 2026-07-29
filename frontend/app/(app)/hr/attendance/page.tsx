@@ -3,13 +3,14 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { ArrowLeft, Loader2, ClipboardList, BarChart3, ChevronLeft, ChevronRight, Users } from 'lucide-react'
+import { ArrowLeft, Loader2, ClipboardList, BarChart3, ChevronLeft, ChevronRight, Users, UserCheck } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -39,24 +40,24 @@ export default function StaffAttendancePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-start gap-4">
-          <Button variant="ghost" size="icon" asChild className="mt-1">
-            <Link href="/hr/staff" aria-label="Back to staff directory"><ArrowLeft className="h-5 w-5" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Staff Attendance</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              {tab === 'mark' ? 'Mark daily attendance for staff members' : 'Monthly attendance report and working-day percentage'}
-            </p>
-          </div>
-        </div>
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-          <TabsList>
-            <TabsTrigger value="mark"><ClipboardList className="h-4 w-4" /> Mark</TabsTrigger>
-            <TabsTrigger value="report"><BarChart3 className="h-4 w-4" /> Report</TabsTrigger>
-          </TabsList>
-        </Tabs>
+      <div>
+        <Button variant="ghost" size="sm" asChild className="-ml-2 mb-3 text-muted-foreground">
+          <Link href="/hr/staff"><ArrowLeft className="h-4 w-4" /> Staff Directory</Link>
+        </Button>
+        <PageHeader
+          className="mb-0"
+          title="Staff Attendance"
+          description={tab === 'mark' ? 'Mark daily attendance for staff members' : 'Monthly attendance report and working-day percentage'}
+          icon={UserCheck}
+          actions={
+            <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+              <TabsList>
+                <TabsTrigger value="mark"><ClipboardList className="h-4 w-4" /> Mark</TabsTrigger>
+                <TabsTrigger value="report"><BarChart3 className="h-4 w-4" /> Report</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          }
+        />
       </div>
 
       {tab === 'mark' ? <MarkTab /> : <ReportTab />}
@@ -163,6 +164,17 @@ function MarkTab() {
           <div className="space-y-3 p-6">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
           </div>
+        ) : (staffData ?? []).length === 0 ? (
+          <EmptyState
+            icon={Users}
+            title="No staff to mark"
+            description="Invite team members first — everyone with a staff account shows up on this sheet."
+            action={
+              <Button variant="outline" asChild>
+                <Link href="/settings/team">Invite a team member</Link>
+              </Button>
+            }
+          />
         ) : (
           <Table>
             <TableHeader>
@@ -185,7 +197,10 @@ function MarkTab() {
                       <div className="flex gap-1.5">
                         {STATUS_OPTIONS.map(opt => (
                           <button key={opt.key} onClick={() => setStatus(s.id, opt.key)}
+                            aria-pressed={rec.status === opt.key}
+                            aria-label={`Mark ${s.full_name} ${opt.label}`}
                             className={cn('rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ring-inset transition-all',
+                              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                               rec.status === opt.key ? opt.color : 'bg-background text-muted-foreground ring-border hover:ring-muted-foreground/40')}>
                             {opt.label}
                           </button>
@@ -274,11 +289,21 @@ function ReportTab() {
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
         </CardContent></Card>
       ) : staff.length === 0 ? (
-        <Card><EmptyState icon={Users} title="No staff found" /></Card>
+        <Card>
+          <EmptyState
+            icon={Users}
+            title="No staff found"
+            description="Nobody has a staff account for this school yet, so there's nothing to report on."
+          />
+        </Card>
       ) : workingDays === 0 ? (
-        <div className="rounded-2xl border border-warning/20 bg-warning/10 px-5 py-4 text-sm text-warning">
-          No attendance was marked in {MONTHS[month - 1]} {year} yet.
-        </div>
+        <Card>
+          <EmptyState
+            icon={BarChart3}
+            title={`No working days in ${MONTHS[month - 1]} ${year}`}
+            description="Every date in this month is a holiday or weekly-off on the academic calendar, so no attendance percentage can be calculated."
+          />
+        </Card>
       ) : (
         <Card className="overflow-hidden">
           <CardHeader className="border-b border-border">

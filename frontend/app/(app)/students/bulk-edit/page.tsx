@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { studentsApi, admissionApi } from '@/lib/api'
 import { cn, STATUS_COLORS } from '@/lib/utils'
-import { Search, Filter, CheckSquare, Square, Edit3, Loader2, ArrowLeft, Users } from 'lucide-react'
+import { Search, Filter, CheckSquare, Square, Edit3, Loader2, ArrowLeft, Users, ClipboardList } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -11,6 +11,8 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import {
   Select,
@@ -117,18 +119,18 @@ export default function BulkEditPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild aria-label="Back to students">
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="icon" asChild aria-label="Back to students" className="mt-1 shrink-0">
           <Link href="/students">
             <ArrowLeft className="h-5 w-5" />
           </Link>
         </Button>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Bulk Edit Students</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Filter students, select them, then apply changes to all at once
-          </p>
-        </div>
+        <PageHeader
+          className="mb-0 flex-1"
+          title="Bulk Edit Students"
+          description="Filter students, select them, then apply changes to all at once"
+          icon={ClipboardList}
+        />
       </div>
 
       {/* Filters */}
@@ -278,7 +280,11 @@ export default function BulkEditPage() {
       <Card className="overflow-hidden p-0">
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
           <div className="flex items-center gap-3">
-            <button onClick={toggleAll} className="text-muted-foreground transition-colors hover:text-primary" aria-label="Toggle all">
+            <button
+              onClick={toggleAll}
+              className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              aria-label="Toggle all students"
+            >
               {selected.size === students.length && students.length > 0
                 ? <CheckSquare className="h-5 w-5 text-primary" />
                 : <Square className="h-5 w-5" />
@@ -297,26 +303,37 @@ export default function BulkEditPage() {
         </div>
 
         {isLoading ? (
-          <div className="p-12 text-center text-sm text-muted-foreground">Loading students...</div>
+          <div className="space-y-3 p-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
+          </div>
         ) : students.length === 0 ? (
-          <EmptyState icon={Users} title="No students match the filters" className="py-12" />
+          <EmptyState
+            icon={Users}
+            title="No students match the filters"
+            description="Widen the class, house or status filters — or clear the search box — to find the students you want to edit."
+            className="py-12"
+          />
         ) : (
           <div className="divide-y divide-border">
             {students.map((s: any) => {
               const isSelected = selected.has(s.id)
               return (
-                <div key={s.id}
+                <button key={s.id}
+                  type="button"
                   onClick={() => toggleOne(s.id)}
+                  aria-pressed={isSelected}
                   className={cn(
-                    'flex cursor-pointer items-center gap-4 px-6 py-3 transition-colors',
+                    'flex w-full items-center gap-4 px-6 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
                     isSelected ? 'bg-primary/10' : 'hover:bg-muted/50'
                   )}>
-                  <button className="shrink-0 text-muted-foreground" aria-label="Toggle student">
+                  <span className="shrink-0 text-muted-foreground">
                     {isSelected
                       ? <CheckSquare className="h-5 w-5 text-primary" />
                       : <Square className="h-5 w-5" />
                     }
-                  </button>
+                  </span>
                   <Avatar className="h-8 w-8">
                     {s.photo_url && <AvatarImage src={s.photo_url} alt="" />}
                     <AvatarFallback className="bg-primary/10 text-xs font-bold text-primary">
@@ -343,7 +360,7 @@ export default function BulkEditPage() {
                       {s.status}
                     </span>
                   </div>
-                </div>
+                </button>
               )
             })}
           </div>

@@ -16,7 +16,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { PageHeader } from '@/components/shared/PageHeader'
 
 const STATUS_VARIANT: Record<string, 'secondary' | 'success' | 'warning'> = {
   open: 'success',
@@ -45,26 +47,28 @@ export default function JobPostingsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-start gap-2">
-          <Button variant="ghost" size="icon" asChild className="mt-1 shrink-0">
-            <Link href="/hr/recruitment" aria-label="Back to recruitment"><ArrowLeft className="h-5 w-5" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Job Postings</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">Manage open positions and vacancies</p>
-          </div>
-        </div>
-        <Button onClick={() => setShowCreate(true)}>
-          <Plus className="h-4 w-4" /> New Job Posting
+      <div className="flex items-start gap-2">
+        <Button variant="ghost" size="icon" asChild className="mt-1 shrink-0">
+          <Link href="/hr/recruitment" aria-label="Back to recruitment"><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
+        <PageHeader
+          className="mb-0 flex-1"
+          title="Job Postings"
+          description="Manage open positions and vacancies"
+          icon={Briefcase}
+          actions={
+            <Button onClick={() => setShowCreate(true)}>
+              <Plus className="h-4 w-4" /> New Job Posting
+            </Button>
+          }
+        />
       </div>
 
       {/* Filter pills */}
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {['', 'open', 'on_hold', 'closed'].map(s => (
           <button key={s} onClick={() => setStatusFilter(s)}
-            className={cn('rounded-full border px-3 py-1.5 text-xs font-semibold capitalize transition-all',
+            className={cn('rounded-full border px-3 py-1.5 text-xs font-semibold capitalize transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               statusFilter === s ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground hover:border-primary/40')}>
             {s === '' ? 'All' : s.replace('_', ' ')}
           </button>
@@ -73,10 +77,32 @@ export default function JobPostingsPage() {
 
       {/* Jobs grid */}
       {isLoading ? (
-        <Card className="p-12 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" /></Card>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-[232px] rounded-xl" />
+          ))}
+        </div>
       ) : (jobs ?? []).length === 0 ? (
         <Card>
-          <EmptyState icon={Briefcase} title="No job postings yet" description="Create your first job posting to start hiring" />
+          {statusFilter ? (
+            <EmptyState
+              icon={Briefcase}
+              title={`No ${statusFilter.replace('_', ' ')} job postings`}
+              description="Nothing matches this filter right now. Switch to All to see every posting."
+              action={<Button variant="outline" onClick={() => setStatusFilter('')}>Show all</Button>}
+            />
+          ) : (
+            <EmptyState
+              icon={Briefcase}
+              title="No job postings yet"
+              description="Create your first posting so candidates can be tracked against a vacancy."
+              action={
+                <Button onClick={() => setShowCreate(true)}>
+                  <Plus className="h-4 w-4" /> New Job Posting
+                </Button>
+              }
+            />
+          )}
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

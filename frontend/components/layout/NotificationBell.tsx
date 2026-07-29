@@ -2,9 +2,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
-import { Bell, CheckCheck, Loader2 } from 'lucide-react'
+import { Bell, CheckCheck } from 'lucide-react'
 import { notificationsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Skeleton } from '@/components/ui/skeleton'
 import { PushPrompt } from './PushPrompt'
 
 function timeAgo(iso: string) {
@@ -77,7 +79,7 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
   return (
     <div className="relative">
       <button onClick={() => setOpen(o => !o)}
-        className={cn('relative p-1.5 rounded-lg transition-colors',
+        className={cn('relative inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
           // 'light' rides the sidebar design tokens, so it stays legible in
           // both themes; 'dark' is the fixed-palette variant for the family
           // portal's dark header.
@@ -87,7 +89,7 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
         <Bell className="w-[18px] h-[18px]" />
         {count > 0 && (
           <span aria-live="polite" aria-atomic="true"
-            className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center">
+            className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-destructive text-destructive-foreground text-[9px] font-bold flex items-center justify-center">
             {count > 9 ? '9+' : count}
           </span>
         )}
@@ -95,13 +97,13 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
 
       {open && (
         <div ref={panelRef}
-          className="fixed left-4 right-4 top-16 z-50 flex max-h-[70vh] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl
+          className="fixed left-4 right-4 top-16 z-50 flex max-h-[70vh] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-xl
             sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[360px]">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 flex-shrink-0">
-            <h3 className="font-semibold text-gray-900 text-sm">Notifications</h3>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+            <h3 className="font-semibold text-foreground text-sm">Notifications</h3>
             {count > 0 && (
               <button onClick={() => markAllReadMutation.mutate()} disabled={markAllReadMutation.isPending}
-                className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-50">
+                className="flex items-center gap-1 rounded text-xs font-medium text-primary hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
                 <CheckCheck className="w-3.5 h-3.5" /> Mark all read
               </button>
             )}
@@ -109,25 +111,38 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
           <PushPrompt app="staff" copy={{ headline: 'Get notified without checking', detail: 'Leave requests, approvals and fee alerts, even when this tab is closed.' }} />
           <div className="overflow-y-auto">
             {isLoading ? (
-              <div className="py-10 text-center"><Loader2 className="w-5 h-5 animate-spin text-indigo-600 mx-auto" /></div>
-            ) : notifications.length === 0 ? (
-              <div className="py-10 text-center text-gray-400">
-                <Bell className="w-8 h-8 mx-auto mb-2 text-gray-200" />
-                <p className="text-sm">No notifications yet</p>
+              <div className="divide-y divide-border">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="flex gap-2.5 px-4 py-3">
+                    <Skeleton className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full" />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <Skeleton className="h-3.5 w-2/3" />
+                      <Skeleton className="h-3 w-full" />
+                      <Skeleton className="h-2.5 w-16" />
+                    </div>
+                  </div>
+                ))}
               </div>
+            ) : notifications.length === 0 ? (
+              <EmptyState
+                icon={Bell}
+                title="No notifications yet"
+                description="Approvals, fee alerts and announcements land here as they happen."
+                className="px-4 py-10"
+              />
             ) : (
-              <div className="divide-y divide-gray-50">
+              <div className="divide-y divide-border">
                 {notifications.map((n: any) => (
                   <button key={n.id} onClick={() => handleClick(n)}
-                    className={cn('w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex gap-2.5',
-                      !n.is_read && 'bg-indigo-50/40')}>
-                    <span className={cn('w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0', !n.is_read ? 'bg-indigo-500' : 'bg-transparent')} />
+                    className={cn('w-full text-left px-4 py-3 hover:bg-accent transition-colors flex gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                      !n.is_read && 'bg-primary/5')}>
+                    <span className={cn('w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0', !n.is_read ? 'bg-primary' : 'bg-transparent')} />
                     <div className="min-w-0 flex-1">
-                      <p className={cn('text-sm leading-tight', !n.is_read ? 'font-semibold text-gray-900' : 'font-medium text-gray-600')}>
+                      <p className={cn('text-sm leading-tight', !n.is_read ? 'font-semibold text-foreground' : 'font-medium text-muted-foreground')}>
                         {n.title}
                       </p>
-                      <p className="text-xs text-gray-400 mt-0.5 line-clamp-2">{n.message}</p>
-                      <p className="text-[11px] text-gray-300 mt-1">{timeAgo(n.created_at)}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{n.message}</p>
+                      <p className="text-[11px] text-muted-foreground/60 mt-1">{timeAgo(n.created_at)}</p>
                     </div>
                   </button>
                 ))}

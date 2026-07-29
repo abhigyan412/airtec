@@ -158,12 +158,21 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
   return (
     <>
-      {open && <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={onClose} />}
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 [animation-duration:var(--duration-fast)] animate-in fade-in-0 lg:hidden"
+          onClick={onClose}
+        />
+      )}
 
       <aside
         className={cn(
-          'fixed left-0 top-0 z-50 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-300 ease-in-out',
-          'lg:static lg:z-auto lg:translate-x-0',
+          // The drawer travels on the iOS curve rather than ease-in-out: an
+          // ease-in start delays the first few pixels, which is exactly the
+          // moment the user is watching after tapping the menu button.
+          'fixed left-0 top-0 z-50 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar',
+          'transition-transform [transition-duration:var(--duration-base)] ease-drawer',
+          'lg:static lg:z-auto lg:translate-x-0 lg:transition-none',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
@@ -253,7 +262,7 @@ function NavEntry({
         href={item.href}
         onClick={onClose}
         className={cn(
-          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
+          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors [transition-duration:var(--duration-press)] ease-out',
           active
             ? 'bg-sidebar-accent text-sidebar-accent-foreground'
             : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
@@ -272,7 +281,7 @@ function NavEntry({
       <button
         onClick={() => onToggle(item.label)}
         className={cn(
-          'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
+          'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors [transition-duration:var(--duration-press)] ease-out',
           anyChildActive ? 'text-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
         )}
       >
@@ -282,7 +291,10 @@ function NavEntry({
       </button>
 
       {isOpen && item.children && (
-        <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border pl-3">
+        // A group opening with no transition reads as the page jumping rather
+        // than as this group revealing its contents. Short and slide-only —
+        // this is opened a few times a session, so it must not feel like a wait.
+        <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border pl-3 [animation-duration:var(--duration-fast)] animate-in fade-in-0 slide-in-from-top-1">
           {item.children.map((child) => {
             const ChildIcon = child.icon
             const active = child.href ? isActive(child.href) : false
@@ -292,7 +304,7 @@ function NavEntry({
                 href={child.href ?? '#'}
                 onClick={onClose}
                 className={cn(
-                  'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-all duration-200',
+                  'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors [transition-duration:var(--duration-press)] ease-out',
                   active
                     ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
                     : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',

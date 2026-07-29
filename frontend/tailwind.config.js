@@ -1,5 +1,8 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
+  // Gates every `hover:` utility behind (hover: hover). On touch, :hover sticks
+  // after a tap, so a tapped row stays lit until you tap somewhere else.
+  future: { hoverOnlyWhenSupported: true },
   darkMode: ['class'],
   content: ['./app/**/*.{ts,tsx}', './components/**/*.{ts,tsx}', './lib/**/*.{ts,tsx}'],
   theme: {
@@ -75,6 +78,11 @@ module.exports = {
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
       },
+      transitionTimingFunction: {
+        out: 'var(--ease-out)',
+        'in-out': 'var(--ease-in-out)',
+        drawer: 'var(--ease-drawer)',
+      },
       keyframes: {
         'accordion-down': {
           from: { height: '0' },
@@ -96,5 +104,9 @@ module.exports = {
       },
     },
   },
-  plugins: [],
+  // dialog/dropdown-menu/select/tooltip all carry `animate-in`, `zoom-in-95`,
+  // `slide-in-from-top-2` etc. Those utilities come from this plugin — without
+  // it registered, Tailwind never generated them and every overlay in the app
+  // popped in with no transition at all, despite the markup saying otherwise.
+  plugins: [require('tailwindcss-animate')],
 }

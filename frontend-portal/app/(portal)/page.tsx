@@ -1,15 +1,23 @@
 'use client'
-import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
-import { Wallet, CalendarCheck, NotebookPen, BookOpen, ArrowRight } from 'lucide-react'
+import { Clock, BookOpen, NotebookPen, Paperclip } from 'lucide-react'
 import { studentsApi, homeworkApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { formatCurrency, cn } from '@/lib/utils'
+import {
+  formatCurrency,
+  formatRelativeDue,
+  todayLocalISO,
+  attendanceTone,
+  cn,
+} from '@/lib/utils'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { StatTile } from '@/components/shared/StatTile'
+import { NavRow } from '@/components/shared/NavRow'
 
-const todayStr = (() => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-})()
+const today = todayLocalISO()
 
 export default function PortalOverviewPage() {
   const { user } = useAuth()
@@ -17,100 +25,194 @@ export default function PortalOverviewPage() {
 
   const { data: me, isLoading } = useQuery({
     queryKey: ['portal-me'],
-    queryFn: () => studentsApi.me().then(r => r.data),
+    queryFn: () => studentsApi.me().then((r) => r.data),
   })
 
-  const { data: homework } = useQuery({
+  const { data: homework, isLoading: homeworkLoading } = useQuery({
     queryKey: ['portal-homework'],
-    queryFn: () => homeworkApi.list().then(r => r.data),
+    queryFn: () => homeworkApi.list().then((r) => r.data),
   })
 
-  const upcomingHomework = (homework ?? []).filter((h: any) => !h.due_date || h.due_date >= todayStr)
+  // Current-month attendance, so the overview can show the number a family
+  // actually cares about instead of the word "View". class_id is ignored
+  // server-side for a parent/student account — the backend always resolves and
+  // scopes to their own child regardless of what's passed here.
+  const now = new Date()
+  const { data: attendance } = useQuery({
+    queryKey: ['portal-attendance-month', now.getMonth() + 1, now.getFullYear()],
+    queryFn: () =>
+      studentsApi.getAttendanceReport('', now.getMonth() + 1, now.getFullYear()).then((r) => r.data),
+  })
 
-  if (isLoading) {
-    return <div className="text-center py-20 text-gray-400">Loading...</div>
-  }
+  const upcoming = [...((homework ?? []) as any[])]
+    .filter((h) => !h.due_date || h.due_date >= today)
+    .sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'))
+
+  const attendanceRow = (attendance?.students ?? [])[0]
+  const attendancePct: number | undefined =
+    attendance?.working_days > 0 ? attendanceRow?.percentage : undefined
+
+  if (isLoading) return <OverviewSkeleton />
 
   if (!me) {
     return (
-      <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center text-gray-400">
-        <p className="font-medium">No student record is linked to this account yet.</p>
-        <p className="text-sm mt-1">Contact your school office to get this fixed.</p>
-      </div>
+      <Card>
+        <EmptyState
+          title="No student is linked to this account yet"
+          description="Your school office needs to connect your login to your child's record. Once they do, everything will show up here."
+        />
+      </Card>
     )
   }
 
   const due = me.fee_summary?.total_due ?? 0
+  const classLabel = `${me.classes?.name ?? ''}${me.sections?.name ? ` · ${me.sections.name}` : ''}`
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-2xl border border-gray-200 p-6 flex items-center gap-4">
-        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#9D8FFF] to-[#5B5BD6] flex items-center justify-center flex-shrink-0 overflow-hidden">
+      {/* Who this is about. For a parent the app is about their child, so the
+          child's name leads — not the account holder's. */}
+      <div className="flex items-center gap-4">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10">
           {me.photo_url ? (
-            <img src={me.photo_url} alt="" className="w-full h-full object-cover" />
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={me.photo_url} alt="" className="h-full w-full object-cover" />
           ) : (
-            <span className="text-white text-lg font-bold">{me.first_name?.[0]}{me.last_name?.[0]}</span>
+            <span className="text-lg font-bold text-primary">
+              {me.first_name?.[0]}
+              {me.last_name?.[0]}
+            </span>
           )}
         </div>
         <div className="min-w-0">
-          <h1 className="text-xl font-bold text-gray-900">{me.first_name} {me.last_name}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {me.classes?.name}{me.sections?.name ? ` - ${me.sections.name}` : ''} · Admission No. {me.admission_number}
+          <h1 className="truncate text-2xl font-bold tracking-tight text-foreground">
+            {me.first_name} {me.last_name}
+          </h1>
+          <p className="mt-0.5 truncate text-sm text-muted-foreground">
+            {classLabel && <span>{classLabel} · </span>}
+            Admission no. {me.admission_number}
           </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {isParent ? (
-          <Link href="/fees" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
-            <div className="flex items-center justify-between mb-3">
-              <div className="w-9 h-9 rounded-xl bg-rose-50 flex items-center justify-center"><Wallet className="w-4 h-4 text-rose-500" /></div>
-              <ArrowRight className="w-4 h-4 text-gray-300" />
-            </div>
-            <p className={cn('text-xl font-bold', due > 0 ? 'text-rose-600' : 'text-emerald-600')}>{formatCurrency(due)}</p>
-            <p className="text-xs text-gray-400 mt-0.5">{due > 0 ? 'Outstanding fees' : 'All fees paid'}</p>
-          </Link>
-        ) : (
-          <Link href="/exams" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
-            <div className="flex items-center justify-between mb-3">
-              <div className="w-9 h-9 rounded-xl bg-violet-50 flex items-center justify-center"><BookOpen className="w-4 h-4 text-violet-500" /></div>
-              <ArrowRight className="w-4 h-4 text-gray-300" />
-            </div>
-            <p className="text-xl font-bold text-gray-900">View</p>
-            <p className="text-xs text-gray-400 mt-0.5">Exam results</p>
-          </Link>
+      {/* Each tile carries a real measurement. The previous version put the word
+          "View" in the value slot, which looks like data and carries none. */}
+      <div className="grid grid-cols-2 gap-3">
+        {isParent && (
+          <StatTile
+            label="Fees due"
+            value={formatCurrency(due)}
+            hint={due > 0 ? 'Tap to see invoices' : 'All settled — nothing owing'}
+            tone={due > 0 ? 'destructive' : 'success'}
+            href="/fees"
+          />
         )}
-
-        <Link href="/homework" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
-          <div className="flex items-center justify-between mb-3">
-            <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center"><NotebookPen className="w-4 h-4 text-amber-500" /></div>
-            <ArrowRight className="w-4 h-4 text-gray-300" />
-          </div>
-          <p className="text-xl font-bold text-gray-900">{upcomingHomework.length}</p>
-          <p className="text-xs text-gray-400 mt-0.5">Upcoming homework</p>
-        </Link>
-
-        <Link href="/attendance" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
-          <div className="flex items-center justify-between mb-3">
-            <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center"><CalendarCheck className="w-4 h-4 text-emerald-500" /></div>
-            <ArrowRight className="w-4 h-4 text-gray-300" />
-          </div>
-          <p className="text-xl font-bold text-gray-900">View</p>
-          <p className="text-xs text-gray-400 mt-0.5">Attendance record</p>
-        </Link>
+        <StatTile
+          label="Attendance"
+          value={attendancePct === undefined ? '—' : `${attendancePct}%`}
+          hint={
+            attendancePct === undefined
+              ? 'Not marked yet this month'
+              : `This month${attendancePct < 75 ? ' · below 75%' : ''}`
+          }
+          tone={attendancePct === undefined ? 'default' : attendanceTone(attendancePct)}
+          href="/attendance"
+        />
+        <StatTile
+          label="Homework due"
+          value={homeworkLoading ? '—' : upcoming.length}
+          hint={upcoming.length === 1 ? '1 assignment open' : `${upcoming.length} assignments open`}
+          tone={upcoming.length > 0 ? 'warning' : 'success'}
+          href="/homework"
+          className={cn(!isParent && 'col-span-2')}
+        />
       </div>
 
-      <div className={cn('grid grid-cols-1 gap-4', isParent && 'sm:grid-cols-2')}>
-        <Link href="/timetable" className="bg-white rounded-2xl border border-gray-200 p-5 flex items-center justify-between hover:border-indigo-200 hover:shadow-sm transition-all">
-          <span className="text-sm font-semibold text-gray-900">Weekly Timetable</span>
-          <ArrowRight className="w-4 h-4 text-gray-300" />
-        </Link>
-        {isParent && (
-          <Link href="/exams" className="bg-white rounded-2xl border border-gray-200 p-5 flex items-center justify-between hover:border-indigo-200 hover:shadow-sm transition-all">
-            <span className="text-sm font-semibold text-gray-900 flex items-center gap-2"><BookOpen className="w-4 h-4 text-gray-400" /> Exam Results</span>
-            <ArrowRight className="w-4 h-4 text-gray-300" />
-          </Link>
-        )}
+      {/* Actual content, not another tile. What's due next is the single thing
+          most likely to be why they opened the app. */}
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <CardTitle>Coming up</CardTitle>
+          {upcoming.length > 3 && (
+            <span className="text-xs text-muted-foreground">
+              showing 3 of {upcoming.length}
+            </span>
+          )}
+        </CardHeader>
+        <CardContent className="pt-0">
+          {homeworkLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : upcoming.length === 0 ? (
+            <EmptyState
+              icon={NotebookPen}
+              title="Nothing due right now"
+              description="No homework is outstanding. You'll get a notification as soon as a teacher posts something new."
+              className="py-8"
+            />
+          ) : (
+            <ul className="divide-y divide-border">
+              {upcoming.slice(0, 3).map((h: any) => {
+                const relative = h.due_date ? formatRelativeDue(h.due_date) : null
+                return (
+                  <li key={h.id} className="flex items-start justify-between gap-3 py-3 first:pt-0">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-foreground">{h.title}</p>
+                      <p className="mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <span className="truncate">{h.subject_name}</span>
+                        {h.attachment_url && (
+                          <Paperclip className="h-3 w-3 shrink-0" aria-label="Has attachment" />
+                        )}
+                      </p>
+                    </div>
+                    {relative && (
+                      <Badge
+                        variant={relative.overdue ? 'destructive' : 'neutral'}
+                        className="shrink-0 normal-case"
+                      >
+                        {relative.label}
+                      </Badge>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* The sections without a number worth putting on a tile. */}
+      <div className="space-y-2.5">
+        <NavRow href="/timetable" icon={Clock} label="Weekly timetable" />
+        <NavRow href="/exams" icon={BookOpen} label="Exam results" />
+      </div>
+    </div>
+  )
+}
+
+/** Mirrors the real layout block-for-block so nothing shifts when data lands. */
+function OverviewSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-4">
+        <Skeleton className="h-14 w-14 rounded-full" />
+        <div className="space-y-2">
+          <Skeleton className="h-6 w-40" />
+          <Skeleton className="h-4 w-52" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Skeleton className="h-[92px] rounded-lg" />
+        <Skeleton className="h-[92px] rounded-lg" />
+        <Skeleton className="h-[92px] rounded-lg" />
+      </div>
+      <Skeleton className="h-48 w-full rounded-lg" />
+      <div className="space-y-2.5">
+        <Skeleton className="h-[52px] w-full rounded-lg" />
+        <Skeleton className="h-[52px] w-full rounded-lg" />
       </div>
     </div>
   )

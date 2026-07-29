@@ -4,8 +4,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { toast } from 'sonner'
-import { School, Users, Shield, Bell, Loader2, CheckCircle } from 'lucide-react'
+import { School, Users, Shield, Bell, Loader2, CheckCircle, Settings as SettingsIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -41,10 +42,12 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-4xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">Manage your school configuration and team</p>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="Manage your school configuration and team"
+        icon={SettingsIcon}
+        className="mb-0"
+      />
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="h-auto flex-wrap">
@@ -200,7 +203,8 @@ function TeamTab() {
             <EmptyState
               icon={Users}
               title="No team members yet"
-              description="Invite your principal, teachers, and accountants"
+              description="Invite your principal, teachers, and accountants so they can sign in to AIRTEC."
+              action={<Button onClick={() => setShowInvite(true)}>+ Invite Member</Button>}
             />
           ) : (
             <div className="divide-y divide-border">

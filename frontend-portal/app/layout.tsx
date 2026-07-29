@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import { Plus_Jakarta_Sans } from 'next/font/google'
-import { Toaster } from 'sonner'
+import { Toaster } from '@/components/toaster'
 import { Providers } from '@/components/providers'
 import { ServiceWorkerRegister } from '@/components/service-worker-register'
 import './globals.css'
@@ -28,7 +28,13 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  themeColor: '#5B5BD6',
+  // Two entries so the browser chrome matches the theme instead of staying
+  // indigo-on-black when the phone is in dark mode. Values mirror the
+  // --background token in globals.css for each scheme.
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#faf9ff' },
+    { media: '(prefers-color-scheme: dark)', color: '#030712' },
+  ],
   width: 'device-width',
   initialScale: 1,
   // Parents open this on a phone; let the layout run under the notch/home
@@ -39,10 +45,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${jakarta.variable} font-sans antialiased bg-gray-50`}>
+      <body className={`${jakarta.variable} font-sans antialiased`}>
         <Providers>
           {children}
-          <Toaster position="top-right" richColors />
+          <Toaster />
         </Providers>
         <ServiceWorkerRegister />
       </body>

@@ -21,7 +21,9 @@ export function HrNav() {
         const active = pathname === t.href || pathname.startsWith(t.href + '/')
         return (
           <Link key={t.href} href={t.href}
-            className={cn('whitespace-nowrap rounded-lg px-3.5 py-2 text-sm font-semibold transition-all',
+            aria-current={active ? 'page' : undefined}
+            className={cn('whitespace-nowrap rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               active ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
             {t.label}
           </Link>

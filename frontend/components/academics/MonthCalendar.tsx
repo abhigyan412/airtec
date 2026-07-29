@@ -78,8 +78,10 @@ export function MonthCalendar({
             <button
               key={i}
               onClick={() => onSelectDate(key)}
+              aria-label={d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+              aria-pressed={isSelected}
               className={cn(
-                'min-h-[52px] p-1 sm:min-h-[76px] sm:p-1.5 border-b border-r border-border/60 text-left align-top flex flex-col gap-0.5 sm:gap-1 transition-colors',
+                'min-h-[52px] p-1 sm:min-h-[76px] sm:p-1.5 border-b border-r border-border/60 text-left align-top flex flex-col gap-0.5 sm:gap-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
                 (i + 1) % 7 === 0 && 'border-r-0',
                 !inMonth && 'bg-muted/30',
                 isSelected ? 'bg-primary/10' : 'hover:bg-muted/50'
