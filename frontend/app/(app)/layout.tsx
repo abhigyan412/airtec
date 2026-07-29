@@ -1,8 +1,9 @@
 'use client'
 import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { useAuth, NON_STAFF_ROLES } from '@/lib/auth'
+
+const FAMILY_APP_URL = process.env.NEXT_PUBLIC_FAMILY_APP_URL ?? 'http://localhost:3001'
 
 // Single shared layout for every authenticated route (route group —
 // adds no URL segment). Previously every feature folder declared its
@@ -12,20 +13,18 @@ import { useAuth, NON_STAFF_ROLES } from '@/lib/auth'
 // compounding the left padding 2-3x, which is what produced the huge
 // gap between the sidebar and content on deeper pages.
 //
-// This is staff admin tooling — a parent/student landing here would
-// see the full students list, class-wide attendance marking, etc.,
-// none of which is meant for them (even though the API itself is
-// correctly ownership-scoped). Bounce them to their own (portal)
-// section instead.
+// This is staff admin tooling. Parents/students now live in a fully
+// separate app (frontend-portal) with its own login — if one somehow
+// ends up here (e.g. an old bookmark), send them to the real app via
+// a full navigation, not a Next.js route (it's a different origin).
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
-  const router = useRouter()
 
   useEffect(() => {
     if (!isLoading && user && NON_STAFF_ROLES.includes(user.role)) {
-      router.replace('/portal')
+      window.location.href = FAMILY_APP_URL
     }
-  }, [isLoading, user, router])
+  }, [isLoading, user])
 
   if (!isLoading && user && NON_STAFF_ROLES.includes(user.role)) return null
 

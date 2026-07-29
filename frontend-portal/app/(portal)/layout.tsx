@@ -4,48 +4,45 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { GraduationCap, LayoutDashboard, CalendarCheck, Wallet, NotebookPen, Clock, BookOpen, LogOut } from 'lucide-react'
-import { useAuth, NON_STAFF_ROLES } from '@/lib/auth'
+import { useAuth } from '@/lib/auth'
 import { studentsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 
+// fees is parent-only — a student doesn't need to see "your parents
+// owe ₹X," that's a household/billing concern, not the student's.
+// Everything else (attendance, homework, timetable, exams) is
+// identical for both roles, so there's nothing else to gate yet.
 const NAV = [
-  { href: '/portal', label: 'Overview', icon: LayoutDashboard },
-  { href: '/portal/attendance', label: 'Attendance', icon: CalendarCheck },
-  { href: '/portal/fees', label: 'Fees', icon: Wallet },
-  { href: '/portal/homework', label: 'Homework', icon: NotebookPen },
-  { href: '/portal/timetable', label: 'Timetable', icon: Clock },
-  { href: '/portal/exams', label: 'Exams', icon: BookOpen },
+  { href: '/', label: 'Overview', icon: LayoutDashboard, parentOnly: false },
+  { href: '/attendance', label: 'Attendance', icon: CalendarCheck, parentOnly: false },
+  { href: '/fees', label: 'Fees', icon: Wallet, parentOnly: true },
+  { href: '/homework', label: 'Homework', icon: NotebookPen, parentOnly: false },
+  { href: '/timetable', label: 'Timetable', icon: Clock, parentOnly: false },
+  { href: '/exams', label: 'Exams', icon: BookOpen, parentOnly: false },
 ]
 
-// A deliberately lightweight, view-only shell — separate from the
-// staff (app) layout's dark Sidebar, since this audience (parents/
-// students) needs a completely different surface, not the same admin
-// tooling with fewer buttons. Every page under here calls ownership-
-// scoped endpoints only (see the backend sweep in sis/fee routes),
-// so there's nothing here that could show another family's data even
-// if someone poked at the URL directly.
+// The one authenticated shell in this app — everything under here
+// requires a parent/student login (staff logins are already rejected
+// at /auth/login, before they ever reach this layout).
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, logout } = useAuth()
   const router = useRouter()
   const pathname = usePathname()
 
   useEffect(() => {
-    if (!isLoading && user && !NON_STAFF_ROLES.includes(user.role)) {
-      router.replace('/dashboard')
-    }
+    if (!isLoading && !user) router.replace('/auth/login')
   }, [isLoading, user, router])
 
   const { data: me } = useQuery({
     queryKey: ['portal-me'],
     queryFn: () => studentsApi.me().then(r => r.data),
-    enabled: !!user && NON_STAFF_ROLES.includes(user.role),
+    enabled: !!user,
   })
 
   if (isLoading || !user) {
     return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-400">Loading...</div>
   }
-  if (!NON_STAFF_ROLES.includes(user.role)) return null
 
   const initials = `${me?.first_name?.[0] ?? ''}${me?.last_name?.[0] ?? ''}`.toUpperCase() || 'S'
 
@@ -59,7 +56,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             </div>
             <div className="min-w-0">
               <p className="font-semibold text-gray-900 text-sm leading-tight">AIRTEC</p>
-              <p className="text-[11px] text-gray-400 truncate leading-tight">{(user as any)?.schools?.name ?? 'Parent Portal'}</p>
+              <p className="text-[11px] text-gray-400 truncate leading-tight">{(user as any)?.schools?.name ?? 'Family Portal'}</p>
             </div>
           </div>
 
@@ -85,7 +82,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
         </div>
 
         <nav className="max-w-[1000px] mx-auto px-5 flex items-center gap-1 overflow-x-auto">
-          {NAV.map(item => {
+          {NAV.filter(item => !item.parentOnly || user.role === 'parent').map(item => {
             const active = pathname === item.href
             return (
               <Link key={item.href} href={item.href}

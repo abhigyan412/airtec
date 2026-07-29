@@ -2,11 +2,11 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { GraduationCap, Eye, EyeOff, Loader2 } from 'lucide-react'
-import { useAuth, NON_STAFF_ROLES } from '@/lib/auth'
+import { useAuth } from '@/lib/auth'
 import { toast } from 'sonner'
-import Link from 'next/link'
 
-const FAMILY_APP_URL = process.env.NEXT_PUBLIC_FAMILY_APP_URL ?? 'http://localhost:3001'
+const STAFF_ROLES = ['school_admin', 'principal', 'teacher', 'accountant', 'counselor', 'super_admin']
+const STAFF_APP_URL = process.env.NEXT_PUBLIC_STAFF_APP_URL ?? 'http://localhost:3000'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -24,16 +24,15 @@ export default function LoginPage() {
     setIsLoading(true)
     try {
       const user = await login(cleanEmail, cleanPassword)
-      if (NON_STAFF_ROLES.includes(user.role)) {
-        // Wrong app — parents/students now have their own separate
-        // portal. Don't leave them signed in here with nothing to see.
-        toast.error('Parents and students should sign in at the family portal.')
+      if (STAFF_ROLES.includes(user.role)) {
+        // Wrong portal — this app is family-only. Don't leave them
+        // signed in here with nowhere useful to go.
+        toast.error('This portal is for parents and students. Staff should sign in at the admin app.')
         logout()
-        window.location.href = FAMILY_APP_URL
         return
       }
       toast.success('Welcome back!')
-      router.push('/dashboard')
+      router.push('/')
     } catch (err: any) {
       // No response at all (server down / unreachable / CORS-blocked)
       // looks identical to a real wrong-password rejection unless these
@@ -66,29 +65,16 @@ export default function LoginPage() {
         <div className="relative space-y-6">
           <div>
             <h2 className="text-4xl font-bold text-white leading-tight mb-4">
-              School management,<br />finally done right.
+              Stay close to<br />their school day.
             </h2>
             <p className="text-indigo-200 text-lg leading-relaxed">
-              SIS · Admission CRM · Fee Management · Examinations — all in one platform.
+              Attendance, fees, homework, timetable, and exam results — all in one place.
             </p>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { num: '10K+', label: 'Students managed' },
-              { num: '50+', label: 'Schools onboarded' },
-              { num: '₹2Cr+', label: 'Fees processed' },
-              { num: '99.9%', label: 'Uptime' },
-            ].map(s => (
-              <div key={s.label} className="bg-white/10 rounded-xl p-4">
-                <p className="text-2xl font-bold text-white">{s.num}</p>
-                <p className="text-indigo-300 text-xs mt-0.5">{s.label}</p>
-              </div>
-            ))}
           </div>
         </div>
         <div className="relative text-indigo-300 text-xs">
-          New to AIRTEC?{' '}
-          <Link href="/auth/register" className="text-white font-semibold hover:underline">Register your school →</Link>
+          Staff member? Sign in at the{' '}
+          <a href={STAFF_APP_URL} className="text-white font-semibold hover:underline">admin app →</a>
         </div>
       </div>
 
@@ -104,7 +90,7 @@ export default function LoginPage() {
 
           <div className="mb-8">
             <h1 className="text-2xl font-bold text-gray-900">Welcome back</h1>
-            <p className="text-gray-500 text-sm mt-1">Sign in to your school dashboard</p>
+            <p className="text-gray-500 text-sm mt-1">Sign in to the family portal</p>
           </div>
 
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8">
@@ -115,7 +101,7 @@ export default function LoginPage() {
                   type="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  placeholder="admin@school.com"
+                  placeholder="you@example.com"
                   required
                   className="w-full px-4 py-3 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-gray-50 focus:bg-white transition-all"
                 />
@@ -147,11 +133,8 @@ export default function LoginPage() {
             </form>
           </div>
 
-          <p className="text-center text-sm text-gray-500 mt-6">
-            Don't have an account?{' '}
-            <Link href="/auth/register" className="text-indigo-600 font-semibold hover:underline">
-              Register your school →
-            </Link>
+          <p className="text-center text-xs text-gray-400 mt-6">
+            Don't have login details? Contact your school office.
           </p>
         </div>
       </div>

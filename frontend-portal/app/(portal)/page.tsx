@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Wallet, CalendarCheck, NotebookPen, BookOpen, ArrowRight } from 'lucide-react'
 import { studentsApi, homeworkApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { formatCurrency, cn } from '@/lib/utils'
 
 const todayStr = (() => {
@@ -11,6 +12,9 @@ const todayStr = (() => {
 })()
 
 export default function PortalOverviewPage() {
+  const { user } = useAuth()
+  const isParent = user?.role === 'parent'
+
   const { data: me, isLoading } = useQuery({
     queryKey: ['portal-me'],
     queryFn: () => studentsApi.me().then(r => r.data),
@@ -57,16 +61,27 @@ export default function PortalOverviewPage() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Link href="/portal/fees" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
-          <div className="flex items-center justify-between mb-3">
-            <div className="w-9 h-9 rounded-xl bg-rose-50 flex items-center justify-center"><Wallet className="w-4 h-4 text-rose-500" /></div>
-            <ArrowRight className="w-4 h-4 text-gray-300" />
-          </div>
-          <p className={cn('text-xl font-bold', due > 0 ? 'text-rose-600' : 'text-emerald-600')}>{formatCurrency(due)}</p>
-          <p className="text-xs text-gray-400 mt-0.5">{due > 0 ? 'Outstanding fees' : 'All fees paid'}</p>
-        </Link>
+        {isParent ? (
+          <Link href="/fees" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-9 h-9 rounded-xl bg-rose-50 flex items-center justify-center"><Wallet className="w-4 h-4 text-rose-500" /></div>
+              <ArrowRight className="w-4 h-4 text-gray-300" />
+            </div>
+            <p className={cn('text-xl font-bold', due > 0 ? 'text-rose-600' : 'text-emerald-600')}>{formatCurrency(due)}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{due > 0 ? 'Outstanding fees' : 'All fees paid'}</p>
+          </Link>
+        ) : (
+          <Link href="/exams" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-9 h-9 rounded-xl bg-violet-50 flex items-center justify-center"><BookOpen className="w-4 h-4 text-violet-500" /></div>
+              <ArrowRight className="w-4 h-4 text-gray-300" />
+            </div>
+            <p className="text-xl font-bold text-gray-900">View</p>
+            <p className="text-xs text-gray-400 mt-0.5">Exam results</p>
+          </Link>
+        )}
 
-        <Link href="/portal/homework" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
+        <Link href="/homework" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
           <div className="flex items-center justify-between mb-3">
             <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center"><NotebookPen className="w-4 h-4 text-amber-500" /></div>
             <ArrowRight className="w-4 h-4 text-gray-300" />
@@ -75,7 +90,7 @@ export default function PortalOverviewPage() {
           <p className="text-xs text-gray-400 mt-0.5">Upcoming homework</p>
         </Link>
 
-        <Link href="/portal/attendance" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
+        <Link href="/attendance" className="bg-white rounded-2xl border border-gray-200 p-5 hover:border-indigo-200 hover:shadow-sm transition-all">
           <div className="flex items-center justify-between mb-3">
             <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center"><CalendarCheck className="w-4 h-4 text-emerald-500" /></div>
             <ArrowRight className="w-4 h-4 text-gray-300" />
@@ -85,15 +100,17 @@ export default function PortalOverviewPage() {
         </Link>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Link href="/portal/timetable" className="bg-white rounded-2xl border border-gray-200 p-5 flex items-center justify-between hover:border-indigo-200 hover:shadow-sm transition-all">
+      <div className={cn('grid grid-cols-1 gap-4', isParent && 'sm:grid-cols-2')}>
+        <Link href="/timetable" className="bg-white rounded-2xl border border-gray-200 p-5 flex items-center justify-between hover:border-indigo-200 hover:shadow-sm transition-all">
           <span className="text-sm font-semibold text-gray-900">Weekly Timetable</span>
           <ArrowRight className="w-4 h-4 text-gray-300" />
         </Link>
-        <Link href="/portal/exams" className="bg-white rounded-2xl border border-gray-200 p-5 flex items-center justify-between hover:border-indigo-200 hover:shadow-sm transition-all">
-          <span className="text-sm font-semibold text-gray-900 flex items-center gap-2"><BookOpen className="w-4 h-4 text-gray-400" /> Exam Results</span>
-          <ArrowRight className="w-4 h-4 text-gray-300" />
-        </Link>
+        {isParent && (
+          <Link href="/exams" className="bg-white rounded-2xl border border-gray-200 p-5 flex items-center justify-between hover:border-indigo-200 hover:shadow-sm transition-all">
+            <span className="text-sm font-semibold text-gray-900 flex items-center gap-2"><BookOpen className="w-4 h-4 text-gray-400" /> Exam Results</span>
+            <ArrowRight className="w-4 h-4 text-gray-300" />
+          </Link>
+        )}
       </div>
     </div>
   )

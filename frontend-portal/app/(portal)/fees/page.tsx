@@ -1,7 +1,10 @@
 'use client'
+import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { Wallet, Receipt } from 'lucide-react'
 import { studentsApi, feeApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 
 const STATUS_STYLES: Record<string, string> = {
@@ -11,6 +14,14 @@ const STATUS_STYLES: Record<string, string> = {
 }
 
 export default function PortalFeesPage() {
+  // Fees is parent-only (see (portal)/layout.tsx nav) — this catches a
+  // student navigating here directly by URL, not just hiding the tab.
+  const { user } = useAuth()
+  const router = useRouter()
+  useEffect(() => {
+    if (user && user.role !== 'parent') router.replace('/')
+  }, [user, router])
+
   const { data: me } = useQuery({
     queryKey: ['portal-me'],
     queryFn: () => studentsApi.me().then(r => r.data),
@@ -21,6 +32,8 @@ export default function PortalFeesPage() {
     queryFn: () => feeApi.studentSummary(me.id).then(r => r.data),
     enabled: !!me?.id,
   })
+
+  if (user && user.role !== 'parent') return null
 
   const summary = data?.summary
   const invoices: any[] = data?.invoices ?? []

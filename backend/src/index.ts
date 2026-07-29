@@ -26,7 +26,20 @@ const app = express()
 const PORT = process.env.PORT ?? 4000
 
 app.use(helmet({ contentSecurityPolicy: false }))
-app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:3000', credentials: true }))
+// Two separate frontend apps now call this API: the staff admin app
+// and the parent/student family app (split from what used to be one
+// Next.js app's route groups). Each needs its own allowed origin.
+const allowedOrigins = [
+  process.env.FRONTEND_URL ?? 'http://localhost:3000',
+  process.env.FAMILY_FRONTEND_URL ?? 'http://localhost:3001',
+]
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
+    callback(new Error(`Origin ${origin} not allowed by CORS`))
+  },
+  credentials: true,
+}))
 app.use(morgan('dev'))
 app.use(express.json({ limit: '10mb' }))
 
