@@ -12,7 +12,6 @@ import {
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
-import { NotificationBell } from './NotificationBell'
 
 interface NavItem {
   label: string
@@ -158,6 +157,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const schoolName = (user as any)?.schools?.name ?? 'School ERP'
 
   return (
+    <>
+      {open && <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={onClose} />}
+
       <aside
         className={cn(
           'fixed left-0 top-0 z-50 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-300 ease-in-out',
@@ -224,6 +226,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           ))}
         </div>
       </aside>
+    </>
   )
 }
 

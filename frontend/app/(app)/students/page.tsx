@@ -1,7 +1,7 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Search, Plus, Users, Edit3, GraduationCap } from 'lucide-react'
 import Link from 'next/link'
 import { studentsApi } from '@/lib/api'
@@ -31,9 +31,18 @@ import {
 
 export default function StudentsPage() {
   const router = useRouter()
-  const [search, setSearch] = useState('')
+  const searchParams = useSearchParams()
+  // Seeded from ?search= so the header's global search lands here with the
+  // query already applied.
+  const [search, setSearch] = useState(searchParams.get('search') ?? '')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
+
+  useEffect(() => {
+    const q = searchParams.get('search') ?? ''
+    setSearch(q)
+    setPage(1)
+  }, [searchParams])
 
   const { data, isLoading } = useQuery({
     queryKey: ['students', { search, status, page }],

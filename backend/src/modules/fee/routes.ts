@@ -1370,15 +1370,19 @@ router.post('/apply-late-fines', requireRole('school_admin', 'principal', 'accou
       ? await supabase.from('fee_structures').select('fee_head_id, late_fine_per_day, academic_year_id').in('fee_head_id', Array.from(allFeeHeadIds))
       : { data: [] }
  
-    let updatedCount = 0
- 
+    // Work out every change first, then write them concurrently. Done
+    // serially this issued one round-trip per invoice — at a full
+    // school's volume (hundreds of overdue invoices) that ran for
+    // minutes and the caller's proxy timed out long before it finished.
+    const pending: { id: string; late_fine: number; total_amount: number }[] = []
+
     for (const inv of overdue) {
       const daysOverdue = Math.floor((today.getTime() - new Date(inv.due_date!).getTime()) / (1000 * 60 * 60 * 24))
       if (daysOverdue <= 0) continue
- 
+
       const lineItems = (inv.line_items as any[]) ?? []
       let totalFine = 0
- 
+
       for (const item of lineItems) {
         const structure = (structures ?? []).find(
           s => s.fee_head_id === item.fee_head_id && s.academic_year_id === inv.academic_year_id
@@ -1386,22 +1390,38 @@ router.post('/apply-late-fines', requireRole('school_admin', 'principal', 'accou
         const dailyRate = Number(structure?.late_fine_per_day ?? 0)
         if (dailyRate > 0) totalFine += dailyRate * daysOverdue
       }
- 
+
       // Only update if the fine actually changed (avoids unnecessary
       // writes if this endpoint is called repeatedly on the same day)
       if (Math.abs(totalFine - Number(inv.late_fine ?? 0)) < 0.01) continue
- 
+
       const oldFine = Number(inv.late_fine ?? 0)
-      const newTotalAmount = Number(inv.total_amount) - oldFine + totalFine
- 
-      await supabase
-        .from('fee_invoices')
-        .update({ late_fine: totalFine, total_amount: newTotalAmount })
-        .eq('id', inv.id)
- 
-      updatedCount++
+      pending.push({
+        id: inv.id,
+        late_fine: totalFine,
+        total_amount: Number(inv.total_amount) - oldFine + totalFine,
+      })
     }
- 
+
+    // Each row gets its own amounts, so this stays one UPDATE per row —
+    // just not one at a time. Capped so a big sweep can't exhaust the
+    // connection pool.
+    const CONCURRENCY = 16
+    let updatedCount = 0
+    let cursor = 0
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, pending.length) }, async () => {
+        while (cursor < pending.length) {
+          const row = pending[cursor++]
+          const { error: upErr } = await supabase
+            .from('fee_invoices')
+            .update({ late_fine: row.late_fine, total_amount: row.total_amount })
+            .eq('id', row.id)
+          if (!upErr) updatedCount++
+        }
+      })
+    )
+
     res.json({ success: true, data: { updated: updatedCount, checked: overdue.length } })
   })
 )
