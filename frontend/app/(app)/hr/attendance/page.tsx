@@ -6,15 +6,30 @@ import { cn } from '@/lib/utils'
 import { ArrowLeft, Loader2, ClipboardList, BarChart3, ChevronLeft, ChevronRight, Users } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 type Tab = 'mark' | 'report'
 type RecordState = { status: string; check_in?: string; check_out?: string }
 
 const STATUS_OPTIONS = [
-  { key: 'present',  label: 'Present',  color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-  { key: 'absent',   label: 'Absent',   color: 'bg-red-100 text-red-700 border-red-200' },
-  { key: 'half_day', label: 'Half Day', color: 'bg-amber-100 text-amber-700 border-amber-200' },
-  { key: 'on_leave', label: 'On Leave', color: 'bg-purple-100 text-purple-700 border-purple-200' },
+  { key: 'present',  label: 'Present',  color: 'bg-success/10 text-success ring-1 ring-inset ring-success/30' },
+  { key: 'absent',   label: 'Absent',   color: 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/30' },
+  { key: 'half_day', label: 'Half Day', color: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/30' },
+  { key: 'on_leave', label: 'On Leave', color: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 ring-1 ring-inset ring-purple-500/30' },
 ]
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -24,30 +39,24 @@ export default function StaffAttendancePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-start gap-4">
-          <Link href="/hr/staff" className="p-2 hover:bg-gray-100 rounded-xl transition-colors mt-1">
-            <ArrowLeft className="w-5 h-5 text-gray-500" />
-          </Link>
+          <Button variant="ghost" size="icon" asChild className="mt-1">
+            <Link href="/hr/staff" aria-label="Back to staff directory"><ArrowLeft className="h-5 w-5" /></Link>
+          </Button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Staff Attendance</h1>
-            <p className="text-gray-500 text-sm mt-0.5">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Staff Attendance</h1>
+            <p className="mt-0.5 text-sm text-muted-foreground">
               {tab === 'mark' ? 'Mark daily attendance for staff members' : 'Monthly attendance report and working-day percentage'}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-          <button onClick={() => setTab('mark')}
-            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
-              tab === 'mark' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-            <ClipboardList className="w-4 h-4" /> Mark
-          </button>
-          <button onClick={() => setTab('report')}
-            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
-              tab === 'report' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-            <BarChart3 className="w-4 h-4" /> Report
-          </button>
-        </div>
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+          <TabsList>
+            <TabsTrigger value="mark"><ClipboardList className="h-4 w-4" /> Mark</TabsTrigger>
+            <TabsTrigger value="report"><BarChart3 className="h-4 w-4" /> Report</TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
       {tab === 'mark' ? <MarkTab /> : <ReportTab />}
@@ -115,87 +124,89 @@ function MarkTab() {
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
-        <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-60 shadow-sm shadow-indigo-200">
-          {saveMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} Save Attendance
-        </button>
+        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+          {saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save Attendance
+        </Button>
       </div>
 
       {/* Date selector + stats */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 flex gap-4 items-end flex-wrap">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Date</label>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)}
-            className="px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none" />
-        </div>
-        <button onClick={markAllPresent}
-          className="px-4 py-2.5 border border-emerald-200 text-emerald-700 text-sm font-medium rounded-xl hover:bg-emerald-50">
-          Mark All Present
-        </button>
-        <div className="ml-auto flex items-center gap-6">
-          <div className="text-center">
-            <p className="text-2xl font-bold text-emerald-600">{stats.present}</p>
-            <p className="text-xs text-gray-500">Present</p>
+      <Card>
+        <CardContent className="flex flex-wrap items-end gap-4 p-5">
+          <div className="space-y-1.5">
+            <Label htmlFor="attendance-date">Date</Label>
+            <Input id="attendance-date" type="date" value={date} onChange={e => setDate(e.target.value)} className="w-auto" />
           </div>
-          <div className="text-center">
-            <p className="text-2xl font-bold text-red-500">{stats.absent}</p>
-            <p className="text-xs text-gray-500">Absent</p>
+          <Button variant="outline" onClick={markAllPresent}
+            className="border-success/30 text-success hover:bg-success/10 hover:text-success">
+            Mark All Present
+          </Button>
+          <div className="ml-auto flex items-center gap-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-success">{stats.present}</p>
+              <p className="text-xs text-muted-foreground">Present</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-destructive">{stats.absent}</p>
+              <p className="text-xs text-muted-foreground">Absent</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-muted-foreground">{stats.marked}/{stats.total}</p>
+              <p className="text-xs text-muted-foreground">Marked</p>
+            </div>
           </div>
-          <div className="text-center">
-            <p className="text-2xl font-bold text-gray-400">{stats.marked}/{stats.total}</p>
-            <p className="text-xs text-gray-500">Marked</p>
-          </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Staff list */}
-      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+      <Card className="overflow-hidden">
         {isLoading ? (
-          <div className="p-12 text-center"><div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" /></div>
+          <div className="space-y-3 p-6">
+            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+          </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Staff</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Role</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Status</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Check In</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Check Out</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Staff</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Check In</TableHead>
+                <TableHead>Check Out</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {(staffData ?? []).map((s: any) => {
                 const rec: Partial<RecordState> = records[s.id] ?? {}
                 return (
-                  <tr key={s.id} className="hover:bg-gray-50/80">
-                    <td className="px-5 py-3 font-semibold text-gray-900">{s.full_name}</td>
-                    <td className="px-5 py-3 text-gray-500 capitalize text-xs">{s.role?.replace('_',' ')}</td>
-                    <td className="px-5 py-3">
+                  <TableRow key={s.id} className="cursor-default">
+                    <TableCell className="font-semibold text-foreground">{s.full_name}</TableCell>
+                    <TableCell className="text-xs capitalize text-muted-foreground">{s.role?.replace('_',' ')}</TableCell>
+                    <TableCell>
                       <div className="flex gap-1.5">
                         {STATUS_OPTIONS.map(opt => (
                           <button key={opt.key} onClick={() => setStatus(s.id, opt.key)}
-                            className={cn('px-2.5 py-1 rounded-lg text-xs font-medium border transition-all',
-                              rec.status === opt.key ? opt.color : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300')}>
+                            className={cn('rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ring-inset transition-all',
+                              rec.status === opt.key ? opt.color : 'bg-background text-muted-foreground ring-border hover:ring-muted-foreground/40')}>
                             {opt.label}
                           </button>
                         ))}
                       </div>
-                    </td>
-                    <td className="px-5 py-3">
-                      <input type="time" value={rec.check_in ?? ''} onChange={e => setTime(s.id, 'check_in', e.target.value)}
-                        className="px-2 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:outline-none w-28" />
-                    </td>
-                    <td className="px-5 py-3">
-                      <input type="time" value={rec.check_out ?? ''} onChange={e => setTime(s.id, 'check_out', e.target.value)}
-                        className="px-2 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:outline-none w-28" />
-                    </td>
-                  </tr>
+                    </TableCell>
+                    <TableCell>
+                      <Input type="time" value={rec.check_in ?? ''} onChange={e => setTime(s.id, 'check_in', e.target.value)}
+                        className="h-8 w-28 text-xs" />
+                    </TableCell>
+                    <TableCell>
+                      <Input type="time" value={rec.check_out ?? ''} onChange={e => setTime(s.id, 'check_out', e.target.value)}
+                        className="h-8 w-28 text-xs" />
+                    </TableCell>
+                  </TableRow>
                 )
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
-      </div>
+      </Card>
     </div>
   )
 }
@@ -227,88 +238,86 @@ function ReportTab() {
   const isFutureMonth = year > now.getFullYear() || (year === now.getFullYear() && month > now.getMonth() + 1)
 
   const pctColor = (pct: number) =>
-    pct >= 75 ? 'text-green-600 bg-green-50' : pct >= 50 ? 'text-yellow-600 bg-yellow-50' : 'text-red-600 bg-red-50'
+    pct >= 75 ? 'text-success bg-success/10 ring-1 ring-inset ring-success/20'
+    : pct >= 50 ? 'text-warning bg-warning/10 ring-1 ring-inset ring-warning/20'
+    : 'text-destructive bg-destructive/10 ring-1 ring-inset ring-destructive/20'
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Month</label>
-            <div className="flex items-center gap-2">
-              <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                <ChevronLeft className="w-4 h-4 text-gray-500" />
-              </button>
-              <span className="text-sm font-medium text-gray-900 w-36 text-center">{MONTHS[month - 1]} {year}</span>
-              <button onClick={() => changeMonth(1)} disabled={isFutureMonth}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-40">
-                <ChevronRight className="w-4 h-4 text-gray-500" />
-              </button>
+      <Card>
+        <CardContent className="p-5">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="space-y-1.5">
+              <Label>Month</Label>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="icon" onClick={() => changeMonth(-1)} aria-label="Previous month">
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <span className="w-36 text-center text-sm font-medium text-foreground">{MONTHS[month - 1]} {year}</span>
+                <Button variant="ghost" size="icon" onClick={() => changeMonth(1)} disabled={isFutureMonth} aria-label="Next month">
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            <div className="text-right text-sm text-muted-foreground">
+              Working days this month: <span className="font-semibold text-foreground">{workingDays}</span>
+              {holidaysInMonth > 0 && (
+                <p className="mt-0.5 text-xs text-muted-foreground">{holidaysInMonth} holiday{holidaysInMonth > 1 ? 's' : ''} excluded</p>
+              )}
             </div>
           </div>
-          <div className="text-sm text-gray-500 text-right">
-            Working days this month: <span className="font-semibold text-gray-900">{workingDays}</span>
-            {holidaysInMonth > 0 && (
-              <p className="text-xs text-gray-400 mt-0.5">{holidaysInMonth} holiday{holidaysInMonth > 1 ? 's' : ''} excluded</p>
-            )}
-          </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {isLoading ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
-          Loading report...
-        </div>
+        <Card><CardContent className="space-y-3 p-6">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+        </CardContent></Card>
       ) : staff.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
-          <Users className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-          <p className="font-medium">No staff found</p>
-        </div>
+        <Card><EmptyState icon={Users} title="No staff found" /></Card>
       ) : workingDays === 0 ? (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 text-sm text-amber-700">
+        <div className="rounded-2xl border border-warning/20 bg-warning/10 px-5 py-4 text-sm text-warning">
           No attendance was marked in {MONTHS[month - 1]} {year} yet.
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100">
-            <h3 className="font-semibold text-gray-900">{MONTHS[month - 1]} {year}</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                  <th className="px-6 py-3 font-semibold">Staff</th>
-                  <th className="px-3 py-3 font-semibold">Department</th>
-                  <th className="px-3 py-3 font-semibold text-center">Present</th>
-                  <th className="px-3 py-3 font-semibold text-center">Absent</th>
-                  <th className="px-3 py-3 font-semibold text-center">Half Day</th>
-                  <th className="px-3 py-3 font-semibold text-center">On Leave</th>
-                  <th className="px-6 py-3 font-semibold text-center">%</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {staff.map((s: any) => (
-                  <tr key={s.user_id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-3">
-                      <p className="font-medium text-gray-900">{s.full_name}</p>
-                      <p className="text-xs text-gray-400 capitalize">{s.role?.replace('_', ' ')}</p>
-                    </td>
-                    <td className="px-3 py-3 text-gray-500">{s.department ?? '—'}</td>
-                    <td className="px-3 py-3 text-center font-mono text-gray-700">{s.present}</td>
-                    <td className="px-3 py-3 text-center font-mono text-gray-700">{s.absent}</td>
-                    <td className="px-3 py-3 text-center font-mono text-gray-700">{s.half_day}</td>
-                    <td className="px-3 py-3 text-center font-mono text-gray-700">{s.on_leave}</td>
-                    <td className="px-6 py-3 text-center">
-                      <span className={cn('px-2 py-0.5 rounded-full text-xs font-bold', pctColor(s.percentage))}>
-                        {s.percentage}%
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <Card className="overflow-hidden">
+          <CardHeader className="border-b border-border">
+            <CardTitle>{MONTHS[month - 1]} {year}</CardTitle>
+          </CardHeader>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Staff</TableHead>
+                <TableHead>Department</TableHead>
+                <TableHead className="text-center">Present</TableHead>
+                <TableHead className="text-center">Absent</TableHead>
+                <TableHead className="text-center">Half Day</TableHead>
+                <TableHead className="text-center">On Leave</TableHead>
+                <TableHead className="text-center">%</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {staff.map((s: any) => (
+                <TableRow key={s.user_id} className="cursor-default">
+                  <TableCell>
+                    <p className="font-medium text-foreground">{s.full_name}</p>
+                    <p className="text-xs capitalize text-muted-foreground">{s.role?.replace('_', ' ')}</p>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{s.department ?? '—'}</TableCell>
+                  <TableCell className="text-center font-mono text-foreground">{s.present}</TableCell>
+                  <TableCell className="text-center font-mono text-foreground">{s.absent}</TableCell>
+                  <TableCell className="text-center font-mono text-foreground">{s.half_day}</TableCell>
+                  <TableCell className="text-center font-mono text-foreground">{s.on_leave}</TableCell>
+                  <TableCell className="text-center">
+                    <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs font-bold', pctColor(s.percentage))}>
+                      {s.percentage}%
+                    </span>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
       )}
     </div>
   )

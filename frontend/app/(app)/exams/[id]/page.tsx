@@ -8,18 +8,33 @@ import { cn, formatDate } from '@/lib/utils'
 import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge, type BadgeProps } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+} from '@/components/ui/select'
 
 const TABS = ['Datesheet', 'Marks Entry', 'Results']
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-600',
-  published: 'bg-blue-100 text-blue-700',
-  ongoing: 'bg-yellow-100 text-yellow-700',
-  completed: 'bg-purple-100 text-purple-700',
-  result_declared: 'bg-green-100 text-green-700',
-  result_frozen: 'bg-cyan-100 text-cyan-700',
-  result_verified: 'bg-indigo-100 text-indigo-700',
-  result_published: 'bg-emerald-100 text-emerald-700',
+const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
+  draft: 'secondary',
+  published: 'info',
+  ongoing: 'warning',
+  completed: 'default',
+  result_declared: 'success',
+  result_frozen: 'info',
+  result_verified: 'default',
+  result_published: 'success',
 }
 
 export default function ExamDetailPage() {
@@ -51,120 +66,116 @@ export default function ExamDetailPage() {
   })
 
   if (isLoading) {
-    return <div className="p-12 text-center text-gray-400">Loading exam...</div>
+    return <div className="p-12 text-center text-muted-foreground">Loading exam...</div>
   }
 
   if (!exam) {
-    return <div className="p-12 text-center text-gray-400">Exam not found</div>
+    return <div className="p-12 text-center text-muted-foreground">Exam not found</div>
   }
 
   return (
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-center gap-4">
-        <Link href="/exams" className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
-          <ArrowLeft className="w-5 h-5 text-gray-500" />
-        </Link>
+        <Button variant="ghost" size="icon" asChild aria-label="Back to exams">
+          <Link href="/exams">
+            <ArrowLeft className="h-5 w-5 text-muted-foreground" />
+          </Link>
+        </Button>
         <div className="flex-1">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-gray-900">{exam.name}</h1>
-            <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold', STATUS_COLORS[exam.status])}>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">{exam.name}</h1>
+            <Badge variant={STATUS_VARIANT[exam.status] ?? 'secondary'} className="capitalize">
               {exam.status?.replace(/_/g, ' ')}
-            </span>
+            </Badge>
           </div>
-          <p className="text-gray-400 text-sm mt-0.5 capitalize">
+          <p className="mt-0.5 text-sm capitalize text-muted-foreground">
             {exam.exam_type?.replace('_', ' ')} · {exam.academic_years?.name}
             {exam.start_date && ` · ${formatDate(exam.start_date)}`}
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <a
-            href={admitCardApi.bulk(id)}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors"
-          >
-            Bulk Admit Cards
-          </a>
+          <Button variant="outline" asChild>
+            <a href={admitCardApi.bulk(id)} target="_blank" rel="noreferrer">
+              Bulk Admit Cards
+            </a>
+          </Button>
           {(exam.status === 'completed' || exam.status === 'ongoing') && (
-            <button
+            <Button
               onClick={() => generateResults.mutate()}
               disabled={generateResults.isPending}
-              className="flex items-center gap-2 px-4 py-2.5 bg-green-600 text-white text-sm font-semibold rounded-xl hover:bg-green-700 disabled:opacity-60"
+              className="bg-success text-success-foreground hover:bg-success/90"
             >
               {generateResults.isPending
-                ? <Loader2 className="w-4 h-4 animate-spin" />
-                : <BarChart2 className="w-4 h-4" />
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <BarChart2 className="h-4 w-4" />
               }
               Generate Results
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
-      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
-        {TABS.map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            className={cn('px-4 py-2 rounded-lg text-sm font-medium transition-all',
-              tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-            {t}
-          </button>
-        ))}
-      </div>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          {TABS.map(t => (
+            <TabsTrigger key={t} value={t}>{t}</TabsTrigger>
+          ))}
+        </TabsList>
 
-      {tab === 'Datesheet' && (
-        <div className="bg-white rounded-2xl border border-gray-200">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <h3 className="font-semibold text-gray-900">Exam Schedule</h3>
-            <button onClick={() => setShowAddSubject(true)}
-              className="flex items-center gap-2 text-sm text-indigo-600 font-medium hover:text-indigo-700">
-              <Plus className="w-4 h-4" /> Add Subject
-            </button>
-          </div>
-          {!(exam.exam_subjects ?? []).length ? (
-            <div className="p-12 text-center text-gray-400">
-              <FileText className="w-10 h-10 mx-auto mb-2 text-gray-200" />
-              <p className="font-medium">No subjects added yet</p>
-              <p className="text-sm mt-1">Add subjects to build the datesheet</p>
+        <TabsContent value="Datesheet" className="mt-6">
+          <Card>
+            <div className="flex items-center justify-between border-b border-border px-6 py-4">
+              <h3 className="font-semibold text-foreground">Exam Schedule</h3>
+              <Button variant="ghost" size="sm" onClick={() => setShowAddSubject(true)}>
+                <Plus className="h-4 w-4" /> Add Subject
+              </Button>
             </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left font-medium text-gray-500">Subject</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-500">Class</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-500">Date</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-500">Time</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-500">Max Marks</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-500">Pass Marks</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {(exam.exam_subjects ?? []).map((sub: any) => (
-                  <tr key={sub.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{sub.subject_name}</td>
-                    <td className="px-4 py-3 text-gray-600">{sub.classes?.name}</td>
-                    <td className="px-4 py-3 text-gray-600">{sub.exam_date ? formatDate(sub.exam_date) : '-'}</td>
-                    <td className="px-4 py-3 text-gray-500">{sub.start_time ?? '-'}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{sub.max_marks}</td>
-                    <td className="px-4 py-3 text-gray-600">{sub.pass_marks}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
+            {!(exam.exam_subjects ?? []).length ? (
+              <EmptyState
+                icon={FileText}
+                title="No subjects added yet"
+                description="Add subjects to build the datesheet"
+              />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Subject</TableHead>
+                    <TableHead>Class</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Max Marks</TableHead>
+                    <TableHead>Pass Marks</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(exam.exam_subjects ?? []).map((sub: any) => (
+                    <TableRow key={sub.id} className="cursor-default">
+                      <TableCell className="font-medium text-foreground">{sub.subject_name}</TableCell>
+                      <TableCell className="text-muted-foreground">{sub.classes?.name}</TableCell>
+                      <TableCell className="text-muted-foreground">{sub.exam_date ? formatDate(sub.exam_date) : '-'}</TableCell>
+                      <TableCell className="text-muted-foreground">{sub.start_time ?? '-'}</TableCell>
+                      <TableCell className="font-medium text-foreground">{sub.max_marks}</TableCell>
+                      <TableCell className="text-muted-foreground">{sub.pass_marks}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
+        </TabsContent>
 
-      {tab === 'Marks Entry' && (
-        <MarksEntry examId={id} exam={exam} classes={classes ?? []} />
-      )}
+        <TabsContent value="Marks Entry" className="mt-6">
+          <MarksEntry examId={id} exam={exam} classes={classes ?? []} />
+        </TabsContent>
 
-      {tab === 'Results' && (
-        <div className="space-y-6">
-          <FreezePublishPipeline examId={id} exam={exam} />
-          <ResultsView examId={id} />
-        </div>
-      )}
+        <TabsContent value="Results" className="mt-6">
+          <div className="space-y-6">
+            <FreezePublishPipeline examId={id} exam={exam} />
+            <ResultsView examId={id} />
+          </div>
+        </TabsContent>
+      </Tabs>
 
       {showAddSubject && (
         <AddSubjectModal examId={id} classes={classes ?? []} onClose={() => {
@@ -240,32 +251,31 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
 
   if (isLoading) {
     return (
-      <div className="bg-white rounded-2xl border border-gray-200 p-6 flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-      </div>
+      <Card className="flex items-center justify-center p-6">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      </Card>
     )
   }
 
   if (!workflow) {
     const canStart = ['school_admin', 'principal', 'teacher'].includes(user?.role ?? '')
     return (
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
+      <Card className="p-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <GitBranch className="w-4 h-4 text-gray-400" />
-            <h3 className="font-semibold text-gray-900">Result Freeze &amp; Publish</h3>
+            <GitBranch className="h-4 w-4 text-muted-foreground" />
+            <h3 className="font-semibold text-foreground">Result Freeze &amp; Publish</h3>
           </div>
           {canStart && (
-            <button onClick={() => startMutation.mutate()} disabled={startMutation.isPending}
-              className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-60">
-              {startMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Start Freeze Workflow
-            </button>
+            <Button size="sm" onClick={() => startMutation.mutate()} disabled={startMutation.isPending}>
+              {startMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Start Freeze Workflow
+            </Button>
           )}
         </div>
-        <p className="text-sm text-gray-400 mt-2">
+        <p className="mt-2 text-sm text-muted-foreground">
           Results have been generated but not yet sent for freeze/verify/publish. Start the workflow to send results through Exam Controller and Principal review before they become visible to students and parents.
         </p>
-      </div>
+      </Card>
     )
   }
 
@@ -293,11 +303,11 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-5">
+    <Card className="space-y-5 p-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <GitBranch className="w-4 h-4 text-gray-400" />
-          <h3 className="font-semibold text-gray-900">{workflow.workflow_definitions?.name ?? 'Result Freeze & Publish'}</h3>
+          <GitBranch className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-semibold text-foreground">{workflow.workflow_definitions?.name ?? 'Result Freeze & Publish'}</h3>
         </div>
         <StatusBadge status={status} />
       </div>
@@ -314,24 +324,24 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
           const Icon = STEP_ICONS[step.action_name] ?? GitBranch
 
           return (
-            <div key={step.id} className="flex items-center flex-1 min-w-0">
-              <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
-                <div className={cn('w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0',
-                  state === 'done' && 'bg-emerald-100 text-emerald-600',
-                  state === 'current' && 'bg-indigo-600 text-white ring-4 ring-indigo-100',
-                  state === 'pending' && 'bg-gray-100 text-gray-400',
-                  state === 'rejected' && 'bg-red-100 text-red-600')}>
-                  {state === 'done' && <Check className="w-4 h-4" />}
-                  {state === 'rejected' && <X className="w-4 h-4" />}
-                  {(state === 'current' || state === 'pending') && <Icon className="w-4 h-4" />}
+            <div key={step.id} className="flex min-w-0 flex-1 items-center">
+              <div className="flex shrink-0 flex-col items-center gap-1.5">
+                <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold',
+                  state === 'done' && 'bg-success/15 text-success',
+                  state === 'current' && 'bg-primary text-primary-foreground ring-4 ring-primary/20',
+                  state === 'pending' && 'bg-muted text-muted-foreground',
+                  state === 'rejected' && 'bg-destructive/10 text-destructive')}>
+                  {state === 'done' && <Check className="h-4 w-4" />}
+                  {state === 'rejected' && <X className="h-4 w-4" />}
+                  {(state === 'current' || state === 'pending') && <Icon className="h-4 w-4" />}
                 </div>
                 <div className="text-center">
-                  <p className={cn('text-xs font-semibold whitespace-nowrap', state === 'pending' ? 'text-gray-400' : 'text-gray-900')}>{step.roles?.name}</p>
-                  <p className="text-[10px] text-gray-400 whitespace-nowrap">{STEP_LABELS[step.action_name] ?? step.action_name}</p>
+                  <p className={cn('whitespace-nowrap text-xs font-semibold', state === 'pending' ? 'text-muted-foreground' : 'text-foreground')}>{step.roles?.name}</p>
+                  <p className="whitespace-nowrap text-[10px] text-muted-foreground">{STEP_LABELS[step.action_name] ?? step.action_name}</p>
                 </div>
               </div>
               {idx < allSteps.length - 1 && (
-                <div className={cn('flex-1 h-0.5 mx-2 mb-5', state === 'done' ? 'bg-emerald-200' : 'bg-gray-100')} />
+                <div className={cn('mx-2 mb-5 h-0.5 flex-1', state === 'done' ? 'bg-success/30' : 'bg-border')} />
               )}
             </div>
           )
@@ -339,48 +349,45 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
       </div>
 
       {status === 'in_progress' && currentStep && (
-        <div className="border-t border-gray-100 pt-4">
-          <p className="text-sm text-gray-500 mb-3">
-            Waiting on <span className="font-semibold text-gray-900">{currentStep.roles?.name}</span> to {STEP_LABELS[currentStep.action_name]?.toLowerCase() ?? currentStep.action_name}
+        <div className="border-t border-border pt-4">
+          <p className="mb-3 text-sm text-muted-foreground">
+            Waiting on <span className="font-semibold text-foreground">{currentStep.roles?.name}</span> to {STEP_LABELS[currentStep.action_name]?.toLowerCase() ?? currentStep.action_name}
           </p>
 
           {canAct ? (
             <div className="space-y-3">
               {showNotesFor && (
-                <textarea
+                <Textarea
                   value={notes}
                   onChange={e => setNotes(e.target.value)}
                   placeholder={showNotesFor === 'rejected' ? 'Reason for sending back (required)...' : 'Add a note (optional)...'}
                   rows={2}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none"
+                  className="resize-none"
                   autoFocus
                 />
               )}
               <div className="flex gap-2">
-                <button onClick={() => handleAction('approved')} disabled={actionMutation.isPending}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-xl hover:bg-emerald-700 disabled:opacity-60">
-                  {actionMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                <Button onClick={() => handleAction('approved')} disabled={actionMutation.isPending}
+                  className="bg-success text-success-foreground hover:bg-success/90">
+                  {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                   {currentStep.action_name === 'publish' ? 'Publish' : currentStep.action_name === 'verify' ? 'Verify' : 'Freeze'}
-                </button>
-                <button onClick={() => handleAction('rejected')} disabled={actionMutation.isPending}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-red-50 text-red-700 text-sm font-semibold rounded-xl hover:bg-red-100 disabled:opacity-60">
-                  <X className="w-4 h-4" /> Send Back
-                </button>
+                </Button>
+                <Button variant="destructive" onClick={() => handleAction('rejected')} disabled={actionMutation.isPending}>
+                  <X className="h-4 w-4" /> Send Back
+                </Button>
                 {showNotesFor !== 'commented' ? (
-                  <button onClick={() => setShowNotesFor('commented')}
-                    className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50">
-                    <MessageSquare className="w-4 h-4" /> Add Note
-                  </button>
+                  <Button variant="outline" onClick={() => setShowNotesFor('commented')}>
+                    <MessageSquare className="h-4 w-4" /> Add Note
+                  </Button>
                 ) : (
-                  <button onClick={() => handleAction('commented')} disabled={actionMutation.isPending || !notes.trim()}
-                    className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 disabled:opacity-50">
+                  <Button variant="outline" onClick={() => handleAction('commented')} disabled={actionMutation.isPending || !notes.trim()}>
                     Save Note
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
           ) : (
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-muted-foreground">
               You don't have the {currentStep.roles?.name} role required for this step.
             </p>
           )}
@@ -388,8 +395,8 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
       )}
 
       {status !== 'in_progress' && (
-        <div className="border-t border-gray-100 pt-4">
-          <p className="text-sm text-gray-500">
+        <div className="border-t border-border pt-4">
+          <p className="text-sm text-muted-foreground">
             {status === 'approved' && 'Results have been published and are now visible to students and parents.'}
             {status === 'rejected' && 'This workflow was rejected.'}
             {status === 'cancelled' && 'This workflow was cancelled.'}
@@ -398,51 +405,51 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
       )}
 
       {approvals.length > 0 && (
-        <div className="border-t border-gray-100 pt-4">
-          <p className="text-xs font-semibold text-gray-400 uppercase mb-3">History</p>
+        <div className="border-t border-border pt-4">
+          <p className="mb-3 text-xs font-semibold uppercase text-muted-foreground">History</p>
           <div className="space-y-3">
             {approvals.map((a: any) => (
               <div key={a.id} className="flex items-start gap-3 text-sm">
-                <div className={cn('w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5',
-                  a.status === 'approved' ? 'bg-emerald-100 text-emerald-600' :
-                  a.status === 'rejected' ? 'bg-red-100 text-red-600' :
-                  'bg-gray-100 text-gray-400')}>
-                  {a.status === 'approved' && <Check className="w-3.5 h-3.5" />}
-                  {a.status === 'rejected' && <X className="w-3.5 h-3.5" />}
-                  {a.status === 'commented' && <MessageSquare className="w-3 h-3" />}
+                <div className={cn('mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
+                  a.status === 'approved' ? 'bg-success/15 text-success' :
+                  a.status === 'rejected' ? 'bg-destructive/10 text-destructive' :
+                  'bg-muted text-muted-foreground')}>
+                  {a.status === 'approved' && <Check className="h-3.5 w-3.5" />}
+                  {a.status === 'rejected' && <X className="h-3.5 w-3.5" />}
+                  {a.status === 'commented' && <MessageSquare className="h-3 w-3" />}
                 </div>
                 <div className="flex-1">
-                  <p className="text-gray-900">
+                  <p className="text-foreground">
                     <span className="font-semibold">{a.users?.full_name ?? 'System'}</span>
                     {' '}
-                    <span className="text-gray-500">
+                    <span className="text-muted-foreground">
                       {a.status === 'approved' && (a.workflow_steps?.action_name === 'publish' ? 'published results' : a.status)}
                       {a.status === 'rejected' && 'sent back'}
                       {a.status === 'commented' && 'commented'}
                       {' '}({a.workflow_steps?.roles?.name} · {STEP_LABELS[a.workflow_steps?.action_name] ?? a.workflow_steps?.action_name})
                     </span>
                   </p>
-                  {a.notes && <p className="text-gray-500 mt-0.5">"{a.notes}"</p>}
-                  <p className="text-xs text-gray-400 mt-0.5">{formatDate(a.acted_at)}</p>
+                  {a.notes && <p className="mt-0.5 text-muted-foreground">"{a.notes}"</p>}
+                  <p className="mt-0.5 text-xs text-muted-foreground">{formatDate(a.acted_at)}</p>
                 </div>
               </div>
             ))}
           </div>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const config: Record<string, { label: string, className: string }> = {
-    in_progress: { label: 'In Progress', className: 'bg-amber-100 text-amber-700' },
-    approved: { label: 'Published', className: 'bg-emerald-100 text-emerald-700' },
-    rejected: { label: 'Sent Back', className: 'bg-red-100 text-red-700' },
-    cancelled: { label: 'Cancelled', className: 'bg-gray-100 text-gray-500' },
+  const config: Record<string, { label: string, variant: BadgeProps['variant'] }> = {
+    in_progress: { label: 'In Progress', variant: 'warning' },
+    approved: { label: 'Published', variant: 'success' },
+    rejected: { label: 'Sent Back', variant: 'destructive' },
+    cancelled: { label: 'Cancelled', variant: 'secondary' },
   }
   const c = config[status] ?? config.in_progress
-  return <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold', c.className)}>{c.label}</span>
+  return <Badge variant={c.variant}>{c.label}</Badge>
 }
 
 function MarksEntry({ examId, exam, classes }: any) {
@@ -488,96 +495,97 @@ function MarksEntry({ examId, exam, classes }: any) {
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-4">
+    <Card className="space-y-4 p-6">
       <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Select Class</label>
-          <select value={selectedClass}
-            onChange={e => { setSelectedClass(e.target.value); setSelectedSubject(''); setMarksData({}) }}
-            className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none">
-            <option value="">Choose class...</option>
-            {classes.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+        <div className="space-y-1.5">
+          <Label>Select Class</Label>
+          <Select value={selectedClass}
+            onValueChange={v => { setSelectedClass(v); setSelectedSubject(''); setMarksData({}) }}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose class..." />
+            </SelectTrigger>
+            <SelectContent>
+              {classes.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Select Subject</label>
-          <select value={selectedSubject}
-            onChange={e => { setSelectedSubject(e.target.value); initMarks() }}
-            disabled={!selectedClass}
-            className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none disabled:opacity-50">
-            <option value="">Choose subject...</option>
-            {subjectsForClass.map((s: any) => <option key={s.id} value={s.id}>{s.subject_name}</option>)}
-          </select>
+        <div className="space-y-1.5">
+          <Label>Select Subject</Label>
+          <Select value={selectedSubject}
+            onValueChange={v => { setSelectedSubject(v); initMarks() }}
+            disabled={!selectedClass}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose subject..." />
+            </SelectTrigger>
+            <SelectContent>
+              {subjectsForClass.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.subject_name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
       {!selectedClass && (
-        <div className="py-10 text-center text-gray-400">
-          <Upload className="w-10 h-10 mx-auto mb-2 text-gray-200" />
-          <p className="text-sm">Select a class and subject to enter marks</p>
-        </div>
+        <EmptyState icon={Upload} title="Select a class and subject to enter marks" className="py-10" />
       )}
 
       {selectedClass && selectedSubject && (
         <div>
           {isLoading ? (
-            <div className="py-8 text-center text-gray-400">Loading students...</div>
+            <div className="py-8 text-center text-muted-foreground">Loading students...</div>
           ) : (
             <div>
-              <table className="w-full text-sm mb-4">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-100">
-                    <th className="px-4 py-3 text-left font-medium text-gray-500">Roll No</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-500">Student</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-500 w-32">Marks</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-500 w-24">Absent</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
+              <Table className="mb-4">
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Roll No</TableHead>
+                    <TableHead>Student</TableHead>
+                    <TableHead className="w-32">Marks</TableHead>
+                    <TableHead className="w-24">Absent</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {(sheetData?.students ?? []).map((s: any) => {
                     const m = marksData[s.id] ?? {}
                     const sub = subjectsForClass.find((sub: any) => sub.id === selectedSubject)
                     return (
-                      <tr key={s.id} className={cn('hover:bg-gray-50', m.absent && 'opacity-50')}>
-                        <td className="px-4 py-3 text-gray-500">{s.roll_number}</td>
-                        <td className="px-4 py-3 font-medium text-gray-900">
+                      <TableRow key={s.id} className={cn('cursor-default', m.absent && 'opacity-50')}>
+                        <TableCell className="text-muted-foreground">{s.roll_number}</TableCell>
+                        <TableCell className="font-medium text-foreground">
                           {s.first_name} {s.last_name}
-                          <span className="text-xs text-gray-400 ml-2">{s.admission_number}</span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <input type="number" min="0" max={sub?.max_marks ?? 100}
+                          <span className="ml-2 text-xs text-muted-foreground">{s.admission_number}</span>
+                        </TableCell>
+                        <TableCell>
+                          <Input type="number" min="0" max={sub?.max_marks ?? 100}
                             value={m.marks ?? ''}
                             disabled={m.absent}
                             onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], marks: e.target.value } }))}
                             placeholder={`/${sub?.max_marks ?? 100}`}
-                            className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none disabled:bg-gray-100" />
-                        </td>
-                        <td className="px-4 py-3">
+                            className="h-8" />
+                        </TableCell>
+                        <TableCell>
                           <input type="checkbox" checked={m.absent ?? false}
                             onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], absent: e.target.checked, marks: '' } }))}
-                            className="w-4 h-4 text-indigo-600 rounded" />
-                        </td>
-                      </tr>
+                            className="h-4 w-4 rounded border-input accent-primary" />
+                        </TableCell>
+                      </TableRow>
                     )
                   })}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
               <div className="flex justify-end">
-                <button onClick={() => saveMutation.mutate()}
-                  disabled={saveMutation.isPending}
-                  className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60">
+                <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
                   {saveMutation.isPending
-                    ? <Loader2 className="w-4 h-4 animate-spin" />
-                    : <CheckCircle className="w-4 h-4" />
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <CheckCircle className="h-4 w-4" />
                   }
                   Save Marks
-                </button>
+                </Button>
               </div>
             </div>
           )}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -588,76 +596,77 @@ function ResultsView({ examId }: { examId: string }) {
   })
 
   if (isLoading) {
-    return <div className="p-12 text-center text-gray-400">Loading results...</div>
+    return <div className="p-12 text-center text-muted-foreground">Loading results...</div>
   }
 
   if (!(data ?? []).length) {
     return (
-      <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">
-        <BarChart2 className="w-10 h-10 mx-auto mb-2 text-gray-200" />
-        <p className="font-medium">No results yet</p>
-        <p className="text-sm mt-1">Upload marks and click Generate Results</p>
-      </div>
+      <Card>
+        <EmptyState
+          icon={BarChart2}
+          title="No results yet"
+          description="Upload marks and click Generate Results"
+        />
+      </Card>
     )
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-      <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-        <h3 className="font-semibold text-gray-900">Results — {(data ?? []).length} students</h3>
-        <div className="text-sm text-gray-500">
-          Pass: <span className="font-semibold text-green-600">{(data ?? []).filter((r: any) => r.is_pass).length}</span>
-          &nbsp; Fail: <span className="font-semibold text-red-600">{(data ?? []).filter((r: any) => !r.is_pass).length}</span>
+    <Card className="overflow-hidden">
+      <div className="flex items-center justify-between border-b border-border px-6 py-4">
+        <h3 className="font-semibold text-foreground">Results — {(data ?? []).length} students</h3>
+        <div className="text-sm text-muted-foreground">
+          Pass: <span className="font-semibold text-success">{(data ?? []).filter((r: any) => r.is_pass).length}</span>
+          &nbsp; Fail: <span className="font-semibold text-destructive">{(data ?? []).filter((r: any) => !r.is_pass).length}</span>
         </div>
       </div>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="bg-gray-50 border-b border-gray-100">
-            <th className="px-4 py-3 text-left font-medium text-gray-500">Rank</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-500">Student</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-500">Marks</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-500">Pct</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-500">Grade</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-500">Result</th>
-            <th className="px-4 py-3"></th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-50">
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead>Rank</TableHead>
+            <TableHead>Student</TableHead>
+            <TableHead>Marks</TableHead>
+            <TableHead>Pct</TableHead>
+            <TableHead>Grade</TableHead>
+            <TableHead>Result</TableHead>
+            <TableHead></TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {(data ?? []).map((rc: any) => (
-            <tr key={rc.id} className="hover:bg-gray-50">
-              <td className="px-4 py-3 font-bold text-indigo-600">#{rc.rank}</td>
-              <td className="px-4 py-3 font-medium text-gray-900">
+            <TableRow key={rc.id} className="cursor-default">
+              <TableCell className="font-bold text-primary">#{rc.rank}</TableCell>
+              <TableCell className="font-medium text-foreground">
                 {rc.students?.first_name} {rc.students?.last_name}
-                <span className="text-xs text-gray-400 ml-2">{rc.students?.classes?.name}</span>
-              </td>
-              <td className="px-4 py-3 text-gray-700">{rc.obtained_marks}/{rc.total_marks}</td>
-              <td className="px-4 py-3 font-semibold text-gray-900">{rc.percentage}%</td>
-              <td className="px-4 py-3">
-                <span className={cn('px-2 py-0.5 rounded-full text-xs font-bold',
-                  ['A+','A'].includes(rc.grade) ? 'bg-green-100 text-green-700' :
-                  ['B+','B'].includes(rc.grade) ? 'bg-blue-100 text-blue-700' :
-                  rc.grade === 'C' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700')}>
+                <span className="ml-2 text-xs text-muted-foreground">{rc.students?.classes?.name}</span>
+              </TableCell>
+              <TableCell className="text-muted-foreground">{rc.obtained_marks}/{rc.total_marks}</TableCell>
+              <TableCell className="font-semibold text-foreground">{rc.percentage}%</TableCell>
+              <TableCell>
+                <Badge variant={
+                  ['A+','A'].includes(rc.grade) ? 'success' :
+                  ['B+','B'].includes(rc.grade) ? 'info' :
+                  rc.grade === 'C' ? 'warning' : 'destructive'}>
                   {rc.grade}
-                </span>
-              </td>
-              <td className="px-4 py-3">
-                <span className={cn('px-2 py-0.5 rounded-full text-xs font-semibold',
-                  rc.is_pass ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700')}>
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <Badge variant={rc.is_pass ? 'success' : 'destructive'}>
                   {rc.is_pass ? 'Pass' : 'Fail'}
-                </span>
-              </td>
-              <td className="px-4 py-3">
+                </Badge>
+              </TableCell>
+              <TableCell>
                 <a href={documentsApi.reportCard(rc.exam_id, rc.student_id)}
                   target="_blank" rel="noreferrer"
-                  className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">
+                  className="text-xs font-medium text-primary hover:text-primary/80">
                   View Card
                 </a>
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </TableBody>
+      </Table>
+    </Card>
   )
 }
 
@@ -679,49 +688,48 @@ function AddSubjectModal({ examId, classes, onClose }: any) {
   })
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Add Subject to Datesheet</h2>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Class</label>
-            <select value={form.class_id} onChange={e => setForm(f => ({ ...f, class_id: e.target.value }))}
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none">
-              <option value="">Select class...</option>
-              {classes.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Subject to Datesheet</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Class</Label>
+            <Select value={form.class_id} onValueChange={v => setForm(f => ({ ...f, class_id: v }))}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select class..." />
+              </SelectTrigger>
+              <SelectContent>
+                {classes.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject Name</label>
-            <input value={form.subject_name} onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))}
-              placeholder="e.g. Mathematics"
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none" />
+          <div className="space-y-1.5">
+            <Label htmlFor="subject-name">Subject Name</Label>
+            <Input id="subject-name" value={form.subject_name} onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))}
+              placeholder="e.g. Mathematics" />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Exam Date</label>
-              <input type="date" value={form.exam_date} onChange={e => setForm(f => ({ ...f, exam_date: e.target.value }))}
-                className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none" />
+            <div className="space-y-1.5">
+              <Label htmlFor="subject-date">Exam Date</Label>
+              <Input id="subject-date" type="date" value={form.exam_date} onChange={e => setForm(f => ({ ...f, exam_date: e.target.value }))} />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Max Marks</label>
-              <input type="number" value={form.max_marks} onChange={e => setForm(f => ({ ...f, max_marks: Number(e.target.value) }))}
-                className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none" />
+            <div className="space-y-1.5">
+              <Label htmlFor="subject-max">Max Marks</Label>
+              <Input id="subject-max" type="number" value={form.max_marks} onChange={e => setForm(f => ({ ...f, max_marks: Number(e.target.value) }))} />
             </div>
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={() => mutation.mutate(form)}
-            disabled={mutation.isPending || !form.class_id || !form.subject_name}
-            className="px-5 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-            {mutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => mutation.mutate(form)}
+            disabled={mutation.isPending || !form.class_id || !form.subject_name}>
+            {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
             Add Subject
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

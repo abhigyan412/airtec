@@ -1,3 +1,4 @@
+
 'use client'
 import { useEffect } from 'react'
 import { Sidebar } from '@/components/layout/Sidebar'
@@ -38,4 +39,5 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </main>
     </div>
   )
+
 }

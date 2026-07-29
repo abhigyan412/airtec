@@ -18,31 +18,31 @@ export function SyllabusMeter({
   const severity: 'good' | 'warning' | 'critical' = gap >= -5 ? 'good' : gap >= -20 ? 'warning' : 'critical'
 
   const ramp = {
-    good: { track: 'bg-emerald-100', fill: 'bg-emerald-500', text: 'text-emerald-700' },
-    warning: { track: 'bg-amber-100', fill: 'bg-amber-500', text: 'text-amber-700' },
-    critical: { track: 'bg-red-100', fill: 'bg-red-500', text: 'text-red-700' },
+    good: { track: 'bg-success/15', fill: 'bg-success', text: 'text-success' },
+    warning: { track: 'bg-warning/15', fill: 'bg-warning', text: 'text-warning' },
+    critical: { track: 'bg-destructive/15', fill: 'bg-destructive', text: 'text-destructive' },
   }[severity]
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-medium text-gray-900 truncate">{label}</p>
+        <p className="text-sm font-medium text-foreground truncate">{label}</p>
         <p className={cn('text-xs font-semibold flex-shrink-0', ramp.text)}>
           {percentComplete}% covered
-          {gap < -5 && <span className="text-gray-400 font-normal"> · {Math.abs(gap)}% behind pace</span>}
+          {gap < -5 && <span className="text-muted-foreground font-normal"> · {Math.abs(gap)}% behind pace</span>}
         </p>
       </div>
       <div className={cn('relative h-2.5 rounded-full overflow-hidden', ramp.track)}>
         <div className={cn('h-full rounded-full transition-all', ramp.fill)} style={{ width: `${percentComplete}%` }} />
         {percentExpected > 0 && percentExpected < 100 && (
           <div
-            className="absolute top-0 bottom-0 w-[2px] bg-gray-700/60"
+            className="absolute top-0 bottom-0 w-[2px] bg-foreground/50"
             style={{ left: `${percentExpected}%` }}
             title={`Expected by now: ${percentExpected}%`}
           />
         )}
       </div>
-      <p className="text-[11px] text-gray-400">{completed} of {total} chapters covered</p>
+      <p className="text-[11px] text-muted-foreground">{completed} of {total} chapters covered</p>
     </div>
   )
 }

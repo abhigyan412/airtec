@@ -4,16 +4,21 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, Plus, Calendar, Check, X, Loader2, AlertTriangle, Ban } from 'lucide-react'
+import { ArrowLeft, Plus, Calendar, Check, X, AlertTriangle, Ban } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { ApplyLeaveModal } from '@/components/hr/ApplyLeaveModal'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { Skeleton } from '@/components/ui/skeleton'
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-amber-100 text-amber-700',
-  approved: 'bg-emerald-100 text-emerald-700',
-  rejected: 'bg-red-100 text-red-700',
-  cancelled: 'bg-gray-100 text-gray-600',
+  pending: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/20',
+  approved: 'bg-success/10 text-success ring-1 ring-inset ring-success/20',
+  rejected: 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/20',
+  cancelled: 'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
 }
 
 export default function LeavePage() {
@@ -66,109 +71,113 @@ export default function LeavePage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-start gap-4">
-          <Link href="/hr/staff" className="p-2 hover:bg-gray-100 rounded-xl transition-colors mt-1">
-            <ArrowLeft className="w-5 h-5 text-gray-500" />
-          </Link>
+          <Button variant="ghost" size="icon" asChild className="mt-1">
+            <Link href="/hr/staff" aria-label="Back to staff directory"><ArrowLeft className="h-5 w-5" /></Link>
+          </Button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Leave Management</h1>
-            <p className="text-gray-500 text-sm mt-0.5">Apply for leave and track your balances</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Leave Management</h1>
+            <p className="mt-0.5 text-sm text-muted-foreground">Apply for leave and track your balances</p>
           </div>
         </div>
-        <button onClick={() => setShowApply(true)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700 shadow-sm shadow-indigo-200">
-          <Plus className="w-4 h-4" /> Apply for Leave
-        </button>
+        <Button onClick={() => setShowApply(true)}>
+          <Plus className="h-4 w-4" /> Apply for Leave
+        </Button>
       </div>
 
       {/* My leave balances */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
         {(balances ?? []).map((b: any) => (
-          <div key={b.leave_type_id} className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-            <p className="text-xs text-gray-400 font-medium">{b.code}</p>
-            <p className={cn('text-2xl font-bold mt-1', b.remaining_days < 0 ? 'text-red-600' : 'text-gray-900')}>{b.remaining_days}</p>
-            <p className="text-xs text-gray-400">of {b.total_days} days</p>
-          </div>
+          <Card key={b.leave_type_id}>
+            <CardContent className="p-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground">{b.code}</p>
+              <p className={cn('mt-1 text-2xl font-bold', b.remaining_days < 0 ? 'text-destructive' : 'text-foreground')}>{b.remaining_days}</p>
+              <p className="text-xs text-muted-foreground">of {b.total_days} days</p>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
       {/* Pending approvals (admin only) */}
       {isAdmin && pendingAll && pendingAll.length > 0 && (
-        <div className="bg-white rounded-2xl border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h3 className="font-semibold text-gray-900">Pending Approvals</h3>
-            <span className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-semibold">{pendingAll.length} pending</span>
-          </div>
-          <div className="divide-y divide-gray-50">
-            {pendingAll.map((lr: any) => (
-              <div key={lr.id} className="px-6 py-4 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-gray-900">{lr.users?.full_name}</span>
-                    <span className="text-xs text-gray-400">·</span>
-                    <span className="text-sm text-gray-600">{lr.leave_types?.name}</span>
-                    {lr.exceeds_balance && (
-                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold flex items-center gap-1 bg-amber-100 text-amber-700">
-                        <AlertTriangle className="w-3 h-3" /> Exceeds balance
-                      </span>
-                    )}
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border">
+            <CardTitle>Pending Approvals</CardTitle>
+            <Badge variant="warning">{pendingAll.length} pending</Badge>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="divide-y divide-border">
+              {pendingAll.map((lr: any) => (
+                <div key={lr.id} className="flex items-center justify-between px-6 py-4">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">{lr.users?.full_name}</span>
+                      <span className="text-xs text-muted-foreground">·</span>
+                      <span className="text-sm text-muted-foreground">{lr.leave_types?.name}</span>
+                      {lr.exceeds_balance && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-xs font-semibold text-warning ring-1 ring-inset ring-warning/20">
+                          <AlertTriangle className="h-3 w-3" /> Exceeds balance
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
+                    {lr.reason && <p className="mt-1 text-xs text-muted-foreground">{lr.reason}</p>}
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
-                  {lr.reason && <p className="text-xs text-gray-400 mt-1">{lr.reason}</p>}
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => approveMutation.mutate({ id: lr.id, status: 'approved' })} disabled={approveMutation.isPending}
+                      className="bg-success/10 text-success shadow-none hover:bg-success/20">
+                      <Check className="h-3.5 w-3.5" /> Approve
+                    </Button>
+                    <Button size="sm" onClick={() => approveMutation.mutate({ id: lr.id, status: 'rejected' })} disabled={approveMutation.isPending}
+                      className="bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20">
+                      <X className="h-3.5 w-3.5" /> Reject
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => approveMutation.mutate({ id: lr.id, status: 'approved' })} disabled={approveMutation.isPending}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-lg hover:bg-emerald-100 disabled:opacity-50">
-                    <Check className="w-3.5 h-3.5" /> Approve
-                  </button>
-                  <button onClick={() => approveMutation.mutate({ id: lr.id, status: 'rejected' })} disabled={approveMutation.isPending}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-red-50 text-red-700 text-xs font-semibold rounded-lg hover:bg-red-100 disabled:opacity-50">
-                    <X className="w-3.5 h-3.5" /> Reject
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* My leave history */}
-      <div className="bg-white rounded-2xl border border-gray-200">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Calendar className="w-4 h-4 text-gray-400" /> My Leave Requests</h3>
-        </div>
-        {isLoading ? (
-          <div className="p-8 text-center"><div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" /></div>
-        ) : (myRequests ?? []).length === 0 ? (
-          <div className="p-8 text-center text-gray-400">
-            <Calendar className="w-8 h-8 mx-auto mb-2 text-gray-200" />
-            <p className="text-sm font-medium">No leave requests yet</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-50">
-            {(myRequests ?? []).map((lr: any) => (
-              <div key={lr.id} className="px-6 py-4 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-gray-900">{lr.leave_types?.name}</span>
-                    <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium capitalize', STATUS_COLORS[lr.status])}>{lr.status}</span>
+      <Card>
+        <CardHeader className="border-b border-border">
+          <CardTitle className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /> My Leave Requests</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="space-y-3 p-6">
+              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+            </div>
+          ) : (myRequests ?? []).length === 0 ? (
+            <EmptyState icon={Calendar} title="No leave requests yet" />
+          ) : (
+            <div className="divide-y divide-border">
+              {(myRequests ?? []).map((lr: any) => (
+                <div key={lr.id} className="flex items-center justify-between px-6 py-4">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">{lr.leave_types?.name}</span>
+                      <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize', STATUS_COLORS[lr.status])}>{lr.status}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
+                    {lr.reason && <p className="mt-1 text-xs text-muted-foreground">{lr.reason}</p>}
+                    {lr.rejection_reason && <p className="mt-1 text-xs text-destructive">Reason: {lr.rejection_reason}</p>}
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
-                  {lr.reason && <p className="text-xs text-gray-400 mt-1">{lr.reason}</p>}
-                  {lr.rejection_reason && <p className="text-xs text-red-400 mt-1">Reason: {lr.rejection_reason}</p>}
+                  <div className="flex items-center gap-2">
+                    {(lr.status === 'pending' || (isAdmin && lr.status === 'approved')) && (
+                      <Button variant="ghost" size="sm" onClick={() => cancelMutation.mutate(lr.id)} disabled={cancelMutation.isPending}
+                        className="text-muted-foreground hover:text-destructive">
+                        <Ban className="h-3.5 w-3.5" /> {lr.status === 'approved' ? 'Cancel' : 'Withdraw'}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {(lr.status === 'pending' || (isAdmin && lr.status === 'approved')) && (
-                    <button onClick={() => cancelMutation.mutate(lr.id)} disabled={cancelMutation.isPending}
-                      className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gray-500 hover:text-red-600 transition-colors">
-                      <Ban className="w-3.5 h-3.5" /> {lr.status === 'approved' ? 'Cancel' : 'Withdraw'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {showApply && (
         <ApplyLeaveModal onClose={() => {

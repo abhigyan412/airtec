@@ -8,6 +8,27 @@ import { TransferCertificateCard } from '@/components/students/TransferCertifica
 import { ArrowLeft, User, BookOpen, Phone, CreditCard, FileText, Calendar, Droplets, MapPin, Mail, Hash, Camera, Loader2, ArrowRightLeft, X, History } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Card as UICard, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Separator } from '@/components/ui/separator'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select'
 
 export default function StudentDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -27,10 +48,17 @@ export default function StudentDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-sm">Loading student profile...</p>
+      <div className="max-w-5xl space-y-6">
+        <div className="flex items-center gap-4">
+          <Skeleton className="h-16 w-16 rounded-2xl" />
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-6">
+          <Skeleton className="col-span-2 h-64 rounded-xl" />
+          <Skeleton className="h-64 rounded-xl" />
         </div>
       </div>
     )
@@ -38,9 +66,9 @@ export default function StudentDetailPage() {
 
   if (!data) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-        <p className="font-medium">Student not found</p>
-        <Link href="/students" className="text-indigo-600 text-sm mt-2 hover:underline">Back to students</Link>
+      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+        <p className="font-medium text-foreground">Student not found</p>
+        <Link href="/students" className="text-primary text-sm mt-2 hover:underline">Back to students</Link>
       </div>
     )
   }
@@ -52,27 +80,27 @@ export default function StudentDetailPage() {
   return (
     <div className="max-w-5xl space-y-6">
       <div className="flex items-start gap-4">
-        <Link href="/students" className="p-2 hover:bg-gray-100 rounded-xl transition-colors mt-1">
-          <ArrowLeft className="w-5 h-5 text-gray-500" />
-        </Link>
+        <Button asChild variant="ghost" size="icon" className="mt-1 shrink-0" aria-label="Back to students">
+          <Link href="/students"><ArrowLeft className="h-5 w-5" /></Link>
+        </Button>
         <div className="flex-1">
           <div className="flex items-center gap-4">
             <PhotoUpload studentId={id} currentUrl={s.photo_url} initials={initials} />
             <div>
               <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold text-gray-900">{s.first_name} {s.last_name}</h1>
-                <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold', STATUS_COLORS[s.status])}>
+                <h1 className="text-2xl font-bold tracking-tight text-foreground">{s.first_name} {s.last_name}</h1>
+                <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize', STATUS_COLORS[s.status])}>
                   {s.status}
                 </span>
               </div>
               <div className="flex items-center gap-4 mt-1">
                 {s.admission_number && (
-                  <span className="text-xs text-gray-400 font-mono bg-gray-100 px-2 py-0.5 rounded">
+                  <span className="text-xs text-muted-foreground font-mono bg-muted px-2 py-0.5 rounded">
                     #{s.admission_number}
                   </span>
                 )}
                 {s.classes?.name && (
-                  <span className="text-sm text-gray-500">
+                  <span className="text-sm text-muted-foreground">
                     {s.classes.name}{s.sections?.name ? ` · ${s.sections.name}` : ''}
                   </span>
                 )}
@@ -86,18 +114,15 @@ export default function StudentDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <a href={documentsApi.idCard(id)} target="_blank" rel="noreferrer"
-            className="px-4 py-2 border border-gray-200 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
-            ID Card
-          </a>
-          <button onClick={() => setShowTransferModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
-            <ArrowRightLeft className="w-3.5 h-3.5" /> Transfer
-          </button>
-          <Link href={`/students/${id}/edit`}
-            className="px-4 py-2 border border-gray-200 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors">
-            Edit profile
-          </Link>
+          <Button asChild variant="outline" size="sm">
+            <a href={documentsApi.idCard(id)} target="_blank" rel="noreferrer">ID Card</a>
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)}>
+            <ArrowRightLeft className="h-3.5 w-3.5" /> Transfer
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/students/${id}/edit`}>Edit profile</Link>
+          </Button>
         </div>
       </div>
 
@@ -127,10 +152,13 @@ export default function StudentDetailPage() {
               <Detail label="House" value={s.houses?.name ?? '—'} />
             </div>
             {(s.is_school_captain || s.is_house_captain) && (
-              <div className="mt-4 pt-4 border-t border-gray-100 flex gap-2 flex-wrap">
-                {s.is_school_captain && <span className="px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded-full">School Captain</span>}
-                {s.is_house_captain && <span className="px-3 py-1 bg-purple-100 text-purple-800 text-xs font-semibold rounded-full">House Captain</span>}
-              </div>
+              <>
+                <Separator className="mt-4" />
+                <div className="mt-4 flex gap-2 flex-wrap">
+                  {s.is_school_captain && <Badge variant="warning">School Captain</Badge>}
+                  {s.is_house_captain && <Badge className="border-transparent bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400">House Captain</Badge>}
+                </div>
+              </>
             )}
           </Card>
 
@@ -138,19 +166,19 @@ export default function StudentDetailPage() {
             <Card title="Promotion / Transfer History" icon={History}>
               <div className="space-y-3">
                 {promotions.map((p: any) => (
-                  <div key={p.id} className="flex items-center justify-between text-sm border-b border-gray-50 last:border-0 pb-3 last:pb-0">
+                  <div key={p.id} className="flex items-center justify-between text-sm border-b border-border last:border-0 pb-3 last:pb-0">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold capitalize bg-indigo-50 text-indigo-600 flex-shrink-0">
+                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold capitalize bg-primary/10 text-primary flex-shrink-0">
                         {p.promotion_type}
                       </span>
-                      <span className="text-gray-500 truncate">
+                      <span className="text-muted-foreground truncate">
                         {p.from_class?.name ?? '—'}{p.from_section?.name ? ` · ${p.from_section.name}` : ''}
                         {' → '}
                         {p.to_class?.name ?? '—'}{p.to_section?.name ? ` · ${p.to_section.name}` : ''}
                         {p.to_year?.name && ` (${p.to_year.name})`}
                       </span>
                     </div>
-                    <span className="text-xs text-gray-400 flex-shrink-0 ml-3">{formatDate(p.created_at)}</span>
+                    <span className="text-xs text-muted-foreground flex-shrink-0 ml-3">{formatDate(p.created_at)}</span>
                   </div>
                 ))}
               </div>
@@ -162,7 +190,7 @@ export default function StudentDetailPage() {
               <div className="grid grid-cols-2 gap-6">
                 {parent.father_name && (
                   <div className="space-y-3">
-                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Father</p>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Father</p>
                     <Detail label="Name" value={parent.father_name} />
                     <Detail label="Phone" value={parent.father_phone ?? '—'} />
                     <Detail label="Email" value={parent.father_email ?? '—'} />
@@ -170,7 +198,7 @@ export default function StudentDetailPage() {
                 )}
                 {parent.mother_name && (
                   <div className="space-y-3">
-                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Mother</p>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Mother</p>
                     <Detail label="Name" value={parent.mother_name} />
                     <Detail label="Phone" value={parent.mother_phone ?? '—'} />
                     <Detail label="Email" value={parent.mother_email ?? '—'} />
@@ -186,41 +214,32 @@ export default function StudentDetailPage() {
         <div className="space-y-5">
           <Card title="Fee Summary" icon={CreditCard}>
             <div className="space-y-3">
-              <div className="flex items-center justify-between py-2 border-b border-gray-50">
-                <span className="text-sm text-gray-500">Total Billed</span>
-                <span className="text-sm font-semibold text-gray-900">{formatCurrency(s.fee_summary?.total_billed ?? 0)}</span>
+              <div className="flex items-center justify-between py-2 border-b border-border">
+                <span className="text-sm text-muted-foreground">Total Billed</span>
+                <span className="text-sm font-semibold text-foreground">{formatCurrency(s.fee_summary?.total_billed ?? 0)}</span>
               </div>
-              <div className="flex items-center justify-between py-2 border-b border-gray-50">
-                <span className="text-sm text-gray-500">Collected</span>
-                <span className="text-sm font-semibold text-emerald-600">{formatCurrency(s.fee_summary?.total_paid ?? 0)}</span>
+              <div className="flex items-center justify-between py-2 border-b border-border">
+                <span className="text-sm text-muted-foreground">Collected</span>
+                <span className="text-sm font-semibold text-success">{formatCurrency(s.fee_summary?.total_paid ?? 0)}</span>
               </div>
               <div className="flex items-center justify-between py-2">
-                <span className="text-sm text-gray-500">Due</span>
-                <span className="text-sm font-bold text-rose-600">{formatCurrency(s.fee_summary?.total_due ?? 0)}</span>
+                <span className="text-sm text-muted-foreground">Due</span>
+                <span className="text-sm font-bold text-destructive">{formatCurrency(s.fee_summary?.total_due ?? 0)}</span>
               </div>
             </div>
           </Card>
 
           <Card title="Quick Actions" icon={FileText}>
             <div className="space-y-2">
-              <Link href={`/students/${id}/documents`}
-                className="flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-gray-600 font-medium hover:bg-purple-50 hover:text-purple-700 transition-colors border border-transparent hover:border-gray-100">
-                View Documents <span className="text-gray-300">→</span>
-              </Link>
-              <Link href={`/students/${id}/attendance`}
-                className="flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-gray-600 font-medium hover:bg-yellow-50 hover:text-yellow-700 transition-colors border border-transparent hover:border-gray-100">
-                View Attendance <span className="text-gray-300">→</span>
-              </Link>
-              <a href={documentsApi.idCard(id)} target="_blank" rel="noreferrer"
-                className="flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-gray-600 font-medium hover:bg-emerald-50 hover:text-emerald-700 transition-colors border border-transparent hover:border-gray-100">
-                Print ID Card <span className="text-gray-300">→</span>
-              </a>
+              <QuickAction href={`/students/${id}/documents`} label="View Documents" />
+              <QuickAction href={`/students/${id}/attendance`} label="View Attendance" />
+              <QuickAction href={documentsApi.idCard(id)} label="Print ID Card" external />
             </div>
           </Card>
 
-          <div className="bg-gray-50 rounded-2xl p-4 space-y-2">
-            <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">Record info</p>
-            <p className="text-xs text-gray-500">Added on {formatDate(s.created_at)}</p>
+          <div className="bg-muted rounded-2xl p-4 space-y-2">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Record info</p>
+            <p className="text-xs text-muted-foreground">Added on {formatDate(s.created_at)}</p>
           </div>
         </div>
       </div>
@@ -238,6 +257,15 @@ export default function StudentDetailPage() {
       )}
     </div>
   )
+}
+
+function QuickAction({ href, label, external }: { href: string; label: string; external?: boolean }) {
+  const className = 'flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-muted-foreground font-medium hover:bg-muted hover:text-foreground transition-colors border border-transparent hover:border-border'
+  const inner = <>{label} <span className="text-muted-foreground/50">→</span></>
+  if (external) {
+    return <a href={href} target="_blank" rel="noreferrer" className={className}>{inner}</a>
+  }
+  return <Link href={href} className={className}>{inner}</Link>
 }
 
 function TransferModal({ student, onClose, onDone }: { student: any; onClose: () => void; onDone: () => void }) {
@@ -274,61 +302,67 @@ function TransferModal({ student, onClose, onDone }: { student: any; onClose: ()
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to transfer'),
   })
 
-  const ic = "w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Transfer — {student.first_name} {student.last_name}</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Transfer — {student.first_name} {student.last_name}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Class *</label>
-              <select className={ic} value={toClass} onChange={e => { setToClass(e.target.value); setToSection('') }}>
-                <option value="">Select class...</option>
-                {(classesData ?? []).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+            <div className="space-y-1.5">
+              <Label>Class *</Label>
+              <Select value={toClass} onValueChange={(v) => { setToClass(v); setToSection('') }}>
+                <SelectTrigger><SelectValue placeholder="Select class..." /></SelectTrigger>
+                <SelectContent>
+                  {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Section</label>
-              <select className={ic} value={toSection} onChange={e => setToSection(e.target.value)} disabled={!toClass}>
-                <option value="">Unassigned</option>
-                {toSections.map((sec: any) => <option key={sec.id} value={sec.id}>{sec.name}</option>)}
-              </select>
+            <div className="space-y-1.5">
+              <Label>Section</Label>
+              <Select value={toSection || 'none'} onValueChange={(v) => setToSection(v === 'none' ? '' : v)} disabled={!toClass}>
+                <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Unassigned</SelectItem>
+                  {toSections.map((sec: any) => <SelectItem key={sec.id} value={sec.id}>{sec.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Academic Year *</label>
-              <select className={ic} value={toAcademicYear} onChange={e => setToAcademicYear(e.target.value)}>
-                <option value="">Select year...</option>
-                {(academicYears ?? []).map((y: any) => <option key={y.id} value={y.id}>{y.name}{y.is_current ? ' (current)' : ''}</option>)}
-              </select>
+            <div className="space-y-1.5">
+              <Label>Academic Year *</Label>
+              <Select value={toAcademicYear} onValueChange={setToAcademicYear}>
+                <SelectTrigger><SelectValue placeholder="Select year..." /></SelectTrigger>
+                <SelectContent>
+                  {(academicYears ?? []).map((y: any) => <SelectItem key={y.id} value={y.id}>{y.name}{y.is_current ? ' (current)' : ''}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
-              <select className={ic} value={promotionType} onChange={e => setPromotionType(e.target.value)}>
-                {PROMOTION_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-              </select>
+            <div className="space-y-1.5">
+              <Label>Type *</Label>
+              <Select value={promotionType} onValueChange={setPromotionType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PROMOTION_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Notes (optional)</label>
-            <input type="text" className={ic} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason for transfer..." />
+          <div className="space-y-1.5">
+            <Label htmlFor="transfer-notes">Notes (optional)</Label>
+            <Input id="transfer-notes" type="text" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason for transfer..." />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={() => transferMutation.mutate()} disabled={transferMutation.isPending || !toClass || !toAcademicYear}
-            className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60">
-            {transferMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} Confirm Transfer
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => transferMutation.mutate()} disabled={transferMutation.isPending || !toClass || !toAcademicYear}>
+            {transferMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Confirm Transfer
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -371,10 +405,10 @@ function PhotoUpload({ studentId, currentUrl, initials }: { studentId: string, c
 
   return (
     <label className="relative cursor-pointer group flex-shrink-0">
-      <div className="w-16 h-16 rounded-2xl bg-indigo-100 flex items-center justify-center overflow-hidden">
+      <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center overflow-hidden">
         {preview
           ? <img src={preview} alt="" className="w-16 h-16 object-cover rounded-2xl" />
-          : <span className="text-2xl font-bold text-indigo-700">{initials}</span>
+          : <span className="text-2xl font-bold text-primary">{initials}</span>
         }
         <div className="absolute inset-0 bg-black/50 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
           {uploading
@@ -390,21 +424,23 @@ function PhotoUpload({ studentId, currentUrl, initials }: { studentId: string, c
 
 function Card({ title, icon: Icon, children }: { title: string; icon?: any; children: React.ReactNode }) {
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6">
-      <div className="flex items-center gap-2 mb-5">
-        {Icon && <Icon className="w-4 h-4 text-gray-400" />}
-        <h3 className="font-semibold text-gray-900 text-sm">{title}</h3>
-      </div>
-      {children}
-    </div>
+    <UICard className="rounded-2xl">
+      <CardHeader className="pb-4">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          {Icon && <Icon className="w-4 h-4 text-muted-foreground" />}
+          {title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </UICard>
   )
 }
 
 function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-xs text-gray-400 mb-0.5">{label}</p>
-      <p className="text-sm font-medium text-gray-800">{value}</p>
+      <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
+      <p className="text-sm font-medium text-foreground">{value}</p>
     </div>
   )
 }

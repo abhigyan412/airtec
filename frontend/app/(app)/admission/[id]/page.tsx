@@ -4,9 +4,18 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { admissionApi } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, Phone, Mail, MessageSquare, Calendar, CheckCircle, XCircle, Loader2, Plus, User, FileCheck } from 'lucide-react'
+import { ArrowLeft, Phone, Mail, MessageSquare, Calendar, CheckCircle, Loader2, Plus, User, FileCheck } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from '@/components/ui/dialog'
+import { EmptyState } from '@/components/shared/EmptyState'
 
 const STAGES = [
   { key: 'new',                 label: 'New' },
@@ -18,17 +27,18 @@ const STAGES = [
   { key: 'admitted',            label: 'Admitted' },
 ]
 
+// Theme-aware status pill classes (work in both light and dark mode).
 const STATUS_COLORS: Record<string, string> = {
-  new: 'bg-blue-100 text-blue-700',
-  follow_up: 'bg-yellow-100 text-yellow-700',
-  interested: 'bg-purple-100 text-purple-700',
-  documents_submitted: 'bg-orange-100 text-orange-700',
-  entrance_exam: 'bg-cyan-100 text-cyan-700',
-  approved: 'bg-teal-100 text-teal-700',
-  fee_pending: 'bg-pink-100 text-pink-700',
-  admitted: 'bg-green-100 text-green-700',
-  rejected: 'bg-red-100 text-red-700',
-  lost: 'bg-gray-100 text-gray-600',
+  new: 'bg-primary/10 text-primary',
+  follow_up: 'bg-warning/10 text-warning',
+  interested: 'bg-purple-500/10 text-purple-600 dark:text-purple-400',
+  documents_submitted: 'bg-orange-500/10 text-orange-600 dark:text-orange-400',
+  entrance_exam: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
+  approved: 'bg-teal-500/10 text-teal-600 dark:text-teal-400',
+  fee_pending: 'bg-pink-500/10 text-pink-600 dark:text-pink-400',
+  admitted: 'bg-success/10 text-success',
+  rejected: 'bg-destructive/10 text-destructive',
+  lost: 'bg-muted text-muted-foreground',
 }
 
 const CHANNEL_ICONS: Record<string, string> = {
@@ -72,17 +82,17 @@ export default function InquiryDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+      <div className="flex items-center justify-center h-64 text-muted-foreground">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
       </div>
     )
   }
 
   if (!data) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-        <p className="font-medium">Inquiry not found</p>
-        <Link href="/admission" className="text-indigo-600 text-sm mt-2 hover:underline">Back to CRM</Link>
+      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+        <p className="font-medium text-foreground">Inquiry not found</p>
+        <Link href="/admission" className="text-primary text-sm mt-2 hover:underline">Back to CRM</Link>
       </div>
     )
   }
@@ -94,36 +104,35 @@ export default function InquiryDetailPage() {
   return (
     <div className="max-w-5xl space-y-6">
       {/* Header */}
-      <div className="flex items-start gap-4">
-        <Link href="/admission" className="p-2 hover:bg-gray-100 rounded-xl transition-colors mt-1">
-          <ArrowLeft className="w-5 h-5 text-gray-500" />
-        </Link>
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="icon" asChild className="mt-1">
+          <Link href="/admission" aria-label="Back to CRM">
+            <ArrowLeft className="w-5 h-5" />
+          </Link>
+        </Button>
         <div className="flex-1">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold text-gray-900">{inq.student_name}</h1>
-            <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize', STATUS_COLORS[inq.status] ?? 'bg-gray-100 text-gray-600')}>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">{inq.student_name}</h1>
+            <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize', STATUS_COLORS[inq.status] ?? 'bg-muted text-muted-foreground')}>
               {inq.status?.replace(/_/g, ' ')}
             </span>
-            <span className="text-xs text-gray-400 font-mono bg-gray-100 px-2 py-0.5 rounded">{inq.inquiry_number}</span>
+            <span className="text-xs text-muted-foreground font-mono bg-muted px-2 py-0.5 rounded">{inq.inquiry_number}</span>
           </div>
-          <p className="text-gray-500 text-sm mt-1">
+          <p className="text-muted-foreground text-sm mt-1">
             Added {formatDate(inq.created_at)}
             {inq.classes?.name && ` · Applying for ${inq.classes.name}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
           {!inq.linked_application && inq.status !== 'admitted' && inq.status !== 'rejected' && inq.status !== 'lost' && (
-            <button onClick={() => convertMutation.mutate()} disabled={convertMutation.isPending}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-xl hover:bg-emerald-700 disabled:opacity-60 transition-colors">
+            <Button onClick={() => convertMutation.mutate()} disabled={convertMutation.isPending}
+              className="bg-success text-success-foreground hover:bg-success/90">
               {convertMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCheck className="w-4 h-4" />}
               Convert to Application
-            </button>
+            </Button>
           )}
           {!inq.linked_application && (
-            <button onClick={() => setShowStatusChange(true)}
-              className="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 transition-colors">
-              Move Stage
-            </button>
+            <Button onClick={() => setShowStatusChange(true)}>Move Stage</Button>
           )}
         </div>
       </div>
@@ -131,27 +140,27 @@ export default function InquiryDetailPage() {
       {/* Pipeline progress — OR link to the live application workflow if converted */}
       {inq.linked_application ? (
         <Link href={`/admission/applications/${inq.linked_application.id}`}
-          className="block bg-white rounded-2xl border border-emerald-200 bg-emerald-50/40 p-5 hover:bg-emerald-50 transition-colors group">
+          className="block rounded-2xl border border-success/30 bg-success/5 p-5 hover:bg-success/10 transition-colors group">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-1">Converted to Application</p>
-              <p className="text-sm text-gray-700">
-                <span className="font-mono text-gray-500">{inq.linked_application.application_number}</span>
+              <p className="text-xs font-semibold text-success uppercase tracking-wider mb-1">Converted to Application</p>
+              <p className="text-sm text-foreground">
+                <span className="font-mono text-muted-foreground">{inq.linked_application.application_number}</span>
                 {' · '}
-                <span className={cn('font-semibold capitalize', inq.linked_application.status === 'admitted' ? 'text-emerald-600' : inq.linked_application.status === 'rejected' ? 'text-red-600' : 'text-amber-600')}>
+                <span className={cn('font-semibold capitalize', inq.linked_application.status === 'admitted' ? 'text-success' : inq.linked_application.status === 'rejected' ? 'text-destructive' : 'text-warning')}>
                   {inq.linked_application.status}
                 </span>
               </p>
-              <p className="text-xs text-gray-400 mt-1">Real-time approval progress now lives on the application page.</p>
+              <p className="text-xs text-muted-foreground mt-1">Real-time approval progress now lives on the application page.</p>
             </div>
-            <span className="flex items-center gap-1 text-sm text-emerald-700 font-semibold group-hover:gap-2 transition-all">
+            <span className="flex items-center gap-1 text-sm text-success font-semibold group-hover:gap-2 transition-all">
               View Application Progress <ArrowLeft className="w-4 h-4 rotate-180" />
             </span>
           </div>
         </Link>
       ) : (
-        <div className="bg-white rounded-2xl border border-gray-200 p-5">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Admission Pipeline</p>
+        <Card className="p-5">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">Admission Pipeline</p>
           <div className="flex items-center gap-0">
             {STAGES.map((stage, idx) => {
               const isDone    = idx < currentStageIdx
@@ -161,114 +170,113 @@ export default function InquiryDetailPage() {
                 <div key={stage.key} className="flex items-center flex-1 min-w-0">
                   <div className="flex flex-col items-center flex-shrink-0">
                     <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all',
-                      isDone    ? 'bg-indigo-600 border-indigo-600 text-white' :
-                      isCurrent ? 'bg-white border-indigo-600 text-indigo-600' :
-                      'bg-white border-gray-200 text-gray-400')}>
+                      isDone    ? 'bg-primary border-primary text-primary-foreground' :
+                      isCurrent ? 'bg-card border-primary text-primary' :
+                      'bg-card border-border text-muted-foreground')}>
                       {isDone ? <CheckCircle className="w-4 h-4" /> : idx + 1}
                     </div>
-                    <p className={cn('text-xs mt-1 text-center whitespace-nowrap', isCurrent ? 'text-indigo-600 font-semibold' : 'text-gray-400')}>
+                    <p className={cn('text-xs mt-1 text-center whitespace-nowrap', isCurrent ? 'text-primary font-semibold' : 'text-muted-foreground')}>
                       {stage.label}
                     </p>
                   </div>
                   {!isLast && (
-                    <div className={cn('flex-1 h-0.5 mx-1 mb-4', idx < currentStageIdx ? 'bg-indigo-600' : 'bg-gray-200')} />
+                    <div className={cn('flex-1 h-0.5 mx-1 mb-4', idx < currentStageIdx ? 'bg-primary' : 'bg-border')} />
                   )}
                 </div>
               )
             })}
           </div>
-          <p className="text-xs text-gray-400 mt-3">
+          <p className="text-xs text-muted-foreground mt-3">
             Convert this inquiry to a formal application to start the Counselor → Accountant → Principal approval workflow. Stage will update automatically as approvals happen.
           </p>
-        </div>
+        </Card>
       )}
 
       <div className="grid grid-cols-3 gap-6">
         {/* Left: inquiry details */}
         <div className="col-span-2 space-y-5">
           {/* Contact info */}
-          <div className="bg-white rounded-2xl border border-gray-200 p-6">
-            <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <User className="w-4 h-4 text-gray-400" /> Contact Information
-            </h3>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-              <div>
-                <p className="text-xs text-gray-400 mb-0.5">Parent Name</p>
-                <p className="text-sm font-medium text-gray-800">{inq.parent_name}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-400 mb-0.5">Phone</p>
-                <p className="text-sm font-medium text-gray-800 flex items-center gap-1">
-                  <Phone className="w-3 h-3 text-gray-400" /> {inq.parent_phone}
-                </p>
-              </div>
-              {inq.parent_email && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <User className="w-4 h-4 text-muted-foreground" /> Contact Information
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 gap-x-8 gap-y-4">
                 <div>
-                  <p className="text-xs text-gray-400 mb-0.5">Email</p>
-                  <p className="text-sm font-medium text-gray-800 flex items-center gap-1">
-                    <Mail className="w-3 h-3 text-gray-400" /> {inq.parent_email}
+                  <p className="text-xs text-muted-foreground mb-0.5">Parent Name</p>
+                  <p className="text-sm font-medium text-foreground">{inq.parent_name}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Phone</p>
+                  <p className="text-sm font-medium text-foreground flex items-center gap-1">
+                    <Phone className="w-3 h-3 text-muted-foreground" /> {inq.parent_phone}
                   </p>
                 </div>
-              )}
-              {inq.gender && (
-                <div>
-                  <p className="text-xs text-gray-400 mb-0.5">Gender</p>
-                  <p className="text-sm font-medium text-gray-800 capitalize">{inq.gender}</p>
-                </div>
-              )}
-              {inq.classes?.name && (
-                <div>
-                  <p className="text-xs text-gray-400 mb-0.5">Applying for Class</p>
-                  <p className="text-sm font-medium text-gray-800">{inq.classes.name}</p>
-                </div>
-              )}
-              {inq.previous_school && (
-                <div>
-                  <p className="text-xs text-gray-400 mb-0.5">Previous School</p>
-                  <p className="text-sm font-medium text-gray-800">{inq.previous_school}</p>
-                </div>
-              )}
-              {inq.budget_range && (
-                <div>
-                  <p className="text-xs text-gray-400 mb-0.5">Budget Range</p>
-                  <p className="text-sm font-medium text-gray-800">{inq.budget_range}</p>
-                </div>
-              )}
-              {inq.users?.full_name && (
-                <div>
-                  <p className="text-xs text-gray-400 mb-0.5">Assigned Counselor</p>
-                  <p className="text-sm font-medium text-gray-800">{inq.users.full_name}</p>
-                </div>
-              )}
-            </div>
-            {inq.notes && (
-              <div className="mt-4 pt-4 border-t border-gray-100">
-                <p className="text-xs text-gray-400 mb-1">Notes</p>
-                <p className="text-sm text-gray-600">{inq.notes}</p>
+                {inq.parent_email && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Email</p>
+                    <p className="text-sm font-medium text-foreground flex items-center gap-1">
+                      <Mail className="w-3 h-3 text-muted-foreground" /> {inq.parent_email}
+                    </p>
+                  </div>
+                )}
+                {inq.gender && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Gender</p>
+                    <p className="text-sm font-medium text-foreground capitalize">{inq.gender}</p>
+                  </div>
+                )}
+                {inq.classes?.name && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Applying for Class</p>
+                    <p className="text-sm font-medium text-foreground">{inq.classes.name}</p>
+                  </div>
+                )}
+                {inq.previous_school && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Previous School</p>
+                    <p className="text-sm font-medium text-foreground">{inq.previous_school}</p>
+                  </div>
+                )}
+                {inq.budget_range && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Budget Range</p>
+                    <p className="text-sm font-medium text-foreground">{inq.budget_range}</p>
+                  </div>
+                )}
+                {inq.users?.full_name && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Assigned Counselor</p>
+                    <p className="text-sm font-medium text-foreground">{inq.users.full_name}</p>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+              {inq.notes && (
+                <div className="mt-4 pt-4 border-t border-border">
+                  <p className="text-xs text-muted-foreground mb-1">Notes</p>
+                  <p className="text-sm text-foreground">{inq.notes}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Follow-ups */}
-          <div className="bg-white rounded-2xl border border-gray-200">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-gray-400" />
+          <Card>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+              <h3 className="font-semibold text-foreground flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-muted-foreground" />
                 Follow-ups ({(inq.inquiry_follow_ups ?? []).length})
               </h3>
-              <button onClick={() => setShowFollowUp(true)}
-                className="flex items-center gap-1.5 text-sm text-indigo-600 font-medium hover:text-indigo-700">
+              <Button variant="ghost" size="sm" onClick={() => setShowFollowUp(true)} className="text-primary hover:text-primary">
                 <Plus className="w-4 h-4" /> Log Follow-up
-              </button>
+              </Button>
             </div>
             {(inq.inquiry_follow_ups ?? []).length === 0 ? (
-              <div className="p-8 text-center text-gray-400">
-                <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-200" />
-                <p className="text-sm font-medium">No follow-ups yet</p>
-                <p className="text-xs mt-1">Log your first call or visit</p>
-              </div>
+              <EmptyState icon={MessageSquare} title="No follow-ups yet" description="Log your first call or visit" className="py-8" />
             ) : (
-              <div className="divide-y divide-gray-50">
+              <div className="divide-y divide-border">
                 {(inq.inquiry_follow_ups ?? [])
                   .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                   .map((fu: any) => (
@@ -277,18 +285,18 @@ export default function InquiryDetailPage() {
                       <span className="text-xl flex-shrink-0">{CHANNEL_ICONS[fu.channel] ?? '📝'}</span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-semibold text-gray-900 capitalize">{fu.channel}</span>
-                          <span className="text-xs text-gray-400">{formatDate(fu.follow_up_date)}</span>
+                          <span className="text-sm font-semibold text-foreground capitalize">{fu.channel}</span>
+                          <span className="text-xs text-muted-foreground">{formatDate(fu.follow_up_date)}</span>
                           {fu.users?.full_name && (
-                            <span className="text-xs text-gray-400">by {fu.users.full_name}</span>
+                            <span className="text-xs text-muted-foreground">by {fu.users.full_name}</span>
                           )}
                         </div>
-                        {fu.notes && <p className="text-sm text-gray-600 mt-1">{fu.notes}</p>}
+                        {fu.notes && <p className="text-sm text-foreground mt-1">{fu.notes}</p>}
                         {fu.outcome && (
-                          <p className="text-xs text-indigo-600 font-medium mt-1">Outcome: {fu.outcome}</p>
+                          <p className="text-xs text-primary font-medium mt-1">Outcome: {fu.outcome}</p>
                         )}
                         {fu.next_follow_up_date && (
-                          <p className="text-xs text-orange-600 mt-1 flex items-center gap-1">
+                          <p className="text-xs text-warning mt-1 flex items-center gap-1">
                             <Calendar className="w-3 h-3" /> Next: {formatDate(fu.next_follow_up_date)}
                           </p>
                         )}
@@ -298,52 +306,56 @@ export default function InquiryDetailPage() {
                 ))}
               </div>
             )}
-          </div>
+          </Card>
         </div>
 
         {/* Right: quick actions */}
         <div className="space-y-5">
-          <div className="bg-white rounded-2xl border border-gray-200 p-5">
-            <h3 className="font-semibold text-gray-900 mb-4">Quick Actions</h3>
-            <div className="space-y-2">
-              {!inq.linked_application && inq.status !== 'admitted' && inq.status !== 'rejected' && inq.status !== 'lost' && (
-                <button onClick={() => convertMutation.mutate()} disabled={convertMutation.isPending}
-                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-emerald-700 font-medium hover:bg-emerald-50 transition-colors border border-transparent hover:border-emerald-100">
-                  Convert to Application <span className="text-emerald-300">→</span>
-                </button>
-              )}
-              <button onClick={() => setShowFollowUp(true)}
-                className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-gray-600 font-medium hover:bg-indigo-50 hover:text-indigo-700 transition-colors border border-transparent hover:border-gray-100">
-                Log Follow-up <span className="text-gray-300">→</span>
-              </button>
-              {!inq.linked_application && (
-                <>
-                  <button onClick={() => setShowStatusChange(true)}
-                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-gray-600 font-medium hover:bg-purple-50 hover:text-purple-700 transition-colors border border-transparent hover:border-gray-100">
-                    Move Pipeline Stage <span className="text-gray-300">→</span>
+          <Card>
+            <CardHeader>
+              <CardTitle>Quick Actions</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {!inq.linked_application && inq.status !== 'admitted' && inq.status !== 'rejected' && inq.status !== 'lost' && (
+                  <button onClick={() => convertMutation.mutate()} disabled={convertMutation.isPending}
+                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-success font-medium hover:bg-success/10 transition-colors border border-transparent">
+                    Convert to Application <span className="text-success/50">→</span>
                   </button>
-                  {inq.status !== 'rejected' && inq.status !== 'lost' && (
-                    <button onClick={() => statusMutation.mutate('rejected')}
-                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-gray-600 font-medium hover:bg-red-50 hover:text-red-700 transition-colors border border-transparent hover:border-gray-100">
-                      Mark as Rejected <span className="text-gray-300">→</span>
+                )}
+                <button onClick={() => setShowFollowUp(true)}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-foreground font-medium hover:bg-muted transition-colors border border-transparent">
+                  Log Follow-up <span className="text-muted-foreground">→</span>
+                </button>
+                {!inq.linked_application && (
+                  <>
+                    <button onClick={() => setShowStatusChange(true)}
+                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-foreground font-medium hover:bg-muted transition-colors border border-transparent">
+                      Move Pipeline Stage <span className="text-muted-foreground">→</span>
                     </button>
-                  )}
-                  {inq.status !== 'lost' && (
-                    <button onClick={() => statusMutation.mutate('lost')}
-                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors border border-transparent hover:border-gray-100">
-                      Mark as Lost <span className="text-gray-300">→</span>
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
+                    {inq.status !== 'rejected' && inq.status !== 'lost' && (
+                      <button onClick={() => statusMutation.mutate('rejected')}
+                        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-foreground font-medium hover:bg-destructive/10 hover:text-destructive transition-colors border border-transparent">
+                        Mark as Rejected <span className="text-muted-foreground">→</span>
+                      </button>
+                    )}
+                    {inq.status !== 'lost' && (
+                      <button onClick={() => statusMutation.mutate('lost')}
+                        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-foreground font-medium hover:bg-muted transition-colors border border-transparent">
+                        Mark as Lost <span className="text-muted-foreground">→</span>
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
-          <div className="bg-gray-50 rounded-2xl p-4 space-y-2">
-            <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">Record Info</p>
-            <p className="text-xs text-gray-500">Created {formatDate(inq.created_at)}</p>
+          <div className="bg-muted rounded-2xl p-4 space-y-2">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Record Info</p>
+            <p className="text-xs text-muted-foreground">Created {formatDate(inq.created_at)}</p>
             {inq.inquiry_sources?.name && (
-              <p className="text-xs text-gray-500">Source: {inq.inquiry_sources.name}</p>
+              <p className="text-xs text-muted-foreground">Source: {inq.inquiry_sources.name}</p>
             )}
           </div>
         </div>
@@ -393,17 +405,15 @@ function FollowUpModal({ inquiryId, onClose }: { inquiryId: string, onClose: () 
     }
   }
 
-  const inputCls = "w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-gray-50 focus:bg-white"
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Log Follow-up</h2>
-        </div>
-        <div className="px-6 py-5 space-y-4">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Log Follow-up</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Channel *</label>
+            <Label className="mb-1.5 block">Channel *</Label>
             <div className="grid grid-cols-5 gap-2">
               {[
                 { key: 'call', icon: '📞', label: 'Call' },
@@ -414,7 +424,7 @@ function FollowUpModal({ inquiryId, onClose }: { inquiryId: string, onClose: () 
               ].map(c => (
                 <button key={c.key} onClick={() => setForm(f => ({ ...f, channel: c.key }))}
                   className={cn('flex flex-col items-center gap-1 p-2 rounded-xl border-2 text-xs font-medium transition-all',
-                    form.channel === c.key ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-500 hover:border-gray-300')}>
+                    form.channel === c.key ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-muted-foreground/40')}>
                   <span className="text-lg">{c.icon}</span>
                   {c.label}
                 </button>
@@ -422,38 +432,37 @@ function FollowUpModal({ inquiryId, onClose }: { inquiryId: string, onClose: () 
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Date & Time *</label>
-            <input type="datetime-local" className={inputCls} value={form.follow_up_date}
+            <Label htmlFor="fu-date" className="mb-1.5 block">Date &amp; Time *</Label>
+            <Input id="fu-date" type="datetime-local" value={form.follow_up_date}
               onChange={e => setForm(f => ({ ...f, follow_up_date: e.target.value }))} />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes</label>
-            <textarea rows={3} className={inputCls + ' resize-none'} value={form.notes}
+            <Label htmlFor="fu-notes" className="mb-1.5 block">Notes</Label>
+            <Textarea id="fu-notes" rows={3} className="resize-none" value={form.notes}
               onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
               placeholder="What was discussed..." />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Outcome</label>
-            <input className={inputCls} value={form.outcome}
+            <Label htmlFor="fu-outcome" className="mb-1.5 block">Outcome</Label>
+            <Input id="fu-outcome" value={form.outcome}
               onChange={e => setForm(f => ({ ...f, outcome: e.target.value }))}
               placeholder="e.g. Interested, needs more time, wants visit" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Next Follow-up Date</label>
-            <input type="date" className={inputCls} value={form.next_follow_up_date}
+            <Label htmlFor="fu-next" className="mb-1.5 block">Next Follow-up Date</Label>
+            <Input id="fu-next" type="date" value={form.next_follow_up_date}
               onChange={e => setForm(f => ({ ...f, next_follow_up_date: e.target.value }))} />
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 font-medium">Cancel</button>
-          <button onClick={handleSubmit} disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={loading}>
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
             Log Follow-up
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -464,26 +473,26 @@ function StatusChangeModal({ currentStatus, onSelect, isPending, onClose }: {
   onClose: () => void
 }) {
   const ALL_STATUSES = [
-    { key: 'new',                 label: 'New',                color: 'bg-blue-100 text-blue-700' },
-    { key: 'follow_up',           label: 'Follow Up',          color: 'bg-yellow-100 text-yellow-700' },
-    { key: 'interested',          label: 'Interested',         color: 'bg-purple-100 text-purple-700' },
-    { key: 'documents_submitted', label: 'Documents Submitted', color: 'bg-orange-100 text-orange-700' },
-    { key: 'entrance_exam',       label: 'Entrance Exam',      color: 'bg-cyan-100 text-cyan-700' },
-    { key: 'approved',            label: 'Approved',           color: 'bg-teal-100 text-teal-700' },
-    { key: 'fee_pending',         label: 'Fee Pending',        color: 'bg-pink-100 text-pink-700' },
-    { key: 'admitted',            label: 'Admitted',           color: 'bg-green-100 text-green-700', locked: true },
-    { key: 'rejected',            label: 'Rejected',           color: 'bg-red-100 text-red-700' },
-    { key: 'lost',                label: 'Lost',               color: 'bg-gray-100 text-gray-600' },
+    { key: 'new',                 label: 'New',                color: 'bg-primary/10 text-primary' },
+    { key: 'follow_up',           label: 'Follow Up',          color: 'bg-warning/10 text-warning' },
+    { key: 'interested',          label: 'Interested',         color: 'bg-purple-500/10 text-purple-600 dark:text-purple-400' },
+    { key: 'documents_submitted', label: 'Documents Submitted', color: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
+    { key: 'entrance_exam',       label: 'Entrance Exam',      color: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400' },
+    { key: 'approved',            label: 'Approved',           color: 'bg-teal-500/10 text-teal-600 dark:text-teal-400' },
+    { key: 'fee_pending',         label: 'Fee Pending',        color: 'bg-pink-500/10 text-pink-600 dark:text-pink-400' },
+    { key: 'admitted',            label: 'Admitted',           color: 'bg-success/10 text-success', locked: true },
+    { key: 'rejected',            label: 'Rejected',           color: 'bg-destructive/10 text-destructive' },
+    { key: 'lost',                label: 'Lost',               color: 'bg-muted text-muted-foreground' },
   ]
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Move to Stage</h2>
-          <p className="text-sm text-gray-500 mt-0.5">Select the new pipeline stage</p>
-        </div>
-        <div className="px-6 py-4 space-y-2 max-h-80 overflow-y-auto">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Move to Stage</DialogTitle>
+          <DialogDescription>Select the new pipeline stage</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 max-h-80 overflow-y-auto -mx-1 px-1">
           {ALL_STATUSES.map(s => (
             <button key={s.key}
               onClick={() => !s.locked && onSelect(s.key)}
@@ -492,26 +501,24 @@ function StatusChangeModal({ currentStatus, onSelect, isPending, onClose }: {
               className={cn(
                 'w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 text-sm font-medium transition-all',
                 s.key === currentStatus
-                  ? 'border-indigo-500 bg-indigo-50 text-indigo-700 cursor-default'
+                  ? 'border-primary bg-primary/10 text-primary cursor-default'
                   : s.locked
-                  ? 'border-gray-100 text-gray-400 cursor-not-allowed opacity-60'
-                  : 'border-gray-100 hover:border-indigo-200 hover:bg-indigo-50/50 text-gray-700 disabled:opacity-50'
+                  ? 'border-border text-muted-foreground cursor-not-allowed opacity-60'
+                  : 'border-border hover:border-primary/40 hover:bg-primary/5 text-foreground disabled:opacity-50'
               )}>
               <span className={cn('px-2.5 py-0.5 rounded-full text-xs font-semibold', s.color)}>
                 {s.label}
               </span>
-              {s.key === currentStatus && <span className="text-xs text-indigo-600">Current</span>}
-              {s.locked && s.key !== currentStatus && <span className="text-xs text-gray-400">Auto only</span>}
-              {isPending && s.key !== currentStatus && !s.locked && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
+              {s.key === currentStatus && <span className="text-xs text-primary">Current</span>}
+              {s.locked && s.key !== currentStatus && <span className="text-xs text-muted-foreground">Auto only</span>}
+              {isPending && s.key !== currentStatus && !s.locked && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
             </button>
           ))}
         </div>
-        <div className="px-6 py-4 border-t border-gray-100">
-          <button onClick={onClose} className="w-full px-4 py-2 text-sm text-gray-600 font-medium border border-gray-200 rounded-xl hover:bg-gray-50">
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="outline" className="w-full" onClick={onClose}>Cancel</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
