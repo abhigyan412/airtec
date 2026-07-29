@@ -130,9 +130,9 @@ export default function CollectionsPage() {
                   <TableHead>Student</TableHead>
                   <TableHead>Class</TableHead>
                   <TableHead>Outstanding</TableHead>
-                  <TableHead>Max Days Overdue</TableHead>
-                  <TableHead>Parent Contact</TableHead>
-                  <TableHead />
+                  <TableHead className="hidden md:table-cell">Max Days Overdue</TableHead>
+                  <TableHead className="hidden md:table-cell">Parent Contact</TableHead>
+                  <TableHead className="hidden md:table-cell" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -149,7 +149,7 @@ export default function CollectionsPage() {
                           {d.student.classes?.name}{d.student.sections?.name ? ` · ${d.student.sections.name}` : ''}
                         </TableCell>
                         <TableCell className="font-bold text-destructive">{formatCurrency(d.total_outstanding)}</TableCell>
-                        <TableCell>
+                        <TableCell className="hidden md:table-cell">
                           <span className={cn('rounded-full px-2 py-0.5 text-xs font-semibold',
                             d.max_days_overdue > 90 ? 'bg-destructive/20 text-destructive' :
                             d.max_days_overdue > 60 ? 'bg-destructive/10 text-destructive' :
@@ -157,14 +157,14 @@ export default function CollectionsPage() {
                             {d.max_days_overdue} days
                           </span>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">
+                        <TableCell className="hidden md:table-cell text-muted-foreground">
                           {d.parent_contact?.father_phone && (
                             <span className="flex items-center gap-1 text-xs">
                               <Phone className="h-3 w-3 text-muted-foreground" /> {d.parent_contact.father_phone}
                             </span>
                           )}
                         </TableCell>
-                        <TableCell className="text-right text-muted-foreground">
+                        <TableCell className="hidden md:table-cell text-right text-muted-foreground">
                           {isExpanded ? <ChevronUp className="inline h-4 w-4" /> : <ChevronDown className="inline h-4 w-4" />}
                         </TableCell>
                       </TableRow>

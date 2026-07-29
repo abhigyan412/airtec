@@ -162,7 +162,7 @@ router.post('/homework', requirePermissionV2('homework.create'),
         schoolId: school_id, type: 'homework_assigned',
         title: `New ${body.type === 'classwork' ? 'classwork' : 'homework'}: ${body.subject_name}`,
         message: `"${body.title}"${body.due_date ? ` — due ${body.due_date}` : ''}`,
-        link: '/portal/homework',
+        link: '/homework',
         relatedEntityType: 'homework', relatedEntityId: homework.id,
       })
     } catch (notifyErr) {

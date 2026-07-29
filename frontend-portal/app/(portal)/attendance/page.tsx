@@ -64,7 +64,7 @@ export default function PortalAttendancePage() {
     <div className="space-y-5">
       <div className="bg-white rounded-2xl border border-gray-200 p-5 flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-lg font-bold text-gray-900 flex items-center gap-2"><CalendarCheck className="w-5 h-5 text-gray-400" /> Attendance</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
             <button onClick={() => setScope('month')}
               className={cn('px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors',
@@ -82,7 +82,7 @@ export default function PortalAttendancePage() {
               <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                 <ChevronLeft className="w-4 h-4 text-gray-500" />
               </button>
-              <span className="text-sm font-medium text-gray-900 w-32 text-center">{MONTHS[month - 1]} {year}</span>
+              <span className="w-24 text-center text-sm font-medium text-gray-900 sm:w-32">{MONTHS[month - 1]} {year}</span>
               <button onClick={() => changeMonth(1)} disabled={isFutureMonth} className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-40">
                 <ChevronRight className="w-4 h-4 text-gray-500" />
               </button>

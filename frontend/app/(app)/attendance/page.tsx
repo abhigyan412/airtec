@@ -391,7 +391,7 @@ function MarkTab({ classId, sectionId, className, canManage }: {
           ].map(s => (
             <Card key={s.label}>
               <CardContent className="p-4">
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-2 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-sm text-muted-foreground">{s.label}</span>
                   <span className="text-lg font-bold text-foreground">{s.count}</span>
                 </div>

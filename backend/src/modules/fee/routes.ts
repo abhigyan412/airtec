@@ -745,7 +745,7 @@ router.post('/discounts/:id/workflow-action', asyncHandler(async (req: AuthReque
           message: result.instance.status === 'approved'
             ? 'A fee discount request for your child has been approved and applied.'
             : 'A fee discount request for your child was rejected.',
-          link: '/portal/fees',
+          link: '/fees',
           relatedEntityType: 'fee_discount', relatedEntityId: id,
         })
       } catch (notifyErr) {

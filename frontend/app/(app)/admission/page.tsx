@@ -80,7 +80,7 @@ export default function AdmissionPage() {
 
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as 'inquiries' | 'applications')} className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Admission CRM</h1>
           <p className="text-muted-foreground text-sm mt-0.5">

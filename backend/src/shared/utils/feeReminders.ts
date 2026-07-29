@@ -58,7 +58,7 @@ export async function runFeeReminders(schoolId?: string) {
       message: isOverdue
         ? `Invoice ${inv.invoice_number} (₹${remaining.toLocaleString('en-IN')}) was due on ${inv.due_date} and is still unpaid.`
         : `Invoice ${inv.invoice_number} (₹${remaining.toLocaleString('en-IN')}) is due on ${inv.due_date}.`,
-      link: '/portal/fees',
+      link: '/fees',
       relatedEntityType: 'fee_invoice', relatedEntityId: inv.id,
     })
     notified++

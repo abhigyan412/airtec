@@ -3,6 +3,7 @@ import { supabase } from './shared/db/client'
 import { seedDefaultRoles, LEGACY_ROLE_TO_RBAC_ROLE } from './modules/rbac/seed'
 import { defaultSectionNamesForClass } from './shared/utils/helpers'
 import { avatarSvg } from './shared/utils/avatar'
+import type { NotificationType } from './shared/utils/notifications'
 
 // ═══════════════════════════════════════════════════════════════
 // AIRTEC demo seed — a whole school, not a sample of one.
@@ -1238,32 +1239,54 @@ async function seed() {
   // been applied yet this logs a warning and the rest of the seed is
   // unaffected.
   console.log('3️⃣0️⃣  Creating notifications...')
-  const notifTypes = ['fee_due', 'fee_overdue', 'attendance_absent', 'exam_scheduled', 'exam_result', 'homework_assigned', 'complaint_update', 'leave_status', 'announcement']
+  // Types come from the NotificationType union the app actually produces —
+  // importing it means tsc rejects an invented value here, which is how
+  // the previous list ('fee_due', 'exam_scheduled', 'announcement', ...)
+  // drifted: the column is plain text with no CHECK, so anything inserts.
+  //
+  // Each template keeps its type, title, message, link and entity together.
+  // They used to be picked from parallel arrays by index, which produced
+  // rows like a 'fee_due' typed notification titled "Attendance alert"
+  // linking to /hr/my-leave.
+  //
+  // Links are relative and resolve against whichever app renders the bell,
+  // so family rows use the portal's routes — note (portal) is a Next route
+  // GROUP and contributes no URL segment, so it is /fees, not /portal/fees.
+  type NotifTemplate = { type: NotificationType; title: string; message: string; link: string; entity: string }
+
+  const FAMILY_NOTIFS: NotifTemplate[] = [
+    { type: 'fee_due_soon', title: 'Fee payment due soon', message: `Invoice for ${MONTH_NAMES[today.getMonth()]} is due on the 10th.`, link: '/fees', entity: 'fee_invoice' },
+    { type: 'fee_overdue', title: 'Fee payment overdue', message: 'An invoice is past its due date and is still unpaid.', link: '/fees', entity: 'fee_invoice' },
+    { type: 'attendance_absent', title: 'Marked absent today', message: 'Your ward was marked absent yesterday.', link: '/attendance', entity: 'attendance' },
+    { type: 'homework_assigned', title: 'New homework: Mathematics', message: '"Algebra worksheet Ch-3" — due in three days.', link: '/homework', entity: 'homework' },
+    { type: 'exam_result_published', title: 'Exam results published', message: 'Results for "Unit Test 1" are now available.', link: '/exams', entity: 'exam' },
+    { type: 'discount_approved', title: 'Fee discount approved', message: 'A fee discount request for your child has been approved and applied.', link: '/fees', entity: 'fee_discount' },
+    { type: 'discount_rejected', title: 'Fee discount request rejected', message: 'A fee discount request for your child was rejected.', link: '/fees', entity: 'fee_discount' },
+    { type: 'tc_approved', title: 'Transfer Certificate approved', message: 'Your Transfer Certificate request has been approved and is ready.', link: '/', entity: 'transfer_certificate' },
+  ]
+
+  // Staff only ever receive their own leave outcomes today, and those link
+  // into the staff app.
+  const STAFF_NOTIFS: NotifTemplate[] = [
+    { type: 'leave_approved', title: 'Leave request approved', message: 'Your leave request was approved.', link: '/hr/my-leave', entity: 'leave_request' },
+    { type: 'leave_rejected', title: 'Leave request rejected', message: 'Your leave request was rejected. Reason: insufficient balance.', link: '/hr/my-leave', entity: 'leave_request' },
+  ]
+
   const notifRows: any[] = []
+  const portalUserIds = new Set(portalUserRows.map(u => u.id))
   // Everyone who can log in gets a populated bell — including the admin
   // account, which is the one a demo actually signs in as.
   const notifTargets = [{ id: adminId }, ...staffUserRows, ...portalUserRows]
   notifTargets.forEach((u, i) => {
+    const templates = portalUserIds.has(u.id) ? FAMILY_NOTIFS : STAFF_NOTIFS
     for (let k = 0; k < 4; k++) {
-      const type = pick(notifTypes, i + k)
+      const t = pick(templates, i + k)
       const d = dMinus((i + k) % 21)
       notifRows.push({
-        school_id: schoolId, user_id: u.id, type,
-        title: pick(['Fee due reminder', 'Attendance alert', 'Exam scheduled', 'Results published', 'New homework assigned', 'Complaint updated', 'Leave approved', 'School announcement'], i + k),
-        message: pick([
-          `Fee for ${MONTH_NAMES[(today.getMonth()) % 12]} is due on the 10th.`,
-          'Your ward was marked absent yesterday.',
-          'Half Yearly Examination datesheet has been published.',
-          'Unit Test 1 results are now available.',
-          'New homework has been assigned in Mathematics.',
-          'Your complaint status changed to In Progress.',
-          'Your leave request has been approved.',
-          `Annual Day rehearsals begin next week.`,
-        ], i + k),
-        link: pick(['/fees', '/attendance', '/exams', '/homework', '/complaints', '/hr/my-leave'], i + k),
+        school_id: schoolId, user_id: u.id, type: t.type,
+        title: t.title, message: t.message, link: t.link,
         is_read: (i + k) % 3 === 0,
-        related_entity_type: pick(['fee_invoice', 'attendance', 'exam', 'homework', 'complaint'], i + k),
-        related_entity_id: null,
+        related_entity_type: t.entity, related_entity_id: null,
         created_at: isoT(d), notification_date: iso(d),
       })
     }

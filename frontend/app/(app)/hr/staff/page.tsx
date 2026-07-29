@@ -142,8 +142,10 @@ export default function StaffDirectoryPage() {
               {(staffData?.data ?? []).map((s: any) => (
                 <TableRow key={s.id} onClick={() => window.location.href = `/hr/staff/${s.id}`} className="group">
                   <TableCell>
-                    <p className="font-semibold text-foreground">{s.full_name}</p>
-                    <p className="text-xs text-muted-foreground">{s.email}</p>
+                    <div className="max-w-[9rem] sm:max-w-none">
+                      <p className="truncate font-semibold text-foreground">{s.full_name}</p>
+                      <p className="truncate text-xs text-muted-foreground">{s.email}</p>
+                    </div>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">{ROLE_LABELS[s.role] ?? s.role}</TableCell>
                   <TableCell className="hidden text-muted-foreground md:table-cell">{s.staff_profile?.designation ?? '—'}</TableCell>

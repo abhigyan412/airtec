@@ -422,7 +422,7 @@ router.post('/attendance', requireRole('school_admin', 'principal', 'teacher'),
             schoolId: school_id, type: 'attendance_absent',
             title: 'Marked absent today',
             message: `${s.first_name} ${s.last_name} was marked absent on ${date}.`,
-            link: '/portal/attendance',
+            link: '/attendance',
             relatedEntityType: 'attendance', relatedEntityId: attendanceIdByStudent.get(s.id),
           })
         }
@@ -1071,7 +1071,7 @@ router.post('/:id/tc/:tcId/workflow-action', asyncHandler(async (req: AuthReques
         message: newTcStatus === 'approved'
           ? 'Your Transfer Certificate request has been approved and is ready.'
           : 'Your Transfer Certificate request was rejected.',
-        link: '/portal',
+        link: '/',
         relatedEntityType: 'transfer_certificate', relatedEntityId: tcId,
       })
     } catch (notifyErr) {
