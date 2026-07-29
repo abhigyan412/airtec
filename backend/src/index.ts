@@ -43,7 +43,18 @@ app.use(cors({
 app.use(morgan('dev'))
 app.use(express.json({ limit: '10mb' }))
 
-app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }))
+// Brute-force protection, scoped to the endpoints where a guess is
+// actually worth something. It used to sit on all of /api/auth, which
+// swept in /auth/me — fired on every single page load — and /auth/refresh,
+// the silent re-auth path. Twenty requests per 15 minutes is nothing for
+// those two (a dozen page loads exhausts it), and since the limiter keys
+// on IP, everyone behind one office NAT shared the same tiny budget:
+// normal use locked itself out with 429s that look exactly like a broken
+// login.
+const credentialLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 })
+app.use('/api/auth/login', credentialLimiter)
+app.use('/api/auth/register-school', credentialLimiter)
+
 app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 300 }))
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'airtec-api' }))

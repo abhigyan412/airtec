@@ -74,7 +74,10 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
     <div className="relative">
       <button onClick={() => setOpen(o => !o)}
         className={cn('relative p-1.5 rounded-lg transition-colors',
-          variant === 'dark' ? 'text-[#8A8A99] hover:text-white hover:bg-white/[0.06]' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100')}
+          // 'light' rides the sidebar design tokens, so it stays legible in
+          // both themes; 'dark' is the fixed-palette variant for the family
+          // portal's dark header.
+          variant === 'dark' ? 'text-[#8A8A99] hover:text-white hover:bg-white/[0.06]' : 'text-muted-foreground hover:text-foreground hover:bg-accent')}
         title="Notifications">
         <Bell className="w-[18px] h-[18px]" />
         {count > 0 && (

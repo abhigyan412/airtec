@@ -56,8 +56,8 @@ export default function StudentDetailPage() {
             <Skeleton className="h-4 w-32" />
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-6">
-          <Skeleton className="col-span-2 h-64 rounded-xl" />
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <Skeleton className="h-64 rounded-xl lg:col-span-2" />
           <Skeleton className="h-64 rounded-xl" />
         </div>
       </div>
@@ -126,10 +126,10 @@ export default function StudentDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        <div className="col-span-2 space-y-5">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="space-y-5 lg:col-span-2">
           <Card title="Personal Information" icon={User}>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
               <Detail label="Date of Birth" value={s.date_of_birth ? formatDate(s.date_of_birth) : '—'} />
               <Detail label="Gender" value={s.gender ? s.gender.charAt(0).toUpperCase() + s.gender.slice(1) : '—'} />
               <Detail label="Blood Group" value={s.blood_group ?? '—'} />
@@ -143,7 +143,7 @@ export default function StudentDetailPage() {
           </Card>
 
           <Card title="Academic Details" icon={BookOpen}>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
               <Detail label="Class" value={s.classes?.name ?? '—'} />
               <Detail label="Section" value={s.sections?.name ?? '—'} />
               <Detail label="Roll Number" value={s.roll_number ?? '—'} />
@@ -187,7 +187,7 @@ export default function StudentDetailPage() {
 
           {parent && (
             <Card title="Parent / Guardian" icon={Phone}>
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                 {parent.father_name && (
                   <div className="space-y-3">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Father</p>
@@ -309,7 +309,7 @@ function TransferModal({ student, onClose, onDone }: { student: any; onClose: ()
           <DialogTitle>Transfer — {student.first_name} {student.last_name}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Class *</Label>
               <Select value={toClass} onValueChange={(v) => { setToClass(v); setToSection('') }}>
@@ -330,7 +330,7 @@ function TransferModal({ student, onClose, onDone }: { student: any; onClose: ()
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Academic Year *</Label>
               <Select value={toAcademicYear} onValueChange={setToAcademicYear}>

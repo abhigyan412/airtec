@@ -39,6 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(res => setUser(res.data))
       .catch(() => {
         localStorage.removeItem('airtec_token')
+        localStorage.removeItem('airtec_refresh_token')
         localStorage.removeItem('airtec_user')
       })
       .finally(() => setIsLoading(false))
@@ -47,6 +48,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     const res = await authApi.login(email, password)
     localStorage.setItem('airtec_token', res.data.access_token)
+    // Kept so the API client can silently re-auth when the hour-long
+    // access token expires (see the 401 interceptor in lib/api.ts).
+    if (res.data.refresh_token) localStorage.setItem('airtec_refresh_token', res.data.refresh_token)
     localStorage.setItem('airtec_user', JSON.stringify(res.data.user))
     setUser(res.data.user)
     return res.data.user as User
@@ -54,6 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     localStorage.removeItem('airtec_token')
+    localStorage.removeItem('airtec_refresh_token')
     localStorage.removeItem('airtec_user')
     setUser(null)
     window.location.href = '/auth/login'

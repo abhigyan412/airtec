@@ -1,9 +1,11 @@
 'use client'
 
 import * as React from 'react'
-import { Moon, Sun, Bell, Search, Menu, ChevronDown, LogOut, User, Settings } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Moon, Sun, Search, Menu, ChevronDown, LogOut, User, Settings } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useAuth } from '@/lib/auth'
+import { NotificationBell } from './NotificationBell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -23,9 +25,17 @@ interface HeaderProps {
 export function Header({ onMenuClick }: HeaderProps) {
   const { theme, setTheme } = useTheme()
   const { user, logout } = useAuth()
+  const router = useRouter()
   const [mounted, setMounted] = React.useState(false)
+  const [query, setQuery] = React.useState('')
 
   React.useEffect(() => setMounted(true), [])
+
+  const onSearch = (e: React.FormEvent) => {
+    e.preventDefault()
+    const q = query.trim()
+    router.push(q ? `/students?search=${encodeURIComponent(q)}` : '/students')
+  }
 
   const name = user?.full_name ?? 'Signed in'
   const initials =
@@ -43,23 +53,26 @@ export function Header({ onMenuClick }: HeaderProps) {
         <Menu className="h-5 w-5" />
       </Button>
 
-      {/* Search (left) */}
-      <div className="w-full max-w-[240px] sm:max-w-sm">
+      {/* Search (left) — submits to the students list, which reads ?search= */}
+      <form onSubmit={onSearch} className="w-full max-w-[240px] sm:max-w-sm">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search students, fees, staff…"
+            name="q"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search students by name or admission no…"
+            aria-label="Search students"
             className="h-9 border-0 bg-muted/60 pl-8 text-sm focus-visible:ring-1"
           />
         </div>
-      </div>
+      </form>
 
       {/* Actions (pinned right) */}
       <div className="ml-auto flex items-center gap-1">
-        <Button variant="ghost" size="icon" className="relative" aria-label="Notifications">
-          <Bell className="h-4 w-4" />
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-destructive" />
-        </Button>
+        {/* Lives here rather than in the sidebar: its 360px panel is wider than
+            the sidebar itself, and AppShell's overflow-hidden clipped it there. */}
+        <NotificationBell variant="light" />
 
         {mounted && (
           <Button
