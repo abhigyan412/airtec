@@ -1,14 +1,39 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { Plus_Jakarta_Sans } from 'next/font/google'
 import { Toaster } from 'sonner'
 import { Providers } from '@/components/providers'
+import { ServiceWorkerRegister } from '@/components/service-worker-register'
 import './globals.css'
 
 const jakarta = Plus_Jakarta_Sans({ subsets: ['latin'], variable: '--font-geist-sans' })
 
 export const metadata: Metadata = {
-  title: 'AIRTEC — Family Portal',
+  title: { default: 'AIRTEC — Family Portal', template: '%s · AIRTEC Family' },
   description: 'Attendance, fees, homework, timetable, and exam results for your child.',
+  applicationName: 'AIRTEC Family',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'AIRTEC Family',
+  },
+  icons: {
+    icon: [
+      { url: '/favicon-16.png', sizes: '16x16', type: 'image/png' },
+      { url: '/favicon-32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+    ],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+  },
+}
+
+export const viewport: Viewport = {
+  themeColor: '#5B5BD6',
+  width: 'device-width',
+  initialScale: 1,
+  // Parents open this on a phone; let the layout run under the notch/home
+  // indicator rather than letterboxing it.
+  viewportFit: 'cover',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -19,6 +44,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {children}
           <Toaster position="top-right" richColors />
         </Providers>
+        <ServiceWorkerRegister />
       </body>
     </html>
   )
