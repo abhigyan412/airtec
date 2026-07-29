@@ -86,7 +86,8 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
 
       {open && (
         <div ref={panelRef}
-          className="absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] max-w-[360px] max-h-[70vh] bg-white rounded-2xl border border-gray-200 shadow-xl z-50 flex flex-col overflow-hidden">
+          className="fixed left-4 right-4 top-16 z-50 flex max-h-[70vh] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl
+            sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[360px]">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 flex-shrink-0">
             <h3 className="font-semibold text-gray-900 text-sm">Notifications</h3>
             {count > 0 && (
