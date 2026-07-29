@@ -9,7 +9,11 @@ import axios, { AxiosError } from 'axios'
 // needs revisiting (auth/API-client drift between the two apps is the
 // tradeoff being made here).
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'
+// Same-origin by default: the browser hits this Next server at /api and
+// the rewrite in next.config.js proxies it to the backend. Keeps the app
+// on one origin, so no CORS allowlist entry is needed per deployed
+// hostname. Override only if you deliberately want cross-origin calls.
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api'
 
 export const api = axios.create({
   baseURL: API_BASE,

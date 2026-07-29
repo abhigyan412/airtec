@@ -26,17 +26,46 @@ const app = express()
 const PORT = process.env.PORT ?? 4000
 
 app.use(helmet({ contentSecurityPolicy: false }))
-// Two separate frontend apps now call this API: the staff admin app
-// and the parent/student family app (split from what used to be one
-// Next.js app's route groups). Each needs its own allowed origin.
-const allowedOrigins = [
-  process.env.FRONTEND_URL ?? 'http://localhost:3000',
-  process.env.FAMILY_FRONTEND_URL ?? 'http://localhost:3001',
-]
+// Two separate frontend apps call this API: the staff admin app and the
+// parent/student family app. Each var accepts a COMMA-SEPARATED list, so
+// one deployment can serve several hostnames (apex + www, a preview
+// domain, a custom domain) without a code change — previously each var
+// held exactly one origin, so any additional domain got a blanket
+// "not allowed by CORS" with no way to add it from config.
+//
+// ALLOWED_ORIGINS is the catch-all if you'd rather not think about which
+// app a hostname belongs to.
+const parseOrigins = (...values: (string | undefined)[]) =>
+  values
+    .flatMap(v => (v ?? '').split(','))
+    .map(s => s.trim().replace(/\/$/, ''))   // tolerate a trailing slash
+    .filter(Boolean)
+
+const configuredOrigins = parseOrigins(
+  process.env.ALLOWED_ORIGINS,
+  process.env.FRONTEND_URL,
+  process.env.FAMILY_FRONTEND_URL,
+)
+
+// Local dev origins stay allowed unless this is production, so setting
+// the prod domains doesn't break everyone's laptop.
+const allowedOrigins = Array.from(new Set([
+  ...configuredOrigins,
+  ...(process.env.NODE_ENV === 'production' ? [] : ['http://localhost:3000', 'http://localhost:3001']),
+]))
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
-    callback(new Error(`Origin ${origin} not allowed by CORS`))
+    // No Origin header = same-origin, curl, or a server-side call.
+    if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ''))) return callback(null, true)
+    // Log the rejection: the browser only ever shows a generic CORS
+    // failure, which is impossible to diagnose from the client side.
+    console.warn(`[cors] blocked origin ${origin} — allowed: ${allowedOrigins.join(', ') || '(none configured)'}`)
+    // Deny by withholding the CORS headers rather than throwing. Throwing
+    // turned every unlisted origin into a 500 from the error handler,
+    // which reads like the API is broken; the browser blocks the response
+    // either way, and the warning above is the real diagnostic.
+    callback(null, false)
   },
   credentials: true,
 }))
@@ -92,6 +121,10 @@ app.listen(PORT, () => {
   │   AIRTEC API running on :${PORT}       │
   └─────────────────────────────────────┘
   `)
+  // Printed because a CORS rejection is invisible from the browser — it
+  // surfaces as a generic network failure with no hint of what the server
+  // would have accepted.
+  console.log(`  CORS allows: ${allowedOrigins.join(', ') || '(nothing configured — set ALLOWED_ORIGINS)'}\n`)
 })
 
 export default app
