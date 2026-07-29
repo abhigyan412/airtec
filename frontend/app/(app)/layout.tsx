@@ -1,7 +1,7 @@
 
 'use client'
 import { useEffect } from 'react'
-import { Sidebar } from '@/components/layout/Sidebar'
+import { AppShell } from '@/components/layout/AppShell'
 import { useAuth, NON_STAFF_ROLES } from '@/lib/auth'
 
 const FAMILY_APP_URL = process.env.NEXT_PUBLIC_FAMILY_APP_URL ?? 'http://localhost:3001'
@@ -29,15 +29,5 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (!isLoading && user && NON_STAFF_ROLES.includes(user.role)) return null
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <Sidebar />
-      <main className="pl-[220px]">
-        <div className="p-8 max-w-[1400px]">
-          {children}
-        </div>
-      </main>
-    </div>
-  )
-
+  return <AppShell>{children}</AppShell>
 }

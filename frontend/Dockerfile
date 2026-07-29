@@ -27,6 +27,11 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
+# Same reasoning as backend/Dockerfile: Next.js server-renders on first
+# load even for 'use client' components, so any Date() read before
+# hydration hits the container's clock — UTC by default, not IST.
+RUN apk add --no-cache tzdata
+ENV TZ=Asia/Kolkata
 RUN apk add --no-cache wget && addgroup -S nodejs && adduser -S nextjs -G nodejs
 COPY --from=build /app/public ./public
 COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
