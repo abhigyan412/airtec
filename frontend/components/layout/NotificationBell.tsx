@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Bell, CheckCheck, Loader2 } from 'lucide-react'
 import { notificationsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { PushPrompt } from './PushPrompt'
 
 function timeAgo(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime()
@@ -28,6 +29,9 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
     queryKey: ['notifications-unread-count'],
     queryFn: () => notificationsApi.unreadCount().then(r => r.data),
     refetchInterval: 60_000,
+    // Polling covers the open tab; push covers the closed one. Refetching
+    // on focus removes the window where the badge is up to a minute stale.
+    refetchOnWindowFocus: true,
   })
 
   const { data: list, isLoading } = useQuery({
@@ -78,10 +82,12 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
           // both themes; 'dark' is the fixed-palette variant for the family
           // portal's dark header.
           variant === 'dark' ? 'text-[#8A8A99] hover:text-white hover:bg-white/[0.06]' : 'text-muted-foreground hover:text-foreground hover:bg-accent')}
+        aria-label={count > 0 ? `Notifications, ${count} unread` : 'Notifications'}
         title="Notifications">
         <Bell className="w-[18px] h-[18px]" />
         {count > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center">
+          <span aria-live="polite" aria-atomic="true"
+            className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center">
             {count > 9 ? '9+' : count}
           </span>
         )}
@@ -100,6 +106,7 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
               </button>
             )}
           </div>
+          <PushPrompt app="staff" copy={{ headline: 'Get notified without checking', detail: 'Leave requests, approvals and fee alerts, even when this tab is closed.' }} />
           <div className="overflow-y-auto">
             {isLoading ? (
               <div className="py-10 text-center"><Loader2 className="w-5 h-5 animate-spin text-indigo-600 mx-auto" /></div>

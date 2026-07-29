@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Bell, CheckCheck, Loader2 } from 'lucide-react'
 import { notificationsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { PushPrompt } from './PushPrompt'
 
 function timeAgo(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime()
@@ -28,6 +29,9 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
     queryKey: ['notifications-unread-count'],
     queryFn: () => notificationsApi.unreadCount().then(r => r.data),
     refetchInterval: 60_000,
+    // Polling covers the open tab; push covers the closed one. Refetching
+    // on focus removes the window where the badge is up to a minute stale.
+    refetchOnWindowFocus: true,
   })
 
   const { data: list, isLoading } = useQuery({
@@ -75,10 +79,12 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
       <button onClick={() => setOpen(o => !o)}
         className={cn('relative p-1.5 rounded-lg transition-colors',
           variant === 'dark' ? 'text-[#8A8A99] hover:text-white hover:bg-white/[0.06]' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100')}
+        aria-label={count > 0 ? `Notifications, ${count} unread` : 'Notifications'}
         title="Notifications">
         <Bell className="w-[18px] h-[18px]" />
         {count > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center">
+          <span aria-live="polite" aria-atomic="true"
+            className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center">
             {count > 9 ? '9+' : count}
           </span>
         )}
@@ -97,6 +103,7 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
               </button>
             )}
           </div>
+          <PushPrompt app="family" copy={{ headline: 'Never miss a fee or absence alert', detail: "Fee reminders, attendance alerts and results for your child — even when the app is closed." }} />
           <div className="overflow-y-auto">
             {isLoading ? (
               <div className="py-10 text-center"><Loader2 className="w-5 h-5 animate-spin text-indigo-600 mx-auto" /></div>

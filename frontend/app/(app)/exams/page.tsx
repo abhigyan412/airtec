@@ -98,19 +98,22 @@ export default function ExamsPage() {
           ) : (
             <div className="divide-y divide-border">
               {(exams ?? []).map((exam: any) => (
-                <div key={exam.id} className="flex items-center gap-4 px-6 py-4 transition-colors hover:bg-muted/50">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    <BookOpen className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
+                <div key={exam.id} className="flex flex-col gap-3 px-4 py-4 transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:gap-4 sm:px-6">
+                  <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <BookOpen className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
                     <p className="font-semibold text-foreground">{exam.name}</p>
-                    <div className="mt-0.5 flex items-center gap-3">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
                       <span className="text-xs capitalize text-muted-foreground">{exam.exam_type?.replace('_', ' ')}</span>
                       {exam.start_date && <span className="text-xs text-muted-foreground">{formatDate(exam.start_date)}</span>}
                       <span className="text-xs text-muted-foreground">{exam.academic_years?.name}</span>
                     </div>
+                    </div>
                   </div>
-                  <Badge variant={STATUS_VARIANT[exam.status] ?? 'secondary'} className="capitalize">
+                  <div className="flex flex-wrap items-center gap-2 pl-13 sm:pl-0">
+                  <Badge variant={STATUS_VARIANT[exam.status] ?? 'secondary'} className="shrink-0 capitalize">
                     {exam.status?.replace('_', ' ')}
                   </Badge>
                   {/* Status actions */}
@@ -135,6 +138,7 @@ export default function ExamsPage() {
                         Manage <ChevronRight className="h-3 w-3" />
                       </Link>
                     </Button>
+                  </div>
                   </div>
                 </div>
               ))}
