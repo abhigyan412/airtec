@@ -71,7 +71,7 @@ export default function StudentAttendancePage() {
       </div>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
           { label: 'Present',    value: summary.present,    color: 'text-success bg-success/10' },
           { label: 'Absent',     value: summary.absent,     color: 'text-destructive bg-destructive/10' },

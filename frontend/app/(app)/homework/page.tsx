@@ -172,7 +172,7 @@ function StaffHomeworkView({ canCreate, canSeeSyllabus, canPlanSyllabus, canLogS
         <SyllabusOverview scope={isSeniorManagement ? 'all' : (myClasses ?? [])} />
       )}
 
-      <div className="flex items-center gap-1 bg-muted p-1 rounded-lg w-fit">
+      <div className="flex items-center gap-1 bg-muted p-1 rounded-lg w-full overflow-x-auto sm:w-fit">
         {TABS.filter(t => t.show).map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={cn('flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold transition-all',
@@ -340,7 +340,7 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
   const dayItems = byDate[selectedDate] ?? []
 
   return (
-    <div className="grid grid-cols-[1fr_320px] gap-4 items-start">
+    <div className="grid grid-cols-1 gap-4 items-start lg:grid-cols-[1fr_320px]">
       <MonthCalendar month={month} onMonthChange={setMonth} selectedDate={selectedDate} onSelectDate={setSelectedDate} eventsByDate={eventsByDate} />
 
       <div className="bg-card rounded-2xl border border-border p-5 space-y-4">
@@ -451,7 +451,7 @@ function AddHomeworkModal({ classId, sectionId, initialDueDate, allowedSubjects,
           <DialogTitle>Assign Homework / Classwork</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Type</Label>
               <Select value={type} onValueChange={v => setType(v as any)}>
@@ -643,7 +643,7 @@ function SyllabusTab({ classId, sectionId, canPlan, canLog, allowedSubjects }: {
         </div>
       </div>
 
-      <div className="grid grid-cols-[1fr_320px] gap-4 items-start">
+      <div className="grid grid-cols-1 gap-4 items-start lg:grid-cols-[1fr_320px]">
         {isLoading ? (
           <div className="bg-card rounded-2xl border border-border p-12 text-center">
             <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
@@ -792,7 +792,7 @@ function LogProgressModal({ classId, sectionId, chapters, initialChapter, initia
           <DialogDescription>What did you actually cover this period? This drives the covered-vs-left tracking.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Subject *</Label>
               <Select value={subjectName || undefined} onValueChange={v => { setSubjectName(v); setChapterId('') }}>
@@ -825,7 +825,7 @@ function LogProgressModal({ classId, sectionId, chapters, initialChapter, initia
 
           <div className="space-y-1.5">
             <Label>Status</Label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {(['started', 'in_progress', 'completed'] as const).map(s => (
                 <button key={s} onClick={() => setStatus(s)}
                   className={cn('py-2 rounded-lg text-xs font-semibold border transition-all',

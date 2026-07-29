@@ -138,7 +138,7 @@ export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="from_date">From Date *</Label>
               <Input id="from_date" type="date" value={form.from_date}

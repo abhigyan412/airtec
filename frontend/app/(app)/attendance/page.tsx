@@ -382,7 +382,7 @@ function MarkTab({ classId, sectionId, className, canManage }: {
       )}
 
       {classId && stats.total > 0 && (
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
             { label: 'Present', count: stats.present, key: 'present', pct: Math.round((stats.present/stats.total)*100) },
             { label: 'Absent',  count: stats.absent,  key: 'absent',  pct: Math.round((stats.absent/stats.total)*100) },

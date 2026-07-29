@@ -194,7 +194,7 @@ function NewComplaintModal({ onClose }: { onClose: () => void }) {
           <DialogTitle>New Complaint</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Category</Label>
               <Select value={form.category} onValueChange={v => setForm(f => ({ ...f, category: v }))}>
@@ -290,7 +290,7 @@ function ComplaintDetailModal({ complaint, onClose, onUpdate }: { complaint: any
           </div>
 
           {/* Status update */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Update Status</Label>
               <Select defaultValue={complaint.status} onValueChange={v => onUpdate(complaint.id, { status: v })}>

@@ -496,7 +496,7 @@ function MarksEntry({ examId, exam, classes }: any) {
 
   return (
     <Card className="space-y-4 p-6">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-1.5">
           <Label>Select Class</Label>
           <Select value={selectedClass}
@@ -710,7 +710,7 @@ function AddSubjectModal({ examId, classes, onClose }: any) {
             <Input id="subject-name" value={form.subject_name} onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))}
               placeholder="e.g. Mathematics" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="subject-date">Exam Date</Label>
               <Input id="subject-date" type="date" value={form.exam_date} onChange={e => setForm(f => ({ ...f, exam_date: e.target.value }))} />

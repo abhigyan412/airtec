@@ -840,7 +840,7 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label>Period No.</Label>
               <Input type="number" min="1" max="12" value={form.period_number}
@@ -860,7 +860,7 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
           {/* Day picker */}
           <div className="space-y-1.5">
             <Label>Day</Label>
-            <div className="grid grid-cols-6 gap-1">
+            <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1">
               {['M','T','W','T','F','S'].map((d, i) => (
                 <button key={i} onClick={() => { setForm(f => ({ ...f, day_of_week: i+1 })); checkConflict(teacherId, i+1, form.period_number) }}
                   className={cn('py-2 rounded-lg text-xs font-bold transition-all', form.day_of_week === i+1 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70')}>

@@ -32,7 +32,7 @@ export default function StudentDetailPage() {
             <Skeleton className="h-4 w-32" />
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           <Skeleton className="col-span-2 h-64 rounded-xl" />
           <Skeleton className="h-64 rounded-xl" />
         </div>
@@ -99,10 +99,10 @@ export default function StudentDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         <div className="col-span-2 space-y-5">
           <Card title="Personal Information" icon={User}>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
               <Detail label="Date of Birth" value={s.date_of_birth ? formatDate(s.date_of_birth) : '—'} />
               <Detail label="Gender" value={s.gender ? s.gender.charAt(0).toUpperCase() + s.gender.slice(1) : '—'} />
               <Detail label="Blood Group" value={s.blood_group ?? '—'} />
@@ -116,7 +116,7 @@ export default function StudentDetailPage() {
           </Card>
 
           <Card title="Academic Details" icon={BookOpen}>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
               <Detail label="Class" value={s.classes?.name ?? '—'} />
               <Detail label="Section" value={s.sections?.name ?? '—'} />
               <Detail label="Roll Number" value={s.roll_number ?? '—'} />
@@ -137,7 +137,7 @@ export default function StudentDetailPage() {
 
           {parent && (
             <Card title="Parent / Guardian" icon={Phone}>
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 {parent.father_name && (
                   <div className="space-y-3">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Father</p>

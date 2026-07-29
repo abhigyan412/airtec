@@ -107,7 +107,7 @@ export default function CertificatesPage() {
 
       {/* Issue Certificate tab */}
       {tab === 'issue' && (
-        <div className="grid grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {CERT_TYPES.map(ct => {
             const tmpl = (templates ?? []).find((t: any) => t.certificate_type === ct.value)
             return (
@@ -247,7 +247,7 @@ function NewTemplateModal({ onClose }: { onClose: () => void }) {
           <DialogTitle>Create Certificate Template</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="tmpl-name">Template Name *</Label>
               <Input id="tmpl-name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}

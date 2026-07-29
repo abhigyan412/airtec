@@ -68,7 +68,7 @@ export default function ApplicationDetailPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
             <div>
               <p className="text-xs text-muted-foreground mb-0.5">Father's Phone</p>
               <p className="text-sm font-medium text-foreground flex items-center gap-1">

@@ -41,7 +41,7 @@ function CollectionMeter({ stats }: { stats: any }) {
           <div className={cn('h-full rounded-full transition-all', ramp.fill)} style={{ width: `${Math.min(100, pct)}%` }} />
         </div>
 
-        <div className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-5">
+        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-border pt-5">
           <div>
             <p className="text-xs text-muted-foreground">Collected</p>
             <p className="text-lg font-bold text-success">{formatCurrency(collected)}</p>

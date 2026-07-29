@@ -214,7 +214,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
             )}
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <Field label="Employee ID" name="employee_id" />
             <Field label="Designation" name="designation" />
             <Field label="Department" name="department" />
@@ -238,7 +238,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
       <Card>
         <CardContent className="p-6">
           <h3 className="mb-4 font-semibold text-foreground">Address</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="col-span-3"><Field label="Address" name="address" /></div>
             <Field label="City" name="city" />
             <Field label="State" name="state" />
@@ -249,7 +249,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
       <Card>
         <CardContent className="p-6">
           <h3 className="mb-4 font-semibold text-foreground">Bank &amp; Tax Details</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <Field label="Bank Name" name="bank_name" />
             <Field label="Account Number" name="bank_account_number" />
             <Field label="IFSC Code" name="bank_ifsc" />
@@ -261,7 +261,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
       <Card>
         <CardContent className="p-6">
           <h3 className="mb-4 font-semibold text-foreground">Emergency Contact</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <Field label="Contact Name" name="emergency_contact_name" />
             <Field label="Contact Phone" name="emergency_contact_phone" />
           </div>
@@ -370,19 +370,19 @@ function PayrollTab({ data, staffId, userName }: any) {
           {!salary ? (
             <EmptyState icon={IndianRupee} title="No salary structure set" className="py-8" />
           ) : (
-            <div className="grid grid-cols-3 gap-x-8 gap-y-3 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-3 text-sm">
               <div><p className="text-xs text-muted-foreground">Basic Salary</p><p className="font-semibold text-foreground">₹{Number(salary.basic_salary).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">HRA</p><p className="font-semibold text-foreground">₹{Number(salary.hra ?? 0).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">DA</p><p className="font-semibold text-foreground">₹{Number(salary.da ?? 0).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">Conveyance</p><p className="font-semibold text-foreground">₹{Number(salary.conveyance_allowance ?? 0).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">Medical Allowance</p><p className="font-semibold text-foreground">₹{Number(salary.medical_allowance ?? 0).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">Other Allowances</p><p className="font-semibold text-foreground">₹{Number(salary.other_allowances ?? 0).toLocaleString('en-IN')}</p></div>
-              <div className="col-span-3 grid grid-cols-3 gap-x-8 border-t border-border pt-3">
+              <div className="col-span-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 border-t border-border pt-3">
                 <div><p className="text-xs text-muted-foreground">Gross Salary</p><p className="font-bold text-success">₹{gross.toLocaleString('en-IN')}</p></div>
                 <div><p className="text-xs text-muted-foreground">Total Deductions</p><p className="font-bold text-destructive">₹{deductions.toLocaleString('en-IN')}</p></div>
                 <div><p className="text-xs text-muted-foreground">Net Salary</p><p className="text-lg font-bold text-primary">₹{net.toLocaleString('en-IN')}</p></div>
               </div>
-              <div className="col-span-3 grid grid-cols-3 gap-x-8 border-t border-border pt-2 text-xs text-muted-foreground">
+              <div className="col-span-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 border-t border-border pt-2 text-xs text-muted-foreground">
                 <div>PF: ₹{Number(salary.pf_deduction ?? 0).toLocaleString('en-IN')}</div>
                 <div>Prof. Tax: ₹{Number(salary.professional_tax ?? 0).toLocaleString('en-IN')}</div>
                 <div>Other: ₹{Number(salary.other_deductions ?? 0).toLocaleString('en-IN')}</div>
@@ -490,7 +490,7 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
         <div className="space-y-4">
           <div>
             <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Earnings</p>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <Field label="Basic Salary *" name="basic_salary" />
               <Field label="HRA" name="hra" />
               <Field label="DA" name="da" />
@@ -501,7 +501,7 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
           </div>
           <div>
             <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Deductions</p>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <Field label="PF" name="pf_deduction" />
               <Field label="Professional Tax" name="professional_tax" />
               <Field label="Other Deductions" name="other_deductions" />

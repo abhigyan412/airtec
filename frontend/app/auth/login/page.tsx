@@ -88,7 +88,7 @@ export default function LoginPage() {
               SIS · Admission CRM · Fee Management · Examinations — all in one platform.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {STATS.map((s) => (
               <div key={s.label} className="rounded-xl border border-white/10 bg-white/10 p-4 backdrop-blur-sm">
                 <p className="text-2xl font-bold text-white">{s.num}</p>

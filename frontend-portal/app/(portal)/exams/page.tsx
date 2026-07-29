@@ -73,7 +73,8 @@ function ExamCard({ exam, studentId, isOpen, onToggle }: { exam: any, studentId?
             <p className="text-sm text-gray-400 text-center py-4">No marks recorded for this exam</p>
           ) : (
             <>
-              <table className="w-full text-sm">
+              <div className="-mx-1 overflow-x-auto">
+              <table className="w-full min-w-[340px] text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 text-xs text-gray-400 uppercase">
                     <th className="text-left pb-2 font-medium">Subject</th>
@@ -93,6 +94,7 @@ function ExamCard({ exam, studentId, isOpen, onToggle }: { exam: any, studentId?
                   ))}
                 </tbody>
               </table>
+              </div>
               <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
                 <span className="text-sm font-medium text-gray-500">Overall</span>
                 <span className={cn('text-lg font-bold', overallPct >= 50 ? 'text-emerald-600' : 'text-rose-600')}>

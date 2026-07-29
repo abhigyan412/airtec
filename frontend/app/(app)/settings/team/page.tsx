@@ -353,7 +353,7 @@ function InviteModal({ onClose }: { onClose: () => void }) {
         {result ? (
           <CredentialsBox email={result.email} password={result.password} />
         ) : (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="col-span-2 space-y-1.5">
               <Label htmlFor="inv-name">Full Name *</Label>
               <Input id="inv-name" value={form.full_name} onChange={e => setForm(f => ({ ...f, full_name: e.target.value }))} placeholder="e.g. Priya Sharma" />

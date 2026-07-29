@@ -112,7 +112,7 @@ export default function NewStudentPage() {
       <Card>
         <CardContent className="p-6 sm:p-8">
           {section === 'personal' && (
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <Input label="First Name" field="first_name" required placeholder="Rahul" />
               <Input label="Last Name" field="last_name" required placeholder="Sharma" />
               <Input label="Date of Birth" field="date_of_birth" type="date" />
@@ -133,7 +133,7 @@ export default function NewStudentPage() {
           )}
 
           {section === 'academic' && (
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <Select label="Class" field="class_id" required
                 options={(classesData ?? []).map((c: any) => ({ value: c.id, label: c.name }))} />
               <Select label="Section" field="section_id"
@@ -151,7 +151,7 @@ export default function NewStudentPage() {
                   <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/10 text-xs text-blue-600 dark:text-blue-400">F</span>
                   Father&apos;s Details
                 </p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Input label="Father's Name" field="father_name" placeholder="Mr. Rajesh Sharma" />
                   <Input label="Father's Phone" field="father_phone" placeholder="+91 98765 43210" />
                   <div className="col-span-2">
@@ -164,7 +164,7 @@ export default function NewStudentPage() {
                   <span className="flex h-6 w-6 items-center justify-center rounded-full bg-pink-500/10 text-xs text-pink-600 dark:text-pink-400">M</span>
                   Mother&apos;s Details
                 </p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Input label="Mother's Name" field="mother_name" placeholder="Mrs. Priya Sharma" />
                   <Input label="Mother's Phone" field="mother_phone" placeholder="+91 98765 43210" />
                   <div className="col-span-2">

@@ -101,7 +101,7 @@ export default function HRReportsPage() {
           </CardHeader>
           <CardContent>
             {l1 ? <Skeleton /> : (headcount?.by_employment_type ?? []).length === 0 ? <Empty text="No staff data" /> : (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {(headcount?.by_employment_type ?? []).map((t: any) => (
                   <div key={t.name} className="rounded-xl bg-muted p-4 text-center">
                     <p className="text-2xl font-bold text-foreground">{t.count}</p>
@@ -133,7 +133,7 @@ export default function HRReportsPage() {
           <CardContent>
             {l2 ? <Skeleton /> : (
               <>
-                <div className="mb-4 grid grid-cols-3 gap-3">
+                <div className="mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   <div className="rounded-xl bg-muted p-3 text-center">
                     <p className="text-xl font-bold text-foreground">{leaveSummary?.total_requests ?? 0}</p>
                     <p className="text-xs text-muted-foreground">Total Requests</p>

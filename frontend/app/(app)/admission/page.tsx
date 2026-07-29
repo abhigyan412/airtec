@@ -353,7 +353,7 @@ function NewInquiryModal({ classes, onClose }: { classes: any[], onClose: () => 
           <DialogTitle>New Admission Inquiry</DialogTitle>
           <DialogDescription>Log a new admission inquiry from a parent</DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Student Name *" span={2}>
             <Input value={form.student_name}
               onChange={e => setForm(f => ({ ...f, student_name: e.target.value }))}
@@ -484,7 +484,7 @@ function NewApplicationModal({ classes, onClose }: { classes: any[], onClose: ()
           <DialogTitle>New Admission Application</DialogTitle>
           <DialogDescription>Starts the Counselor → Accountant → Principal approval workflow automatically</DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <Label htmlFor="app-fn" className="mb-1.5 block">Student First Name *</Label>
             <Input id="app-fn" value={form.student_first_name}

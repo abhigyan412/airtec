@@ -581,7 +581,7 @@ function AddStructureModal({ heads, initialHeadId, onClose }: { heads: any[], in
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="struct-amount">Amount *</Label>
               <Input id="struct-amount" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 2500" />
@@ -811,7 +811,7 @@ function CreateDiscountModal({ onClose }: { onClose: () => void }) {
           </div>
           <div className="space-y-1.5">
             <Label>Discount Type *</Label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {(['fixed', 'percentage'] as const).map(t => (
                 <button key={t} onClick={() => setForm(f => ({ ...f, discount_type: t }))}
                   className={cn('rounded-xl border-2 px-3 py-2 text-sm font-medium capitalize transition-all',

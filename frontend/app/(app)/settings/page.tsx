@@ -96,7 +96,7 @@ function SchoolProfileTab() {
         <CardDescription>This appears on certificates, ID cards, and reports</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
           <div className="col-span-2 space-y-1.5">
             <Label htmlFor="school-name">School Name</Label>
             <Input id="school-name" value={form.name} onChange={set('name')} placeholder="Delhi Public School" />

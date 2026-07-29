@@ -280,7 +280,7 @@ function UploadModal({ classes, onClose }: { classes: any[], onClose: () => void
               onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
               placeholder="e.g. Chapter 5 Notes - Algebra" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Type *</Label>
               <Select value={form.resource_type} onValueChange={v => setForm(f => ({ ...f, resource_type: v }))}>

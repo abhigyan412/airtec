@@ -192,7 +192,7 @@ export default function InquiryDetailPage() {
         </Card>
       )}
 
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {/* Left: inquiry details */}
         <div className="col-span-2 space-y-5">
           {/* Contact info */}
@@ -203,7 +203,7 @@ export default function InquiryDetailPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-0.5">Parent Name</p>
                   <p className="text-sm font-medium text-foreground">{inq.parent_name}</p>
@@ -414,7 +414,7 @@ function FollowUpModal({ inquiryId, onClose }: { inquiryId: string, onClose: () 
         <div className="space-y-4">
           <div>
             <Label className="mb-1.5 block">Channel *</Label>
-            <div className="grid grid-cols-5 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
               {[
                 { key: 'call', icon: '📞', label: 'Call' },
                 { key: 'whatsapp', icon: '💬', label: 'WhatsApp' },

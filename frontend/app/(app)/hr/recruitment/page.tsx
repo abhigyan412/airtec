@@ -287,7 +287,7 @@ function JobPostingModal({ onClose }: { onClose: () => void }) {
             <Label>Job Title *</Label>
             <Input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Mathematics Teacher" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Department</Label>
               <Input value={form.department} onChange={e => setForm(f => ({ ...f, department: e.target.value }))} placeholder="e.g. Academics" />
@@ -361,7 +361,7 @@ function CandidateModal({ jobs, onClose }: { jobs: any[], onClose: () => void })
         <DialogHeader>
           <DialogTitle>Add Candidate</DialogTitle>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="col-span-2 space-y-1.5">
             <Label>Candidate Name *</Label>
             <Input value={form.candidate_name} onChange={e => setForm(f => ({ ...f, candidate_name: e.target.value }))} />
@@ -456,7 +456,7 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: any, onClose:
           <p className="font-mono text-xs text-muted-foreground">{candidate.application_number}</p>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             <div className="flex items-center gap-2 text-muted-foreground"><Phone className="h-3.5 w-3.5" /> {candidate.phone}</div>
             {candidate.job_postings?.title && <div className="col-span-2"><span className="text-xs text-muted-foreground">Position: </span><span className="font-medium text-primary">{candidate.job_postings.title}</span></div>}
             {candidate.current_designation && <div className="text-foreground"><span className="text-xs text-muted-foreground">Current Role: </span>{candidate.current_designation}</div>}
