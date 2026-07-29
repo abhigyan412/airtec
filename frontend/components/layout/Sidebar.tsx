@@ -178,16 +178,16 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               <span className="block truncate text-[11px] leading-none text-muted-foreground">{schoolName}</span>
             </div>
           </Link>
-          <div className="flex items-center gap-1">
-            <NotificationBell />
-            <button
-              onClick={onClose}
-              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
-              aria-label="Close menu"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+          {/* The notification bell lives in the header, not here: its
+              dropdown is wider than the sidebar and got clipped by the
+              shell's overflow-hidden. */}
+          <button
+            onClick={onClose}
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
+            aria-label="Close menu"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
 
         {/* Nav */}
