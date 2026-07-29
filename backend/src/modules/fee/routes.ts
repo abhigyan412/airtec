@@ -2,9 +2,10 @@ import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
-import { asyncHandler, getPagination } from '../../shared/utils/helpers'
+import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { toLocalDateStr } from '../../shared/utils/academicCalendar'
+import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 
 const router = Router()
 router.use(authenticate)
@@ -446,10 +447,20 @@ router.post(
 )
 
 // ── DUES LIST ─────────────────────────────────────────────────
+// Same gap as student-summary above: no ownership check, so a
+// parent/student calling this directly saw every family's outstanding
+// dues (name, class, amount owed), not just their own. Forced to
+// their own student below.
 router.get('/dues', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { class_id, academic_year_id } = req.query
   const school_id = req.user!.school_id
- 
+
+  let ownStudentId: string | null = null
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+    if (!ownStudentId) return res.json({ success: true, data: [] })
+  }
+
   let query = supabase
     .from('fee_invoices')
     .select(`
@@ -459,13 +470,14 @@ router.get('/dues', asyncHandler(async (req: AuthRequest, res: Response) => {
     .eq('school_id', school_id)
     .in('status', ['unpaid', 'partial'])
     .order('due_date', { ascending: true, nullsFirst: false })
- 
-  if (academic_year_id) query = query.eq('academic_year_id', academic_year_id)
- 
+
+  if (ownStudentId) query = query.eq('student_id', ownStudentId)
+  else if (academic_year_id) query = query.eq('academic_year_id', academic_year_id)
+
   const { data, error } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })
- 
-  let filtered = class_id
+
+  let filtered = (!ownStudentId && class_id)
     ? (data ?? []).filter((i: any) => i.students?.class_id === class_id)
     : (data ?? [])
  
@@ -722,6 +734,24 @@ router.post('/discounts/:id/workflow-action', asyncHandler(async (req: AuthReque
     if (result.instance.status === 'approved' && updatedDiscount) {
       await applyApprovedDiscountToExistingInvoices(updatedDiscount.student_id, school_id)
     }
+
+    if (updatedDiscount) {
+      try {
+        const recipients = await getRecipientUserIdsForStudent(updatedDiscount.student_id)
+        await createNotifications(recipients, {
+          schoolId: school_id,
+          type: result.instance.status === 'approved' ? 'discount_approved' : 'discount_rejected',
+          title: result.instance.status === 'approved' ? 'Fee discount approved' : 'Fee discount request rejected',
+          message: result.instance.status === 'approved'
+            ? 'A fee discount request for your child has been approved and applied.'
+            : 'A fee discount request for your child was rejected.',
+          link: '/portal/fees',
+          relatedEntityType: 'fee_discount', relatedEntityId: id,
+        })
+      } catch (notifyErr) {
+        console.error('Failed to create discount notification:', notifyErr)
+      }
+    }
   }
 
   res.json({
@@ -872,9 +902,21 @@ router.patch('/adhoc/:id', requireRole('school_admin','principal','accountant'),
 )
 
 // ── GET /fees/student-summary/:student_id ─────────────────────
+// :student_id came straight from the URL with only school_id scoping
+// — a parent/student could put ANY student_id in this school here and
+// see that family's full invoice/payment history. Financial data, so
+// this is the one that mattered most to close before building
+// anything parent-facing on top of it.
 router.get('/student-summary/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { student_id } = req.params
   const school_id = req.user!.school_id
+
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    const ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+    if (!ownStudentId || ownStudentId !== student_id) {
+      return res.status(403).json({ success: false, error: 'You can only view your own fee summary' })
+    }
+  }
 
   const [invoicesRes, paymentsRes, adhocRes] = await Promise.all([
     supabase.from('fee_invoices')

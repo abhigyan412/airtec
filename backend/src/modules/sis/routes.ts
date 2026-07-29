@@ -2,9 +2,10 @@ import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
-import { asyncHandler, getPagination } from '../../shared/utils/helpers'
+import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
+import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 
 const router = Router()
 router.use(authenticate)
@@ -57,6 +58,19 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { page = '1', limit = '20', search, class_id, section_id, status, house_id } = req.query
   const { from, to, limit: lim, page: pg } = getPagination(Number(page), Number(limit))
   const school_id = req.user!.school_id
+
+  // Same gap as everywhere else in this sweep: no ownership check, so
+  // a parent/student — who does hold student.view — could browse the
+  // entire school's roster, not just their own child.
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    const ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+    if (!ownStudentId) return res.json({ success: true, data: [], meta: { total: 0, page: pg, limit: lim } })
+    const { data, error } = await supabase.from('students')
+      .select(`*, classes(id, name, numeric_level, stream), sections(id, name), houses(id, name, color), academic_years(id, name)`)
+      .eq('id', ownStudentId).eq('school_id', school_id)
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    return res.json({ success: true, data, meta: { total: data?.length ?? 0, page: 1, limit: lim } })
+  }
 
   let query = supabase
     .from('students')
@@ -210,9 +224,27 @@ router.get('/houses', asyncHandler(async (req: AuthRequest, res: Response) => {
 }))
 
 // ── TIMETABLE ────────────────────────────────────────────────
+// class_id/section_id/teacher_id are all OPTIONAL — omitting every one
+// used to return the entire school's timetable to whoever asked. Fine
+// for staff (that's the "browse everything" Timetable page), but a
+// parent/student passing no params — or, worse, someone else's
+// class_id — would get it too, since none of this was ever ownership-
+// checked. NON_STAFF_ROLES now hard-overrides every param with their
+// own resolved class/section, same pattern as GET /homework.
 router.get('/timetable', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { class_id, section_id, teacher_id, academic_year_id } = req.query
   const school_id = req.user!.school_id
+  let { class_id, section_id, teacher_id, academic_year_id } = req.query as Record<string, string | undefined>
+
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    const studentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+    if (!studentId) return res.json({ success: true, data: [] })
+    const { data: student } = await supabase.from('students').select('class_id, section_id').eq('id', studentId).single()
+    if (!student) return res.json({ success: true, data: [] })
+    class_id = student.class_id
+    section_id = student.section_id ?? undefined
+    teacher_id = undefined
+    academic_year_id = undefined
+  }
 
   let query = supabase
     .from('timetable_periods')
@@ -221,12 +253,12 @@ router.get('/timetable', asyncHandler(async (req: AuthRequest, res: Response) =>
     .order('day_of_week')
     .order('period_number')
 
-  if (class_id) query = query.eq('class_id', class_id as string)
+  if (class_id) query = query.eq('class_id', class_id)
   if (section_id) {
   query = query.or(`section_id.eq.${section_id},section_id.is.null`)
 }
-  if (teacher_id) query = query.eq('teacher_id', teacher_id as string)
-  if (academic_year_id) query = query.eq('academic_year_id', academic_year_id as string)
+  if (teacher_id) query = query.eq('teacher_id', teacher_id)
+  if (academic_year_id) query = query.eq('academic_year_id', academic_year_id)
 
   const { data, error } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })
@@ -340,6 +372,31 @@ router.post('/attendance', requireRole('school_admin', 'principal', 'teacher'),
     const rows = records.map((r: any) => ({ school_id, student_id: r.student_id, class_id: class_id || null, section_id: section_id || null, date, status: r.status, remarks: r.remarks || null, marked_by: req.user!.id }))
     const { data, error } = await supabase.from('attendance').upsert(rows, { onConflict: 'student_id,date' }).select()
     if (error) return res.status(400).json({ success: false, error: error.message })
+
+    // Same-day absence alert to parents. Best-effort: a notification
+    // failure shouldn't turn an already-saved attendance mark into a
+    // 500 for the teacher who just submitted it.
+    const absentStudentIds = rows.filter((r: any) => r.status === 'absent').map((r: any) => r.student_id)
+    if (absentStudentIds.length) {
+      try {
+        const attendanceIdByStudent = new Map((data ?? []).map((a: any) => [a.student_id, a.id]))
+        const { data: absentStudents } = await supabase.from('students')
+          .select('id, first_name, last_name').in('id', absentStudentIds)
+        for (const s of absentStudents ?? []) {
+          const recipients = await getRecipientUserIdsForStudent(s.id)
+          await createNotifications(recipients, {
+            schoolId: school_id, type: 'attendance_absent',
+            title: 'Marked absent today',
+            message: `${s.first_name} ${s.last_name} was marked absent on ${date}.`,
+            link: '/portal/attendance',
+            relatedEntityType: 'attendance', relatedEntityId: attendanceIdByStudent.get(s.id),
+          })
+        }
+      } catch (notifyErr) {
+        console.error('Failed to create absence notifications:', notifyErr)
+      }
+    }
+
     res.json({ success: true, data, count: rows.length })
   })
 )
@@ -363,7 +420,18 @@ router.post('/attendance', requireRole('school_admin', 'principal', 'teacher'),
 router.get('/attendance/report', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { class_id, section_id, month, year, from, to } = req.query
   const school_id = req.user!.school_id
-  if (!class_id) return res.status(400).json({ success: false, error: 'class_id required' })
+
+  // A parent/student passing (or omitting) class_id could otherwise
+  // pull back every classmate's attendance rollup, not just their own
+  // — this endpoint had no ownership check at all before. Force it to
+  // their own single student regardless of what was requested.
+  let ownStudentId: string | null = null
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+    if (!ownStudentId) return res.json({ success: true, data: { students: [], working_days: 0, holidays_in_month: 0 } })
+  } else if (!class_id) {
+    return res.status(400).json({ success: false, error: 'class_id required' })
+  }
 
   const now = new Date()
   const y = year ? Number(year) : now.getFullYear()
@@ -374,8 +442,13 @@ router.get('/attendance/report', asyncHandler(async (req: AuthRequest, res: Resp
 
   let studentsQuery = supabase.from('students')
     .select('id, first_name, last_name, roll_number, admission_number, section_id, sections(name)')
-    .eq('school_id', school_id).eq('class_id', class_id as string).eq('status', 'active').order('roll_number')
-  if (section_id) studentsQuery = studentsQuery.eq('section_id', section_id as string)
+    .eq('school_id', school_id).eq('status', 'active').order('roll_number')
+  if (ownStudentId) {
+    studentsQuery = studentsQuery.eq('id', ownStudentId)
+  } else {
+    studentsQuery = studentsQuery.eq('class_id', class_id as string)
+    if (section_id) studentsQuery = studentsQuery.eq('section_id', section_id as string)
+  }
   const { data: students, error: studentsErr } = await studentsQuery
   if (studentsErr) return res.status(500).json({ success: false, error: studentsErr.message })
 
@@ -751,19 +824,11 @@ router.get('/tc-requests/pending', asyncHandler(async (req: AuthRequest, res: Re
   res.json({ success: true, data })
 }))
 
-// ═══════════════════════════════════════════════════════════════
-// /:id ROUTES LAST — after all named routes
-// ═══════════════════════════════════════════════════════════════
-
-// ── GET /students/:id ───────────────────────────────────────
-// ── GET /students/:id ───────────────────────────────────────
-router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { id } = req.params
-  const school_id = req.user!.school_id
+async function fetchStudentWithFeeSummary(id: string, school_id: string) {
   const { data, error } = await supabase.from('students')
     .select(`*, classes(id, name, stream), sections(id, name), houses(id, name, color), academic_years(id, name), parents(*)`)
     .eq('id', id).eq('school_id', school_id).single()
-  if (error || !data) return res.status(404).json({ success: false, error: 'Student not found' })
+  if (error || !data) return null
 
   const [{ data: invoices }, { data: payments }] = await Promise.all([
     supabase.from('fee_invoices').select('status, total_amount').eq('student_id', id),
@@ -774,8 +839,50 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const totalPaid = payments?.reduce((s, p) => s + Number(p.amount_paid), 0) ?? 0
   const totalDue = totalBilled - totalPaid
 
-  const feeSummary = { total_billed: totalBilled, total_paid: totalPaid, total_due: totalDue }
-  res.json({ success: true, data: { ...data, fee_summary: feeSummary } })
+  return { ...data, fee_summary: { total_billed: totalBilled, total_paid: totalPaid, total_due: totalDue } }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// /:id ROUTES LAST — after all named routes
+// ═══════════════════════════════════════════════════════════════
+
+// ── GET /students/me — the logged-in parent/student's own profile.
+// Exists so the parent/student portal has something to call on first
+// load without already knowing a student_id (which they have no other
+// way to discover — there's no "browse students" access for them).
+// Reuses the exact same shape as GET /students/:id below.
+router.get('/me', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  if (!NON_STAFF_ROLES.includes(req.user!.role)) {
+    return res.status(403).json({ success: false, error: 'This endpoint is for parent/student accounts' })
+  }
+  const studentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+  if (!studentId) return res.status(404).json({ success: false, error: 'No student record is linked to this account yet' })
+  const data = await fetchStudentWithFeeSummary(studentId, school_id)
+  if (!data) return res.status(404).json({ success: false, error: 'Student not found' })
+  res.json({ success: true, data })
+}))
+
+// ── GET /students/:id ───────────────────────────────────────
+// Previously had NO ownership check at all beyond school_id — any
+// authenticated user (including a parent/student) could view ANY
+// other student's full profile and fee summary just by knowing/
+// guessing their id. Forced to the caller's own student for
+// NON_STAFF_ROLES, matching every other fix in this sweep.
+router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { id } = req.params
+  const school_id = req.user!.school_id
+
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    const ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+    if (!ownStudentId || ownStudentId !== id) {
+      return res.status(403).json({ success: false, error: 'You can only view your own student record' })
+    }
+  }
+
+  const data = await fetchStudentWithFeeSummary(id, school_id)
+  if (!data) return res.status(404).json({ success: false, error: 'Student not found' })
+  res.json({ success: true, data })
 }))
 
 // ── POST /students ──────────────────────────────────────────
@@ -916,10 +1023,25 @@ router.post('/:id/tc/:tcId/workflow-action', asyncHandler(async (req: AuthReques
   if (result.completed) {
     const newTcStatus = result.instance.status === 'approved' ? 'approved' : 'rejected'
     await supabase.from('transfer_certificates').update({ status: newTcStatus }).eq('id', tcId).eq('school_id', school_id)
- 
+
     if (newTcStatus === 'approved') {
       // Final Principal approval — student is now officially transferred
       await supabase.from('students').update({ status: 'transferred' }).eq('id', id).eq('school_id', school_id)
+    }
+
+    try {
+      const recipients = await getRecipientUserIdsForStudent(id)
+      await createNotifications(recipients, {
+        schoolId: school_id, type: newTcStatus === 'approved' ? 'tc_approved' : 'tc_rejected',
+        title: newTcStatus === 'approved' ? 'Transfer Certificate approved' : 'Transfer Certificate request rejected',
+        message: newTcStatus === 'approved'
+          ? 'Your Transfer Certificate request has been approved and is ready.'
+          : 'Your Transfer Certificate request was rejected.',
+        link: '/portal',
+        relatedEntityType: 'transfer_certificate', relatedEntityId: tcId,
+      })
+    } catch (notifyErr) {
+      console.error('Failed to create TC notification:', notifyErr)
     }
   }
  

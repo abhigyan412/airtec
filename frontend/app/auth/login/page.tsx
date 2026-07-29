@@ -4,6 +4,9 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { GraduationCap, Eye, EyeOff, Loader2 } from 'lucide-react'
+
+import { useAuth, NON_STAFF_ROLES } from '@/lib/auth'
+
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
@@ -17,24 +20,44 @@ const STATS = [
   { num: '99.9%', label: 'Uptime' },
 ]
 
+const FAMILY_APP_URL = process.env.NEXT_PUBLIC_FAMILY_APP_URL ?? 'http://localhost:3001'
+
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const { login } = useAuth()
+  const { login, logout } = useAuth()
   const router = useRouter()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!email || !password) return
+    const cleanEmail = email.trim()
+    const cleanPassword = password.trim()
+    if (!cleanEmail || !cleanPassword) return
     setIsLoading(true)
     try {
-      await login(email, password)
+      const user = await login(cleanEmail, cleanPassword)
+      if (NON_STAFF_ROLES.includes(user.role)) {
+        // Wrong app — parents/students now have their own separate
+        // portal. Don't leave them signed in here with nothing to see.
+        toast.error('Parents and students should sign in at the family portal.')
+        logout()
+        window.location.href = FAMILY_APP_URL
+        return
+      }
       toast.success('Welcome back!')
       router.push('/dashboard')
     } catch (err: any) {
-      toast.error(err?.response?.data?.error ?? 'Invalid email or password')
+      // No response at all (server down / unreachable / CORS-blocked)
+      // looks identical to a real wrong-password rejection unless these
+      // are told apart — "Invalid email or password" on a dead backend
+      // sends people down the wrong troubleshooting path entirely.
+      if (!err?.response) {
+        toast.error("Can't reach the server. It may be down — try again in a moment.")
+      } else {
+        toast.error(err.response.data?.error ?? 'Invalid email or password')
+      }
     } finally {
       setIsLoading(false)
     }

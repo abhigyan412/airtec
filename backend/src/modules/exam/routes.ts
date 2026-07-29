@@ -5,6 +5,7 @@ import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { toLocalDateStr } from '../../shared/utils/academicCalendar'
+import { createNotifications, getRecipientUserIdsForStudents } from '../../shared/utils/notifications'
 
 const router = Router()
 router.use(authenticate)
@@ -334,6 +335,26 @@ router.post('/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: R
         const newExamStatus = currentStepOrder ? STEP_STATUS_MAP[currentStepOrder] : undefined
         if (newExamStatus) {
             await supabase.from('exams').update({ status: newExamStatus }).eq('id', id).eq('school_id', school_id)
+
+            if (newExamStatus === 'result_published') {
+                try {
+                    const [{ data: exam }, { data: marks }] = await Promise.all([
+                        supabase.from('exams').select('name').eq('id', id).single(),
+                        supabase.from('student_marks').select('student_id').eq('exam_id', id).eq('school_id', school_id),
+                    ])
+                    const studentIds = [...new Set((marks ?? []).map(m => m.student_id))]
+                    const recipients = await getRecipientUserIdsForStudents(studentIds)
+                    await createNotifications(recipients, {
+                        schoolId: school_id, type: 'exam_result_published',
+                        title: 'Exam results published',
+                        message: `Results for "${exam?.name ?? 'the exam'}" are now available.`,
+                        link: '/portal/exams',
+                        relatedEntityType: 'exam', relatedEntityId: id,
+                    })
+                } catch (notifyErr) {
+                    console.error('Failed to create exam result notifications:', notifyErr)
+                }
+            }
         }
     }
 

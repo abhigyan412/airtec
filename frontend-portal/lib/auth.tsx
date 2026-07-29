@@ -23,11 +23,6 @@ interface AuthContextType {
   isRole: (...roles: string[]) => boolean
 }
 
-// Roles that get an ownership-scoped view of their own child's data
-// (see backend NON_STAFF_ROLES) rather than the staff admin tooling —
-// they land in the (portal) route group, not (app).
-export const NON_STAFF_ROLES = ['parent', 'student']
-
 const AuthContext = createContext<AuthContextType | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {

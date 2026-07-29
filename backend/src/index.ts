@@ -4,6 +4,8 @@ import cors from 'cors'
 import helmet from 'helmet'
 import morgan from 'morgan'
 import rateLimit from 'express-rate-limit'
+import cron from 'node-cron'
+import { runFeeReminders } from './shared/utils/feeReminders'
 
 import authRoutes from './modules/auth/routes'
 import sisRoutes from './modules/sis/routes'
@@ -16,6 +18,7 @@ import { errorHandler, notFoundHandler } from './shared/utils/helpers'
 import teamRoutes from './modules/team/routes'
 import rbacRoutes from './modules/rbac/routes'
 import academicsRoutes from './modules/academics/routes'
+import notificationsRoutes from './modules/notifications/routes'
 
 
 
@@ -23,7 +26,20 @@ const app = express()
 const PORT = process.env.PORT ?? 4000
 
 app.use(helmet({ contentSecurityPolicy: false }))
-app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:3000', credentials: true }))
+// Two separate frontend apps now call this API: the staff admin app
+// and the parent/student family app (split from what used to be one
+// Next.js app's route groups). Each needs its own allowed origin.
+const allowedOrigins = [
+  process.env.FRONTEND_URL ?? 'http://localhost:3000',
+  process.env.FAMILY_FRONTEND_URL ?? 'http://localhost:3001',
+]
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
+    callback(new Error(`Origin ${origin} not allowed by CORS`))
+  },
+  credentials: true,
+}))
 app.use(morgan('dev'))
 app.use(express.json({ limit: '10mb' }))
 
@@ -42,9 +58,22 @@ app.use('/api/hrms', hrmsRoutes)
 app.use('/api/team', teamRoutes)
 app.use('/api/rbac', rbacRoutes)
 app.use('/api/academics', academicsRoutes)
+app.use('/api/notifications', notificationsRoutes)
 
 app.use(notFoundHandler)
 app.use(errorHandler)
+
+// Daily fee due/overdue reminder sweep, 7:00 AM server time, across
+// every school (there's no per-request school_id here — this is the
+// unattended background job; the admin-triggered POST
+// /notifications/run-fee-reminders endpoint is the per-school
+// equivalent for testing or hosts where a long-lived cron isn't
+// guaranteed to actually fire).
+cron.schedule('0 7 * * *', () => {
+  runFeeReminders()
+    .then(result => console.log(`[fee-reminders] checked ${result.checked} invoices, notified for ${result.notified}`))
+    .catch(err => console.error('[fee-reminders] failed:', err))
+})
 
 app.listen(PORT, () => {
   console.log(`
