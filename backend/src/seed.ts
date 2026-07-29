@@ -1310,6 +1310,29 @@ async function seed() {
   }))
   console.log(`   ✅ 120 audit entries\n`)
 
+  // ── 32. Document number counters ─────────────────────────
+  // The app generates invoice/receipt/admission/TC/... numbers from
+  // document_counters. This seed writes its own numbers directly (it is a
+  // bulk load, not nine thousand RPC round trips), so the counters have to
+  // be advanced past what was just inserted — otherwise the first payment
+  // recorded through the UI is handed RCP<year>00001, which already exists,
+  // and dies on the unique constraint.
+  console.log('3️⃣2️⃣  Advancing document number counters...')
+  const counterRows = [
+    { prefix: 'INV', last_number: invoices.length },
+    { prefix: 'RCP', last_number: invoices.length },   // receipts are numbered by invoice index
+    { prefix: 'ADM', last_number: students.length },
+    { prefix: 'CERT', last_number: Math.ceil(students.length / 9) },
+    { prefix: 'INQ', last_number: inquiries.length },
+    { prefix: 'APP', last_number: applications.length },
+    { prefix: 'JA', last_number: jobApplications.length },
+    { prefix: 'TC', last_number: 20 },
+  ].map(c => ({ school_id: schoolId, year: ayStartYear, ...c }))
+  const { error: counterErr } = await supabase.from('document_counters')
+    .upsert(counterRows, { onConflict: 'school_id,year,prefix' })
+  if (counterErr) console.error(`   ⚠️  document_counters: ${counterErr.message}`)
+  else console.log(`   ✅ ${counterRows.length} counters advanced past seeded numbers\n`)
+
   // ── Done ─────────────────────────────────────────────────
   const mins = Math.round((Date.now() - startedAt) / 600) / 100
   console.log('━'.repeat(64))

@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
+import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
@@ -185,9 +186,7 @@ router.post('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) =
  
   const counselor_id = body.counselor_id ?? (req.user!.role === 'counselor' ? req.user!.id : undefined)
  
-  const { count } = await supabase
-    .from('admission_inquiries').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-  const inquiryNumber = `INQ${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(4, '0')}`
+  const inquiryNumber = await nextDocumentNumber(school_id, 'INQ')
  
   // Sanitize empty strings to null for fields that may be UUIDs or
   // optional dates/numbers — an empty string "" is not a valid uuid
@@ -250,9 +249,7 @@ router.post('/inquiries/:id/convert-to-application', asyncHandler(async (req: Au
   const student_first_name = nameParts[0] ?? inquiry.student_name ?? 'Unknown'
   const student_last_name = nameParts.slice(1).join(' ') || '-'
  
-  const { count } = await supabase
-    .from('admission_applications').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-  const appNumber = `APP${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(4, '0')}`
+  const appNumber = await nextDocumentNumber(school_id, 'APP')
  
   const { data: application, error } = await supabase
     .from('admission_applications')
@@ -411,9 +408,7 @@ router.post('/applications', asyncHandler(async (req: AuthRequest, res: Response
   const body = CreateApplicationSchema.parse(req.body)
   const school_id = req.user!.school_id
 
-  const { count } = await supabase
-    .from('admission_applications').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-  const appNumber = `APP${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(4, '0')}`
+  const appNumber = await nextDocumentNumber(school_id, 'APP')
 
   const { data, error } = await supabase
     .from('admission_applications')

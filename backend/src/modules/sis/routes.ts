@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
+import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
@@ -924,8 +925,7 @@ router.post('/', requireRole('school_admin', 'principal', 'counselor'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = CreateStudentSchema.parse(req.body)
     const school_id = req.user!.school_id
-    const { count } = await supabase.from('students').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-    const admissionNumber = `ADM${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(4, '0')}`
+    const admissionNumber = await nextDocumentNumber(school_id, 'ADM')
     const { father_name, father_phone, father_email, mother_name, mother_phone, mother_email, ...studentData } = body
     const cleanData = Object.fromEntries(Object.entries(studentData).map(([k, v]) => [k, v === '' ? null : v]))
     const { data: student, error } = await supabase.from('students').insert({ ...cleanData, school_id, admission_number: admissionNumber }).select().single()
@@ -963,8 +963,7 @@ router.post('/:id/tc', requireRole('school_admin', 'principal', 'accountant'),
     if (!student) return res.status(404).json({ success: false, error: 'Student not found' })
  
     const { reason, last_attendance_date, conduct = 'Good' } = req.body
-    const { count } = await supabase.from('transfer_certificates').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-    const tcNumber = `TC${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(4, '0')}`
+    const tcNumber = await nextDocumentNumber(school_id, 'TC')
  
     const { data: tc, error } = await supabase.from('transfer_certificates')
       .insert({

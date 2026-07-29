@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
+import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
@@ -8,6 +9,8 @@ import { toLocalDateStr } from '../../shared/utils/academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 
 const router = Router()
+
+
 router.use(authenticate)
 
 // ── Schemas ─────────────────────────────────────────────────
@@ -354,10 +357,7 @@ router.post(
     const totalDiscount = lineItems.reduce((s, l) => s + l.discount, 0)
     const totalAmount = subtotal - totalDiscount
 
-    // Generate invoice number
-    const { count } = await supabase
-      .from('fee_invoices').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-    const invoiceNumber = `INV${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(5, '0')}`
+    const invoiceNumber = await nextDocumentNumber(school_id, 'INV')
 
     const { data, error } = await supabase
       .from('fee_invoices')
@@ -401,10 +401,11 @@ router.post(
     if (!invoice) return res.status(404).json({ success: false, error: 'Invoice not found' })
     if (invoice.status === 'paid') return res.status(400).json({ success: false, error: 'Invoice already paid' })
 
-    // Generate receipt number
-    const { count } = await supabase
-      .from('fee_payments').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-    const receiptNumber = `RCP${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(5, '0')}`
+    // Receipt numbers come from an atomic per-school counter, not from
+    // count(*)+1: that collided with any receipt history that isn't dense
+    // (which is the normal case), broke after any deletion, and handed two
+    // simultaneous cashiers the same number.
+    const receiptNumber = await nextDocumentNumber(school_id, 'RCP')
 
     const { data: payment, error: payErr } = await supabase
       .from('fee_payments')
@@ -1301,8 +1302,7 @@ router.post('/installments/:id/pay', requireRole('school_admin', 'principal', 'a
     const { data: invoice } = await supabase.from('fee_invoices').select('*').eq('id', installment.invoice_id).single()
     if (!invoice) return res.status(404).json({ success: false, error: 'Parent invoice not found' })
  
-    const { count } = await supabase.from('fee_payments').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-    const receiptNumber = `RCP${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(5, '0')}`
+    const receiptNumber = await nextDocumentNumber(school_id, 'RCP')
  
     const { data: payment, error: payErr } = await supabase
       .from('fee_payments')

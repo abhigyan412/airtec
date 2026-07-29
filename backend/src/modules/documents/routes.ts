@@ -1,5 +1,6 @@
 import { Router, Response, Request } from 'express'
 import { supabase } from '../../shared/db/client'
+import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticateFlexible, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 
@@ -365,8 +366,7 @@ router.post('/issue-certificate', requireRole('school_admin', 'principal'),
     if (!student) return res.status(404).json({ success: false, error: 'Student not found' })
     const { data: template } = await supabase.from('certificate_templates').select('*').eq('id', template_id).single()
     if (!template) return res.status(404).json({ success: false, error: 'Template not found' })
-    const { count } = await supabase.from('issued_certificates').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-    const certNumber = `CERT${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(4, '0')}`
+    const certNumber = await nextDocumentNumber(school_id, 'CERT')
     const { data: cert, error } = await supabase
       .from('issued_certificates')
       .insert({ school_id, student_id, template_id, certificate_type: template.certificate_type, certificate_number: certNumber, issued_data: { ...extra_data, student, template }, issued_by: req.user!.id, qr_code_data: `http://localhost:3000/verify/certificate/${certNumber}` })
