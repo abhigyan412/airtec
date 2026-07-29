@@ -1,4 +1,5 @@
 import { supabase } from '../db/client'
+import { enqueueDeliveries, kickDeliveries } from './delivery'
 
 // ── In-app notification service ─────────────────────────────────
 //
@@ -31,27 +32,60 @@ interface CreateNotificationParams {
 }
 
 export async function createNotification(params: CreateNotificationParams) {
-  const row = {
-    school_id: params.schoolId, user_id: params.userId, type: params.type,
+  const { created } = await writeNotifications([params.userId], params)
+  return { count: created.length }
+}
+
+export async function createNotifications(userIds: string[], params: Omit<CreateNotificationParams, 'userId'>) {
+  const { created } = await writeNotifications(userIds, params)
+  return { count: created.length }
+}
+
+/**
+ * Writes the in-app rows and enqueues delivery for whoever hasn't muted
+ * the type. One bulk statement for the whole recipient set: a homework
+ * post to a 40-student class resolves to ~80 recipients, and the previous
+ * per-recipient loop made that 80 round trips.
+ *
+ * `.select()` is load-bearing. Without it PostgREST returns no
+ * representation and `data` is null on every call — including successful
+ * inserts — so anything downstream that keys off the returned rows
+ * silently never runs. With `ignoreDuplicates`, a fully-deduped write
+ * returns `[]`, which is truthy; callers must check length, not truthiness.
+ */
+async function writeNotifications(
+  userIds: string[],
+  params: Omit<CreateNotificationParams, 'userId'>,
+): Promise<{ created: any[] }> {
+  const unique = [...new Set(userIds)].filter(Boolean)
+  if (!unique.length) return { created: [] }
+
+  const rows = unique.map(userId => ({
+    school_id: params.schoolId, user_id: userId, type: params.type,
     title: params.title, message: params.message, link: params.link ?? null,
-    related_entity_type: params.relatedEntityType ?? null, related_entity_id: params.relatedEntityId ?? null,
-  }
+    related_entity_type: params.relatedEntityType ?? null,
+    related_entity_id: params.relatedEntityId ?? null,
+  }))
 
   // When tied to a specific entity (an invoice, a homework post, ...),
   // dedupe against the same user/type/entity/day so re-running a cron
   // tick or an accidental double-submit doesn't spam the same alert.
-  if (params.relatedEntityId) {
-    return supabase.from('notifications')
-      .upsert(row, { onConflict: 'user_id,type,related_entity_id,notification_date', ignoreDuplicates: true })
-  }
-  return supabase.from('notifications').insert(row)
-}
+  const { data, error } = params.relatedEntityId
+    ? await supabase.from('notifications')
+        .upsert(rows, { onConflict: 'user_id,type,related_entity_id,notification_date', ignoreDuplicates: true })
+        .select()
+    : await supabase.from('notifications').insert(rows).select()
 
-export async function createNotifications(userIds: string[], params: Omit<CreateNotificationParams, 'userId'>) {
-  const unique = [...new Set(userIds)]
-  if (!unique.length) return { count: 0 }
-  await Promise.all(unique.map(userId => createNotification({ ...params, userId })))
-  return { count: unique.length }
+  if (error) { console.error('[notifications] insert failed:', error.message); return { created: [] } }
+
+  const created = data ?? []
+  // Deduped rows return nothing, which is the point: without this the
+  // notification-level dedupe would hold while push re-sent anyway.
+  if (created.length) {
+    await enqueueDeliveries(created)
+    kickDeliveries()
+  }
+  return { created }
 }
 
 // ── Recipient resolution ────────────────────────────────────────

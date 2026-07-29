@@ -48,6 +48,12 @@ services:
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       JWT_SECRET: ${JWT_SECRET}
+      # Web push signing pair (npx web-push generate-vapid-keys). Push is
+      # simply skipped when these are absent, so leaving them unset is a
+      # supported configuration rather than a startup failure.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     expose:
       - "4000"
     ports:

@@ -6,6 +6,7 @@ import morgan from 'morgan'
 import rateLimit from 'express-rate-limit'
 import cron from 'node-cron'
 import { runFeeReminders } from './shared/utils/feeReminders'
+import { runDeliveries } from './shared/utils/delivery'
 
 import authRoutes from './modules/auth/routes'
 import sisRoutes from './modules/sis/routes'
@@ -114,6 +115,18 @@ cron.schedule('0 7 * * *', () => {
   runFeeReminders()
     .then(result => console.log(`[fee-reminders] checked ${result.checked} invoices, notified for ${result.notified}`))
     .catch(err => console.error('[fee-reminders] failed:', err))
+})
+
+// Drain the delivery outbox every minute. createNotification() also nudges
+// it via setImmediate, so this tick is the safety net for retries and for
+// anything enqueued while the worker was busy — not the primary path.
+//
+// Same caveat as the fee sweep above: an in-process schedule only runs
+// while the process is up, which on a host that sleeps when idle means it
+// may never fire. POST /notifications/run-deliveries is the external-
+// scheduler equivalent (design.md §7).
+cron.schedule('* * * * *', () => {
+  runDeliveries().catch(err => console.error('[delivery] tick failed:', err?.message))
 })
 
 app.listen(PORT, () => {

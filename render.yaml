@@ -18,6 +18,16 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
+      # Web push signing pair. Generate once with
+      #   npx web-push generate-vapid-keys
+      # and paste into the dashboard — rotating them invalidates every
+      # existing browser subscription, so treat them as long-lived.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
 
   - type: web
     name: airtec-frontend

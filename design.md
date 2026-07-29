@@ -3,7 +3,8 @@
 Scope: `frontend/` (staff admin) and `frontend-portal/` (parent/student family app),
 plus the backend surface required to support them.
 
-Status: proposal. Nothing here is implemented yet.
+Status: proposal. Nothing in §§3–7 is implemented. Two of the three defects in
+§1 have since been fixed on `main` (`dd08890`) — see below.
 
 ---
 
@@ -43,26 +44,36 @@ due/overdue sweep (`shared/utils/feeReminders.ts:54`).
 - Both service workers are already registered in production. The browser-side
   prerequisite for push is satisfied.
 
-**Known defects to fix as part of this work**
+**Known defects — 1 and 2 are now fixed, 3 is open**
 
-1. **Every family-facing link 404s.** Links are stored as `/portal/fees`,
-   `/portal/homework`, `/portal/attendance`, `/portal/exams`, `/portal`. After the
-   parent/student split (`af3d954`), the family app's routes live under
-   `frontend-portal/app/(portal)/…` — and `(portal)` is a Next.js *route group*,
-   so it is not a URL segment. The real URLs are `/fees`, `/homework`, `/exams`.
-   The staff app has no `/portal/*` routes at all. Only `hrms`'s `/hr/my-leave`
-   still resolves.
-2. **Seed writes phantom types.** `backend/src/seed.ts:1241` inserts `fee_due`,
-   `exam_scheduled`, `exam_result`, `complaint_update`, `leave_status`,
-   `announcement` — none are in the `NotificationType` union. The column is plain
-   `text` with no CHECK, so they insert silently and don't match what the app
-   actually produces.
-3. **The daily cron likely never fires in production.** `render.yaml:6` uses
-   Render's `plan: free`, which spins the service down when idle;
-   `cron.schedule('0 7 * * *')` at `index.ts:113` is in-process, so a sleeping
-   service has no process to run it. The code comment already anticipates this
-   and offers `POST /notifications/run-fee-reminders` as a manual fallback. Worth
-   confirming whether fee reminders have ever run unattended.
+1. ~~**Every family-facing link 404s.**~~ **Fixed in `dd08890`.** Links were
+   stored as `/portal/fees`, `/portal/homework`, `/portal/attendance`,
+   `/portal/exams`, `/portal`. After the parent/student split (`af3d954`) the
+   family app's routes live under `frontend-portal/app/(portal)/…`, and
+   `(portal)` is a Next.js *route group* — not a URL segment — so the real URLs
+   are `/fees`, `/homework`, `/attendance`, `/exams`, `/`. All six now point at
+   the right paths (verified: `/portal/fees` → 404, `/fees` → 200), and the 248
+   rows already in the demo database were rewritten. `hrms`'s `/hr/my-leave` was
+   always correct.
+2. ~~**Seed writes phantom types.**~~ **Fixed in `dd08890`.** The seed wrote
+   `fee_due`, `exam_scheduled`, `exam_result`, `complaint_update`,
+   `leave_status`, `announcement` — none in the `NotificationType` union, and the
+   column is plain `text` with no CHECK, so they inserted silently. `seed.ts` now
+   imports the union, so `tsc` rejects an invented value. The same block was also
+   picking type/title/message/link from *parallel arrays by index*, producing rows
+   like a `fee_due` notification titled "Attendance alert" linking to
+   `/hr/my-leave`; templates now travel as units and are chosen by recipient role.
+3. **The daily cron likely never fires in production — still open, and this is
+   the one that blocks everything else.** `render.yaml:6` uses Render's
+   `plan: free`, which spins the service down when idle; `cron.schedule('0 7 * * *')`
+   at `index.ts:113` is in-process, so a sleeping service has no process to run
+   it. The code comment anticipates this and offers
+   `POST /notifications/run-fee-reminders` as a manual fallback. Worth confirming
+   whether fee reminders have *ever* run unattended.
+
+   Promoted out of this list into Phase 1 (§8): the delivery worker in §5.2 is
+   scheduled exactly the same way, so it inherits the defect wholesale. Building
+   push on top of a scheduler that doesn't fire just moves the silence.
 
 ---
 
@@ -184,14 +195,21 @@ CREATE TABLE public.push_subscriptions (
 );
 CREATE INDEX idx_push_subs_user ON public.push_subscriptions (user_id) WHERE failed_at IS NULL;
 
--- Opt-outs only. Absence of a row means enabled, so new notification types
--- roll out on-by-default and no backfill is needed per user.
+-- Opt-outs only: a row means "this user has muted this type on this channel".
+-- Absence means enabled, so new notification types roll out on-by-default with
+-- no per-user backfill.
+--
+-- No `enabled` column on purpose. An earlier draft had `enabled boolean NOT NULL
+-- DEFAULT true`, which contradicts the opt-out model — the default row would be a
+-- no-op and only `false` rows would carry meaning, leaving two ways to express
+-- "enabled" (no row, or a row saying true) for the delivery check to disagree
+-- about. Presence is the whole signal.
 CREATE TABLE public.notification_preferences (
     id uuid DEFAULT extensions.uuid_generate_v4() PRIMARY KEY,
     user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     type text NOT NULL,              -- matches NotificationType
     channel text NOT NULL CHECK (channel IN ('in_app','push','email')),
-    enabled boolean NOT NULL DEFAULT true,
+    muted_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (user_id, type, channel)
 );
 
@@ -245,20 +263,40 @@ the ~10 trigger sites stay untouched.
 ```ts
 // backend/src/shared/utils/notifications.ts
 export async function createNotification(params: CreateNotificationParams) {
-  const { data: row } = await insertNotificationRow(params)   // existing logic
-  if (!row) return                                            // deduped — no re-send
-  await enqueueDeliveries(row)                                // new
+  const { data } = await supabase
+    .from('notifications')
+    .upsert(row, { onConflict: 'user_id,type,related_entity_id,notification_date',
+                   ignoreDuplicates: true })
+    .select()                       // ← REQUIRED, see below
+  if (!data?.length) return         // deduped — no re-send
+  await enqueueDeliveries(data[0])  // new
 }
 ```
 
-The `if (!row) return` matters: the upsert uses `ignoreDuplicates`, so a deduped
-insert returns nothing. Without this guard, a re-run of the fee cron would create
-fresh delivery rows for a notification the user already got — the dedupe index
-would still hold at the notification level while push spammed anyway.
+**Two traps in that guard, both of which fail silently.**
 
-Fan-out volume is the thing to watch. Homework posted to a class resolves every
-student *plus* every parent — a 40-student class is ~80 recipients. That's fine as
-DB inserts, and it's exactly why provider calls belong in the worker.
+The current implementation ends at `.upsert(...)` / `.insert(...)` with no
+`.select()`. supabase-js returns `data: null` when you don't ask for a
+representation — so a naive `const { data: row } = await insert(...)`, `if (!row)
+return` is null on *every* call, deduped or not, and `enqueueDeliveries` never
+runs. Push and email would be dead while in-app notifications kept working
+perfectly: no error, nothing in the logs. Adding `.select()` is not optional here.
+
+Second: with `ignoreDuplicates: true` a deduped upsert returns `data: []` — an
+empty array, which is **truthy**. `if (!row)` would pass the guard and enqueue a
+delivery for a notification that was never written. Check `data?.length`, not
+truthiness.
+
+The guard itself matters because without it a re-run of the fee cron creates fresh
+delivery rows for a notification the user already got — the dedupe index still
+holds at the notification level while push spams anyway.
+
+Fan-out volume is the thing to watch, and it is worse than it looks:
+`createNotifications` is `Promise.all` over *individual* upserts, so an 80-recipient
+homework post is 80 round trips, not one insert — and enqueueing deliveries doubles
+that. Convert both to a single bulk `upsert(...).select()` while making this change;
+it fixes the round-trip count and makes the dedupe guard read naturally over the
+returned rows. Provider calls stay in the worker regardless.
 
 ### 5.2 Delivery worker
 
@@ -266,6 +304,13 @@ A single function, `runDeliveries()`, claiming a bounded batch:
 
 - `SELECT … WHERE status = 'pending' AND next_attempt_at <= now() ORDER BY next_attempt_at LIMIT 100 FOR UPDATE SKIP LOCKED`.
   `SKIP LOCKED` is what makes this safe if a second backend instance ever runs.
+
+  **This cannot be written with supabase-js.** PostgREST has no row-locking
+  syntax, so the claim query has to live in a Postgres function called via
+  `supabase.rpc('claim_pending_deliveries', { batch_size: 100 })` — a migration
+  to write, not a query to issue. The function does the `SELECT … FOR UPDATE SKIP
+  LOCKED`, flips the claimed rows out of `pending` in the same transaction, and
+  returns them. Everything else in the worker stays in TypeScript.
 - Dispatch per channel. Push uses the `web-push` package; email uses a provider REST call.
 - On success → `sent`. On failure → `attempts + 1`, exponential backoff into
   `next_attempt_at`, `failed` after 5 attempts.
@@ -295,26 +340,27 @@ New env vars: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`. Add to
 `render.yaml` with `sync: false` and to `docker-compose.yml`'s backend
 `environment` block, matching how the Supabase keys are handled.
 
-### 5.4 Fix the links
+### 5.4 Fix the links — done (`dd08890`)
 
-Change all six family-facing `link` values to app-relative paths, since a user
-only ever logs into one app (role determines which — `student`/`parent` → family,
-everyone else → staff):
+All six family-facing `link` values now use app-relative paths. A user only ever
+logs into one app (role decides which — `student`/`parent` → family, everyone
+else → staff), so a relative link resolves against whichever app renders the bell.
 
-| File | Now | Should be |
+| File | Was | Now |
 |---|---|---|
-| `feeReminders.ts:61` | `/portal/fees` | `/fees` |
-| `academics/routes.ts:165` | `/portal/homework` | `/homework` |
-| `sis/routes.ts:425` | `/portal/attendance` | `/attendance` |
-| `sis/routes.ts:1074` | `/portal` | `/` |
-| `fee/routes.ts:748` | `/portal/fees` | `/fees` |
-| `exam/routes.ts:351` | `/portal/exams` | `/exams` |
+| `feeReminders.ts` | `/portal/fees` | `/fees` |
+| `academics/routes.ts` | `/portal/homework` | `/homework` |
+| `sis/routes.ts` (attendance) | `/portal/attendance` | `/attendance` |
+| `sis/routes.ts` (TC) | `/portal` | `/` |
+| `fee/routes.ts` | `/portal/fees` | `/fees` |
+| `exam/routes.ts` | `/portal/exams` | `/exams` |
 
-`hrms/routes.ts:476` (`/hr/my-leave`) is staff-facing and already correct.
+`hrms/routes.ts` (`/hr/my-leave`) is staff-facing and was always correct. Line
+numbers are deliberately omitted — the previous version of this table pinned them
+and every one drifted within a day.
 
-Existing rows keep the stale links. Either migrate them
-(`UPDATE notifications SET link = replace(link,'/portal','')`) or tolerate them —
-they're demo data at this point.
+The 248 existing rows were rewritten rather than tolerated, so the bell works on
+today's data instead of only after a reseed.
 
 ---
 
@@ -337,6 +383,13 @@ no error anywhere. That's the hardest possible bug to notice.
 Proposal: a `packages/notification-client` workspace package exporting the hook,
 the bell, the preferences panel, and a `buildServiceWorker()` snippet both apps
 inline. Each app keeps its own `manifest.ts`, cache version, and styling.
+
+Caveat worth naming: `sw.js` is both the file that must not drift *and* the one a
+workspace package handles worst — it is a static asset served per origin, not an
+import, so sharing it means a generate-into-`public/` build step in two apps.
+`buildServiceWorker()` is the right shape, but if that build step is unwelcome,
+the honest split is to extract the hook, bell and preferences panel (real modules,
+real wins) and cover `sw.js` alone with the CI diff-check below.
 
 If that's too large a change to take on now, the fallback is a single
 `NOTIFICATIONS.md` sync checklist plus a CI job that diffs the shared files and
@@ -448,8 +501,20 @@ Redis solves none of these. Don't let a queue discussion substitute for this one
 
 ## 8. Rollout
 
-**Phase 1 — foundation.** Three tables, the type CHECK, seed fix, link fixes.
-Ship independently; fixes real bugs with no user-visible change.
+**Phase 1 — foundation.** Partly landed already (`dd08890`: seed fix, link
+fixes, the 248 existing rows corrected). Remaining: the three tables, the
+`claim_pending_deliveries` function, the type CHECK, the `.select()` correction
+in §5.1, and a retention job.
+
+Two things pulled into this phase that were previously further down:
+
+- **Solve the scheduling problem (§7).** The delivery worker is scheduled exactly
+  like the fee cron, which on `plan: free` does not run. Everything in Phase 2
+  sits on top of it, so fixing it later means shipping push that silently never
+  sends. Cheapest credible option: an authenticated trigger endpoint driven by an
+  external scheduler, which also makes the existing fee cron work.
+- **Retention.** Add the cleanup while the table is small rather than after it
+  isn't — one homework post to a class already writes ~80 rows.
 
 **Phase 2 — web push, family app first.** VAPID keys, subscribe endpoints,
 `sw.js` handlers, pre-prompt UX, delivery worker with push only. Family app has
@@ -477,5 +542,12 @@ mute. Ship opt-outs server-side in phase 2 so the data exists before the UI.
    Suggest a school-level quiet window rather than per-user, at least initially.
 4. **Do staff want push at all,** or is the bell enough for people already at a
    desk? Worth asking before building phase 3.
-5. **Retention.** The table grows unbounded — ~80 rows per homework post. Suggest
-   deleting read notifications older than 90 days.
+5. ~~**Retention.**~~ Decided: delete read notifications older than 90 days, and
+   do it in Phase 1. The table grows faster than the original estimate suggested —
+   840 students each with a linked parent means one homework post to a class
+   writes ~80 rows, and seeding alone produced hundreds before a single real event.
+
+6. **Quiet hours — school-level, and note the existing job already violates it.**
+   The fee sweep is hard-coded to `0 7 * * *`, i.e. 7am, which is inside most
+   people's quiet window. Whatever window gets configured, that cron is its first
+   customer.

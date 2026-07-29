@@ -8,7 +8,7 @@
  *   - Same-origin static files (icons, manifest) are stale-while-revalidate.
  * Bump CACHE_VERSION to invalidate old caches on deploy.
  */
-const CACHE_VERSION = "airtec-portal-v1";
+const CACHE_VERSION = "airtec-portal-v2";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const OFFLINE_URL = "/offline.html";
@@ -102,3 +102,39 @@ async function staleWhileRevalidate(request) {
     .catch(() => cached);
   return cached || network;
 }
+
+// ── Push (design.md §6.3) ────────────────────────────────────────────
+// Additive: the fetch/caching strategy above is untouched.
+
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+  let payload = {};
+  try { payload = event.data.json(); } catch { payload = { title: "New notification", body: event.data.text() }; }
+  const { title, body, link, tag } = payload;
+  event.waitUntil(
+    self.registration.showNotification(title || "AIRTEC", {
+      body: body || "",
+      // Collapses repeats of the same alert instead of stacking one per
+      // delivery attempt.
+      tag: tag || "airtec",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      data: { link: link || "/" },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const link = event.notification.data?.link || "/";
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clients) => {
+        // Focus a tab that is already open rather than opening a duplicate.
+        const existing = clients.find((c) => c.url.startsWith(self.location.origin));
+        if (existing) return existing.focus().then((c) => (c.navigate ? c.navigate(link) : c));
+        return self.clients.openWindow(link);
+      }),
+  );
+});
