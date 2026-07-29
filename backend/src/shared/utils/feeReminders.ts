@@ -1,4 +1,5 @@
 import { supabase } from '../db/client'
+import { fetchPaidByInvoice } from './feePayments'
 import { toLocalDateStr } from './academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudent } from './notifications'
 
@@ -38,9 +39,10 @@ export async function runFeeReminders(schoolId?: string) {
   if (!invoices?.length) return { checked: 0, notified: 0 }
 
   const invoiceIds = invoices.map(i => i.id)
-  const { data: payments } = await supabase.from('fee_payments').select('invoice_id, amount_paid').in('invoice_id', invoiceIds)
-  const paidByInvoice = new Map<string, number>()
-  for (const p of payments ?? []) paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount_paid))
+  // Chunked + error-checked. The old inline version silently produced an empty
+  // map once the due-soon window held more than ~300 invoices, which would have
+  // made every reminder quote the FULL original bill instead of the balance.
+  const paidByInvoice = await fetchPaidByInvoice(invoiceIds)
 
   let notified = 0
   for (const inv of invoices) {

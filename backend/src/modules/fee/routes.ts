@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
+import { fetchPaidByInvoice } from '../../shared/utils/feePayments'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
@@ -103,15 +104,7 @@ async function applyApprovedDiscountToExistingInvoices(studentId: string, school
   // Fetch total paid per invoice (needed to recompute status after
   // total_amount changes)
   const invoiceIds = invoices.map(i => i.id)
-  const { data: payments } = await supabase
-    .from('fee_payments')
-    .select('invoice_id, amount_paid')
-    .in('invoice_id', invoiceIds)
-
-  const paidByInvoice = new Map<string, number>()
-  for (const p of payments ?? []) {
-    paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount_paid))
-  }
+  const paidByInvoice = await fetchPaidByInvoice(invoiceIds)
 
   let updatedCount = 0
 
@@ -486,14 +479,7 @@ router.get('/dues', asyncHandler(async (req: AuthRequest, res: Response) => {
   // whatever has already been paid against it) — total_amount alone
   // is the original bill, not what's still owed.
   const invoiceIds = filtered.map((i: any) => i.id)
-  const { data: payments } = invoiceIds.length
-    ? await supabase.from('fee_payments').select('invoice_id, amount_paid').in('invoice_id', invoiceIds)
-    : { data: [] }
- 
-  const paidByInvoice = new Map<string, number>()
-  for (const p of payments ?? []) {
-    paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount_paid))
-  }
+  const paidByInvoice = await fetchPaidByInvoice(invoiceIds)
  
   const result = filtered.map((inv: any) => ({
     ...inv,
@@ -975,14 +961,7 @@ router.get('/aging-report', asyncHandler(async (req: AuthRequest, res: Response)
   if (error) return res.status(500).json({ success: false, error: error.message })
  
   const invoiceIds = (invoices ?? []).map(i => i.id)
-  const { data: payments } = invoiceIds.length
-    ? await supabase.from('fee_payments').select('invoice_id, amount_paid').in('invoice_id', invoiceIds)
-    : { data: [] }
- 
-  const paidByInvoice = new Map<string, number>()
-  for (const p of payments ?? []) {
-    paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount_paid))
-  }
+  const paidByInvoice = await fetchPaidByInvoice(invoiceIds)
  
   const today = new Date()
   const buckets: Record<string, any[]> = { current: [], '1_30': [], '31_60': [], '61_90': [], '90_plus': [] }
@@ -1033,14 +1012,7 @@ router.get('/defaulters', asyncHandler(async (req: AuthRequest, res: Response) =
   if (error) return res.status(500).json({ success: false, error: error.message })
  
   const invoiceIds = (invoices ?? []).map(i => i.id)
-  const { data: payments } = invoiceIds.length
-    ? await supabase.from('fee_payments').select('invoice_id, amount_paid').in('invoice_id', invoiceIds)
-    : { data: [] }
- 
-  const paidByInvoice = new Map<string, number>()
-  for (const p of payments ?? []) {
-    paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount_paid))
-  }
+  const paidByInvoice = await fetchPaidByInvoice(invoiceIds)
  
   const today = new Date()
   const byStudent: Record<string, any> = {}
@@ -1096,12 +1068,7 @@ router.post('/arrears/carry-forward', requireRole('school_admin', 'principal', '
     if (!invoices?.length) return res.json({ success: true, data: { carried_forward: 0, message: 'No outstanding invoices found for that academic year' } })
 
     const invoiceIds = invoices.map(i => i.id)
-    const { data: payments } = await supabase.from('fee_payments').select('invoice_id, amount_paid').in('invoice_id', invoiceIds)
-
-    const paidByInvoice = new Map<string, number>()
-    for (const p of payments ?? []) {
-      paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount_paid))
-    }
+    const paidByInvoice = await fetchPaidByInvoice(invoiceIds)
 
     // Skip invoices already carried forward (idempotency — running
     // this twice shouldn't double the arrears)
