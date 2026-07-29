@@ -2,7 +2,7 @@ import { Router, Response } from 'express'
 import { z } from 'zod'
 import { createClient } from '@supabase/supabase-js'
 import { supabase } from '../../shared/db/client'
-import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
+import { authenticate, requireRole, AuthRequest, invalidateUserProfile } from '../../shared/middleware/auth'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { assignDefaultUserRole, setPrimaryUserRole, LEGACY_ROLE_TO_RBAC_ROLE } from '../rbac/seed'
 
@@ -225,6 +225,9 @@ router.patch('/:id', requireRole('school_admin', 'principal'),
 
     const { data, error } = await supabase
       .from('users').update(update).eq('id', id).eq('school_id', school_id).select().single()
+    // Role/school/active changes must take effect now, not after the
+    // profile cache's 30s TTL.
+    invalidateUserProfile(id)
 
     if (error) return res.status(400).json({ success: false, error: error.message })
 
@@ -250,6 +253,7 @@ router.delete('/:id', requireRole('school_admin', 'principal'),
 
     const { error } = await supabase
       .from('users').update({ is_active: false }).eq('id', id).eq('school_id', school_id)
+    invalidateUserProfile(id)
 
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true, message: 'Staff member deactivated' })
