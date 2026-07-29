@@ -26,15 +26,16 @@ const app = express()
 const PORT = process.env.PORT ?? 4000
 
 app.use(helmet({ contentSecurityPolicy: false }))
-// Two separate frontend apps call this API: the staff admin app and the
-// parent/student family app. Each var accepts a COMMA-SEPARATED list, so
-// one deployment can serve several hostnames (apex + www, a preview
-// domain, a custom domain) without a code change — previously each var
-// held exactly one origin, so any additional domain got a blanket
-// "not allowed by CORS" with no way to add it from config.
+// Both frontends proxy /api through their own Next server (see the
+// rewrites in each next.config.js), so the browser only ever talks to
+// the app's own origin and these requests reach us with no Origin header
+// at all — nothing to allowlist, whatever domain the app is served from.
 //
-// ALLOWED_ORIGINS is the catch-all if you'd rather not think about which
-// app a hostname belongs to.
+// This is only load-bearing for something calling the API cross-origin:
+// a build where NEXT_PUBLIC_API_URL was set to an absolute backend URL
+// instead of /api (which silently opts out of the proxy), or a separately
+// hosted client. Comma-separated, so one deployment can name several
+// hostnames without a code change.
 const parseOrigins = (...values: (string | undefined)[]) =>
   values
     .flatMap(v => (v ?? '').split(','))
