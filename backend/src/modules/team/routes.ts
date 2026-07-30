@@ -2,7 +2,7 @@ import { Router, Response } from 'express'
 import { z } from 'zod'
 import { createClient } from '@supabase/supabase-js'
 import { supabase } from '../../shared/db/client'
-import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
+import { authenticate, requireRole, AuthRequest, invalidateUserProfile } from '../../shared/middleware/auth'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { assignDefaultUserRole, setPrimaryUserRole, LEGACY_ROLE_TO_RBAC_ROLE } from '../rbac/seed'
 
@@ -40,16 +40,21 @@ router.get('/', requireRole('school_admin', 'principal'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
 
-    const { data: users, error } = await supabase
-      .from('users')
-      .select('id, full_name, email, role, phone, is_active, created_at')
-      .eq('school_id', school_id)
-      .order('created_at', { ascending: false })
+    // Both reads are independent, so they run together rather than back to
+    // back — each round-trip to Supabase is ~245ms here, and listUsers is the
+    // slower of the two.
+    const [{ data: users, error }, { data: authUsers }] = await Promise.all([
+      supabase
+        .from('users')
+        .select('id, full_name, email, role, phone, is_active, created_at')
+        .eq('school_id', school_id)
+        .order('created_at', { ascending: false }),
+      supabaseAdmin.auth.admin.listUsers({ perPage: 1000 }),
+    ])
 
     if (error) return res.status(500).json({ success: false, error: error.message })
 
-    // Check which users have a matching auth account
-    const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+    // Which users have a matching auth account
     const authIds = new Set((authUsers?.users ?? []).map(u => u.id))
 
     const result = (users ?? []).map(u => ({
@@ -225,6 +230,9 @@ router.patch('/:id', requireRole('school_admin', 'principal'),
 
     const { data, error } = await supabase
       .from('users').update(update).eq('id', id).eq('school_id', school_id).select().single()
+    // Role/school/active changes must take effect now, not after the
+    // profile cache's 30s TTL.
+    invalidateUserProfile(id)
 
     if (error) return res.status(400).json({ success: false, error: error.message })
 
@@ -250,6 +258,7 @@ router.delete('/:id', requireRole('school_admin', 'principal'),
 
     const { error } = await supabase
       .from('users').update({ is_active: false }).eq('id', id).eq('school_id', school_id)
+    invalidateUserProfile(id)
 
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true, message: 'Staff member deactivated' })
