@@ -8,14 +8,16 @@ import './globals.css'
 const jakarta = Plus_Jakarta_Sans({ subsets: ['latin'], variable: '--font-geist-sans' })
 
 export const metadata: Metadata = {
-  title: { default: 'AIRTEC — Family Portal', template: '%s · AIRTEC Family' },
+  title: { default: 'AIRTEC Family', template: '%s · AIRTEC Family' },
   description: 'Attendance, fees, homework, timetable, and exam results for your child.',
   applicationName: 'AIRTEC Family',
   manifest: '/manifest.webmanifest',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'AIRTEC Family',
+    // Matches manifest short_name: the iOS home-screen label, kept short so it
+    // doesn't clip.
+    title: 'Family',
   },
   icons: {
     icon: [

@@ -8,7 +8,7 @@
  *   - Same-origin static files (icons, manifest) are stale-while-revalidate.
  * Bump CACHE_VERSION to invalidate old caches on deploy.
  */
-const CACHE_VERSION = "airtec-portal-v2";
+const CACHE_VERSION = "airtec-portal-v3";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const OFFLINE_URL = "/offline.html";

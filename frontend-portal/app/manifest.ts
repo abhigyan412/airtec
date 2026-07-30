@@ -7,8 +7,10 @@ import type { MetadataRoute } from 'next'
 // admin install on the same device.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'AIRTEC — Family Portal',
-    short_name: 'AIRTEC Family',
+    name: 'AIRTEC Family',
+    // Home-screen label. iOS truncates around 11-12 characters, so this stays
+    // short enough to never clip -- the icon carries the brand there.
+    short_name: 'Family',
     description: 'Attendance, fees, homework, timetable, and exam results for your child.',
     id: '/?app=family',
     start_url: '/',

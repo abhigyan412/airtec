@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { GraduationCap, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { House, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -63,7 +63,7 @@ export default function LoginPage() {
         </div>
         <div className="relative flex items-center gap-3">
           <div className="w-10 h-10 bg-white/20 backdrop-blur rounded-xl flex items-center justify-center">
-            <GraduationCap className="w-6 h-6 text-white" />
+            <House className="w-6 h-6 text-white" />
           </div>
           <span className="text-white font-bold text-xl tracking-tight">AIRTEC</span>
         </div>
@@ -88,7 +88,7 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           <div className="mb-8 flex items-center justify-center gap-2 lg:hidden">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary">
-              <GraduationCap className="h-5 w-5 text-primary-foreground" />
+              <House className="h-5 w-5 text-primary-foreground" />
             </div>
             <span className="text-xl font-bold text-foreground">AIRTEC</span>
           </div>

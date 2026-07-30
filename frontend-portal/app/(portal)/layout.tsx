@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
-import { GraduationCap, LogOut } from 'lucide-react'
+import { House, LogOut } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { studentsApi } from '@/lib/api'
 import { NotificationBell } from '@/components/layout/NotificationBell'
@@ -61,7 +61,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             className="flex min-w-0 items-center gap-2.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary">
-              <GraduationCap className="h-[18px] w-[18px] text-primary-foreground" />
+              <House className="h-[18px] w-[18px] text-primary-foreground" />
             </span>
             <span className="min-w-0">
               <span className="block text-sm font-bold leading-tight text-foreground">AIRTEC</span>
