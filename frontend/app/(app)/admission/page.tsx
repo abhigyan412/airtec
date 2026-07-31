@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Phone, Search, ChevronRight, FileCheck } from 'lucide-react'
+import { Plus, Phone, Search, ChevronRight, FileCheck, UserPlus } from 'lucide-react'
 import { admissionApi } from '@/lib/api'
 import { cn, STATUS_COLORS, formatDate } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -20,6 +20,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { Skeleton } from '@/components/ui/skeleton'
 
 // Theme-aware pill classes per pipeline stage (light + dark mode).
@@ -80,14 +81,11 @@ export default function AdmissionPage() {
 
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as 'inquiries' | 'applications')} className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Admission CRM</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            {stats?.total ?? 0} inquiries · {stats?.conversion_rate ?? 0}% conversion rate
-          </p>
-        </div>
-        {tab === 'inquiries' ? (
+      <PageHeader
+        title="Admission CRM"
+        description={`${stats?.total ?? 0} inquiries · ${stats?.conversion_rate ?? 0}% conversion rate`}
+        icon={UserPlus}
+        actions={tab === 'inquiries' ? (
           <Button onClick={() => setShowNew(true)}>
             <Plus className="w-4 h-4" /> New Inquiry
           </Button>
@@ -96,7 +94,7 @@ export default function AdmissionPage() {
             <Plus className="w-4 h-4" /> New Application
           </Button>
         )}
-      </div>
+      />
 
       {/* Tabs: Inquiries (CRM) vs Applications (formal, workflow-driven) */}
       <TabsList>
@@ -117,7 +115,9 @@ export default function AdmissionPage() {
             return (
               <button key={stage.key}
                 onClick={() => setStatus(statusFilter === stage.key ? '' : stage.key)}
+                aria-pressed={statusFilter === stage.key}
                 className={cn('bg-card rounded-xl border p-3 text-center transition-all hover:shadow-sm',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                   statusFilter === stage.key ? 'border-primary ring-2 ring-primary/20' : 'border-border')}>
                 <p className="text-xl font-bold text-foreground">{count}</p>
                 <span className={cn('inline-block mt-1 px-1.5 py-0.5 rounded-full text-xs font-medium', stage.color)}>
@@ -162,8 +162,19 @@ export default function AdmissionPage() {
           ) : (inquiries?.data ?? []).length === 0 ? (
             <EmptyState
               icon={Search}
-              title="No inquiries found"
-              description={statusFilter ? 'Try clearing the filter' : 'Add your first inquiry to start tracking admissions'}
+              title={search || statusFilter ? 'No inquiries match your filters' : 'No inquiries yet'}
+              description={search || statusFilter
+                ? 'Nothing in the pipeline matches this search or stage. Widen the filters to see more.'
+                : 'Log your first inquiry to start tracking parents through the admission pipeline.'}
+              action={search || statusFilter ? (
+                <Button variant="outline" onClick={() => { setSearch(''); setStatus(''); setPage(1) }}>
+                  Clear filters
+                </Button>
+              ) : (
+                <Button onClick={() => setShowNew(true)}>
+                  <Plus className="w-4 h-4" /> New Inquiry
+                </Button>
+              )}
               className="py-16"
             />
           ) : (
@@ -241,7 +252,12 @@ export default function AdmissionPage() {
             <EmptyState
               icon={FileCheck}
               title="No applications yet"
-              description="Applications go through Counselor → Accountant → Principal approval"
+              description="Applications go through Counselor → Accountant → Principal approval. Create one, or convert an existing inquiry."
+              action={
+                <Button onClick={() => setShowNewApp(true)}>
+                  <Plus className="w-4 h-4" /> New Application
+                </Button>
+              }
               className="py-16"
             />
           ) : (
@@ -353,7 +369,7 @@ function NewInquiryModal({ classes, onClose }: { classes: any[], onClose: () => 
           <DialogTitle>New Admission Inquiry</DialogTitle>
           <DialogDescription>Log a new admission inquiry from a parent</DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Student Name *" span={2}>
             <Input value={form.student_name}
               onChange={e => setForm(f => ({ ...f, student_name: e.target.value }))}
@@ -484,7 +500,7 @@ function NewApplicationModal({ classes, onClose }: { classes: any[], onClose: ()
           <DialogTitle>New Admission Application</DialogTitle>
           <DialogDescription>Starts the Counselor → Accountant → Principal approval workflow automatically</DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <Label htmlFor="app-fn" className="mb-1.5 block">Student First Name *</Label>
             <Input id="app-fn" value={form.student_first_name}

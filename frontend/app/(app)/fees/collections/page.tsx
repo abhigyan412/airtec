@@ -1,15 +1,17 @@
 'use client'
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { feeApi } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
-import { ArrowLeft, AlertTriangle, Phone, ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react'
+import { ArrowLeft, AlertTriangle, Phone, ChevronDown, ChevronUp, Loader2, RefreshCw, CreditCard } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 
 const BUCKET_LABELS: Record<string, { label: string, color: string }> = {
@@ -50,20 +52,24 @@ export default function CollectionsPage() {
 
   return (
     <div className="animate-fade-in space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-start gap-3">
-          <Button asChild variant="ghost" size="icon" className="mt-0.5" aria-label="Back to fees">
-            <Link href="/fees"><ArrowLeft className="h-5 w-5" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Collections &amp; Dues</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">Aging report, defaulter tracking, and overdue management</p>
-          </div>
-        </div>
-        <Button variant="outline" onClick={() => lateFineMutation.mutate()} disabled={lateFineMutation.isPending}>
-          {lateFineMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          Recalculate Late Fines
+      {/* The back arrow sits outside PageHeader so the shared header keeps its
+          icon + title + actions layout on every page. */}
+      <div className="mb-6 flex items-start gap-3">
+        <Button asChild variant="ghost" size="icon" className="mt-0.5 shrink-0" aria-label="Back to fees">
+          <Link href="/fees"><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
+        <PageHeader
+          title="Collections & Dues"
+          description="Aging report, defaulter tracking, and overdue management"
+          icon={CreditCard}
+          className="mb-0 flex-1"
+          actions={
+            <Button variant="outline" onClick={() => lateFineMutation.mutate()} disabled={lateFineMutation.isPending}>
+              {lateFineMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Recalculate Late Fines
+            </Button>
+          }
+        />
       </div>
 
       {/* Aging buckets */}
@@ -73,7 +79,11 @@ export default function CollectionsPage() {
         </CardHeader>
         <CardContent>
           {agingLoading ? (
-            <div className="flex h-20 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-[116px] rounded-xl" />
+              ))}
+            </div>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
               {bucketOrder.map(key => {
@@ -84,7 +94,7 @@ export default function CollectionsPage() {
                     <span className={cn('mb-2 inline-block rounded-full px-2 py-0.5 text-xs font-semibold', config.color)}>
                       {config.label}
                     </span>
-                    <p className="text-xl font-bold text-foreground">{formatCurrency(b.total)}</p>
+                    <p className="text-xl font-bold tabular-nums text-foreground">{formatCurrency(b.total)}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">{b.count} invoice{b.count !== 1 ? 's' : ''}</p>
                   </div>
                 )
@@ -116,12 +126,18 @@ export default function CollectionsPage() {
         </CardHeader>
         <CardContent className="p-0">
           {defaultersLoading ? (
-            <div className="p-12 text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" /></div>
+            <div className="space-y-3 p-6">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
           ) : !(defaulters ?? []).length ? (
             <EmptyState
               icon={AlertTriangle}
               title="No defaulters found 🎉"
-              description={`No students overdue by ${minDays}+ days`}
+              description={minDays > 0
+                ? `Nobody is overdue by ${minDays}+ days. Lower the threshold above to widen the search.`
+                : 'Every invoice is either paid or not yet due.'}
             />
           ) : (
             <Table>
@@ -129,18 +145,18 @@ export default function CollectionsPage() {
                 <TableRow className="hover:bg-transparent">
                   <TableHead>Student</TableHead>
                   <TableHead>Class</TableHead>
-                  <TableHead>Outstanding</TableHead>
-                  <TableHead>Max Days Overdue</TableHead>
-                  <TableHead>Parent Contact</TableHead>
-                  <TableHead />
+                  <TableHead className="text-right">Outstanding</TableHead>
+                  <TableHead className="hidden md:table-cell">Max Days Overdue</TableHead>
+                  <TableHead className="hidden md:table-cell">Parent Contact</TableHead>
+                  <TableHead className="hidden md:table-cell" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {(defaulters ?? []).map((d: any) => {
                   const isExpanded = expandedStudent === d.student.id
                   return (
-                    <>
-                      <TableRow key={d.student.id} onClick={() => setExpandedStudent(isExpanded ? null : d.student.id)}>
+                    <Fragment key={d.student.id}>
+                      <TableRow onClick={() => setExpandedStudent(isExpanded ? null : d.student.id)}>
                         <TableCell className="font-semibold text-foreground">
                           {d.student.first_name} {d.student.last_name}
                           <p className="font-mono text-xs text-muted-foreground">{d.student.admission_number}</p>
@@ -148,36 +164,36 @@ export default function CollectionsPage() {
                         <TableCell className="text-muted-foreground">
                           {d.student.classes?.name}{d.student.sections?.name ? ` · ${d.student.sections.name}` : ''}
                         </TableCell>
-                        <TableCell className="font-bold text-destructive">{formatCurrency(d.total_outstanding)}</TableCell>
-                        <TableCell>
-                          <span className={cn('rounded-full px-2 py-0.5 text-xs font-semibold',
+                        <TableCell className="text-right font-bold tabular-nums text-destructive">{formatCurrency(d.total_outstanding)}</TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          <span className={cn('rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums',
                             d.max_days_overdue > 90 ? 'bg-destructive/20 text-destructive' :
                             d.max_days_overdue > 60 ? 'bg-destructive/10 text-destructive' :
                             d.max_days_overdue > 30 ? 'bg-warning/15 text-warning' : 'bg-warning/10 text-warning')}>
                             {d.max_days_overdue} days
                           </span>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">
+                        <TableCell className="hidden md:table-cell text-muted-foreground">
                           {d.parent_contact?.father_phone && (
                             <span className="flex items-center gap-1 text-xs">
                               <Phone className="h-3 w-3 text-muted-foreground" /> {d.parent_contact.father_phone}
                             </span>
                           )}
                         </TableCell>
-                        <TableCell className="text-right text-muted-foreground">
+                        <TableCell className="hidden md:table-cell text-right text-muted-foreground">
                           {isExpanded ? <ChevronUp className="inline h-4 w-4" /> : <ChevronDown className="inline h-4 w-4" />}
                         </TableCell>
                       </TableRow>
                       {isExpanded && (
-                        <TableRow key={`${d.student.id}-detail`} className="hover:bg-transparent">
+                        <TableRow className="hover:bg-transparent">
                           <TableCell colSpan={6} className="bg-muted/40">
                             <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{d.invoice_count} overdue invoice{d.invoice_count !== 1 ? 's' : ''}</p>
                             <div className="space-y-1.5">
                               {d.invoices.map((inv: any) => (
                                 <div key={inv.id} className="flex items-center justify-between text-sm">
                                   <span className="font-mono text-xs text-muted-foreground">{inv.invoice_number}</span>
-                                  <span className="text-muted-foreground">{inv.days_overdue} days overdue</span>
-                                  <span className="font-semibold text-destructive">{formatCurrency(inv.amount_due)}</span>
+                                  <span className="tabular-nums text-muted-foreground">{inv.days_overdue} days overdue</span>
+                                  <span className="font-semibold tabular-nums text-destructive">{formatCurrency(inv.amount_due)}</span>
                                 </div>
                               ))}
                             </div>
@@ -190,7 +206,7 @@ export default function CollectionsPage() {
                           </TableCell>
                         </TableRow>
                       )}
-                    </>
+                    </Fragment>
                   )
                 })}
               </TableBody>

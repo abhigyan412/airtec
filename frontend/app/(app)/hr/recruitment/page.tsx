@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi, teamApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowLeft, Plus, Phone, Star, Briefcase, Loader2, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Plus, Phone, Star, Briefcase, Loader2, ShieldCheck, UserPlus, Users } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -16,7 +16,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { PageHeader } from '@/components/shared/PageHeader'
 
+// Stage colours are categorical — they identify a step in the hiring pipeline,
+// not a good/bad state — so they stay outside the semantic token scale. Each
+// entry uses the `bg-<hue>-500/10 + text-<hue>-600 dark:text-<hue>-400` form so
+// it stays legible in both themes.
 const STAGES = [
   { key: 'applied',             label: 'Applied',     color: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/25' },
   { key: 'shortlisted',         label: 'Shortlisted', color: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/25' },
@@ -72,27 +79,29 @@ export default function RecruitmentPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-start gap-2">
-          <Button variant="ghost" size="icon" asChild className="mt-1 shrink-0">
-            <Link href="/hr/staff" aria-label="Back to staff"><ArrowLeft className="h-5 w-5" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Recruitment</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">Apply → Shortlist → Interview → Selection → Joining</p>
-          </div>
-        </div>
-        <div className="flex gap-3">
-          <Button variant="outline" asChild>
-            <Link href="/hr/recruitment/jobs"><Briefcase className="h-4 w-4" /> Manage Jobs</Link>
-          </Button>
-          <Button variant="outline" onClick={() => setShowJobModal(true)}>
-            <Briefcase className="h-4 w-4" /> New Job Posting
-          </Button>
-          <Button onClick={() => setShowCandidateModal(true)}>
-            <Plus className="h-4 w-4" /> Add Candidate
-          </Button>
-        </div>
+      <div className="flex items-start gap-2">
+        <Button variant="ghost" size="icon" asChild className="mt-1 shrink-0">
+          <Link href="/hr/staff" aria-label="Back to staff"><ArrowLeft className="h-5 w-5" /></Link>
+        </Button>
+        <PageHeader
+          className="mb-0 flex-1"
+          title="Recruitment"
+          description="Apply → Shortlist → Interview → Selection → Joining"
+          icon={UserPlus}
+          actions={
+            <>
+              <Button variant="outline" asChild>
+                <Link href="/hr/recruitment/jobs"><Briefcase className="h-4 w-4" /> Manage Jobs</Link>
+              </Button>
+              <Button variant="outline" onClick={() => setShowJobModal(true)}>
+                <Briefcase className="h-4 w-4" /> New Job Posting
+              </Button>
+              <Button onClick={() => setShowCandidateModal(true)}>
+                <Plus className="h-4 w-4" /> Add Candidate
+              </Button>
+            </>
+          }
+        />
       </div>
 
       {!canApproveOffer && (
@@ -106,13 +115,13 @@ export default function RecruitmentPage() {
       {jobsData && jobsData.length > 0 && (
         <div className="flex flex-wrap gap-2">
           <button onClick={() => setJobFilter('')}
-            className={cn('rounded-full border px-3 py-1.5 text-xs font-semibold transition-all',
+            className={cn('rounded-full border px-3 py-1.5 text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               !jobFilter ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground hover:border-primary/40')}>
             All Positions
           </button>
           {jobsData.map((j: any) => (
             <button key={j.id} onClick={() => setJobFilter(jobFilter === j.id ? '' : j.id)}
-              className={cn('flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all',
+              className={cn('flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                 jobFilter === j.id ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground hover:border-primary/40')}>
               {j.title}
               <span className={cn('rounded-full px-1.5 text-xs', jobFilter === j.id ? 'bg-primary-foreground/20' : 'bg-muted')}>{j.application_count}</span>
@@ -127,7 +136,7 @@ export default function RecruitmentPage() {
           const count = stats?.by_status?.find((s: any) => s.status === stage.key)?.count ?? 0
           return (
             <Card key={stage.key} className="p-3 text-center">
-              <p className="text-xl font-bold text-foreground">{count}</p>
+              <p className="text-xl font-bold tabular-nums text-foreground">{count}</p>
               <span className={cn('mt-1 inline-block rounded-full border px-1.5 py-0.5 text-xs font-medium', stage.color)}>{stage.label}</span>
             </Card>
           )
@@ -136,8 +145,44 @@ export default function RecruitmentPage() {
 
       {/* Kanban board */}
       {isLoading ? (
-        <Card className="p-12 text-center">
-          <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
+        // Same shape as the board: seven fixed-width columns, each a stage
+        // header plus a couple of candidate cards.
+        <div className="overflow-x-auto pb-4">
+          <div className="flex min-w-max gap-4">
+            {STAGES.map(stage => (
+              <div key={stage.key} className="w-72 flex-shrink-0">
+                <Skeleton className="mb-3 h-[42px] w-full rounded-xl" />
+                <div className="space-y-2">
+                  <Skeleton className="h-[104px] w-full rounded-xl" />
+                  <Skeleton className="h-[104px] w-full rounded-xl" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (applications ?? []).length === 0 ? (
+        <Card>
+          {jobFilter ? (
+            <EmptyState
+              icon={Users}
+              title="No candidates for this position"
+              description="Nobody has applied to this job posting yet. Clear the filter to see the whole pipeline, or add a candidate against this posting."
+              action={
+                <Button variant="outline" onClick={() => setJobFilter('')}>Show all positions</Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={Users}
+              title="No candidates in the pipeline"
+              description="Add a candidate to start tracking them through Apply → Shortlist → Interview → Selection → Joining."
+              action={
+                <Button onClick={() => setShowCandidateModal(true)}>
+                  <Plus className="h-4 w-4" /> Add Candidate
+                </Button>
+              }
+            />
+          )}
         </Card>
       ) : (
         <div className="overflow-x-auto pb-4">
@@ -161,14 +206,22 @@ export default function RecruitmentPage() {
 
                     return (
                       <div key={cand.id} onClick={() => setSelectedCandidate(cand)}
-                        className="group cursor-pointer rounded-xl border border-border bg-card p-3 transition-all hover:border-primary/30 hover:shadow-md">
+                        role="button"
+                        tabIndex={0}
+                        // Guarded on currentTarget so Enter/Space inside the
+                        // nested quick-move Select doesn't reopen the card.
+                        onKeyDown={e => {
+                          if (e.target !== e.currentTarget) return
+                          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedCandidate(cand) }
+                        }}
+                        className="group cursor-pointer rounded-xl border border-border bg-card p-3 transition-all hover:border-primary/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             <p className="truncate text-sm font-semibold text-foreground">{cand.candidate_name}</p>
                             <p className="font-mono text-xs text-muted-foreground">{cand.application_number}</p>
                           </div>
                           {cand.rating && (
-                            <div className="flex flex-shrink-0 items-center gap-0.5 text-amber-500">
+                            <div className="flex flex-shrink-0 items-center gap-0.5 text-amber-500 dark:text-amber-400">
                               <Star className="h-3 w-3 fill-current" />
                               <span className="text-xs font-semibold">{cand.rating}</span>
                             </div>
@@ -287,7 +340,7 @@ function JobPostingModal({ onClose }: { onClose: () => void }) {
             <Label>Job Title *</Label>
             <Input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Mathematics Teacher" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Department</Label>
               <Input value={form.department} onChange={e => setForm(f => ({ ...f, department: e.target.value }))} placeholder="e.g. Academics" />
@@ -361,7 +414,7 @@ function CandidateModal({ jobs, onClose }: { jobs: any[], onClose: () => void })
         <DialogHeader>
           <DialogTitle>Add Candidate</DialogTitle>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="col-span-2 space-y-1.5">
             <Label>Candidate Name *</Label>
             <Input value={form.candidate_name} onChange={e => setForm(f => ({ ...f, candidate_name: e.target.value }))} />
@@ -456,7 +509,7 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: any, onClose:
           <p className="font-mono text-xs text-muted-foreground">{candidate.application_number}</p>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             <div className="flex items-center gap-2 text-muted-foreground"><Phone className="h-3.5 w-3.5" /> {candidate.phone}</div>
             {candidate.job_postings?.title && <div className="col-span-2"><span className="text-xs text-muted-foreground">Position: </span><span className="font-medium text-primary">{candidate.job_postings.title}</span></div>}
             {candidate.current_designation && <div className="text-foreground"><span className="text-xs text-muted-foreground">Current Role: </span>{candidate.current_designation}</div>}
@@ -482,8 +535,10 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: any, onClose:
             <div className="flex gap-2">
               {[1,2,3,4,5].map(r => (
                 <button key={r} onClick={() => setRating(r)}
-                  className={cn('flex h-10 w-10 items-center justify-center rounded-lg border-2 transition-all', Number(rating) === r ? 'border-amber-400 bg-amber-400/10' : 'border-border hover:border-amber-300')}>
-                  <Star className={cn('h-4 w-4', Number(rating) >= r ? 'fill-current text-amber-400' : 'text-muted-foreground')} />
+                  aria-label={`Rate ${r} out of 5`}
+                  aria-pressed={Number(rating) === r}
+                  className={cn('flex h-10 w-10 items-center justify-center rounded-lg border-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2', Number(rating) === r ? 'border-amber-500/60 bg-amber-500/10' : 'border-border hover:border-amber-500/40')}>
+                  <Star className={cn('h-4 w-4', Number(rating) >= r ? 'fill-current text-amber-500 dark:text-amber-400' : 'text-muted-foreground')} />
                 </button>
               ))}
             </div>

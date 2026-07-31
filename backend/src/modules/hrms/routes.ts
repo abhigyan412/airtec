@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
+import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { getPermissionsForRole } from '../../shared/middleware/permissions'
@@ -1054,8 +1055,7 @@ router.post('/applications', asyncHandler(async (req: AuthRequest, res: Response
   const body = JobApplicationSchema.parse(req.body)
   const school_id = req.user!.school_id
 
-  const { count } = await supabase.from('job_applications').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-  const appNumber = `CAND${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(4, '0')}`
+  const appNumber = await nextDocumentNumber(school_id, 'CAND')
 
   const { data, error } = await supabase
     .from('job_applications')

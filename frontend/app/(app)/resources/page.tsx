@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { resourcesApi, admissionApi } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
 import {
-  Plus, Upload, Trash2, Eye, ExternalLink, BookOpen, Loader2, Search,
+  Plus, Upload, Trash2, Eye, ExternalLink, BookOpen, Loader2, Search, Library,
   NotebookText, ClipboardList, GraduationCap, FileText, Video, BookmarkCheck, Paperclip,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -13,7 +13,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { PageHeader } from '@/components/shared/PageHeader'
 import {
   Select,
   SelectTrigger,
@@ -78,20 +80,23 @@ export default function ResourcesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Resource Centre</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Study materials, assignments and references for students</p>
-        </div>
-        <Button onClick={() => setShowUpload(true)}>
-          <Plus className="h-4 w-4" /> Upload Resource
-        </Button>
-      </div>
+      <PageHeader
+        title="Resource Centre"
+        description="Study materials, assignments and references for students"
+        icon={Library}
+        actions={
+          <Button onClick={() => setShowUpload(true)}>
+            <Plus className="h-4 w-4" /> Upload Resource
+          </Button>
+        }
+      />
 
       {/* Type filter pills */}
       <div className="flex flex-wrap gap-2">
         <button onClick={() => setTypeFilter('')}
+          aria-pressed={!typeFilter}
           className={cn('flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
             !typeFilter
               ? 'border-primary/20 bg-primary/10 text-primary'
               : 'border-border bg-card text-muted-foreground hover:border-primary/30 hover:text-primary')}>
@@ -102,7 +107,9 @@ export default function ResourcesPage() {
           const active = typeFilter === t.value
           return (
             <button key={t.value} onClick={() => setTypeFilter(active ? '' : t.value)}
+              aria-pressed={active}
               className={cn('flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                 active
                   ? 'border-primary/20 bg-primary/10 text-primary'
                   : 'border-border bg-card text-muted-foreground hover:border-primary/30 hover:text-primary')}>
@@ -133,17 +140,28 @@ export default function ResourcesPage() {
 
       {/* Resources */}
       {isLoading ? (
-        <Card>
-          <div className="p-16 text-center">
-            <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
-          </div>
-        </Card>
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-[70px] w-full rounded-2xl" />
+          ))}
+        </div>
       ) : filtered.length === 0 ? (
         <Card>
           <EmptyState
             icon={BookOpen}
-            title="No resources found"
-            description="Upload your first resource to get started"
+            title={search || classFilter || typeFilter ? 'No matching resources' : 'No resources yet'}
+            description={search || classFilter || typeFilter
+              ? 'Nothing matches the current search, class or type filter. Try widening it.'
+              : 'Upload notes, assignments, syllabi or video links so students and teachers can find them here.'}
+            action={search || classFilter || typeFilter ? (
+              <Button variant="outline" onClick={() => { setSearch(''); setClassFilter(''); setTypeFilter('') }}>
+                Clear filters
+              </Button>
+            ) : (
+              <Button onClick={() => setShowUpload(true)}>
+                <Plus className="h-4 w-4" /> Upload Resource
+              </Button>
+            )}
           />
         </Card>
       ) : typeFilter ? (
@@ -280,7 +298,7 @@ function UploadModal({ classes, onClose }: { classes: any[], onClose: () => void
               onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
               placeholder="e.g. Chapter 5 Notes - Algebra" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Type *</Label>
               <Select value={form.resource_type} onValueChange={v => setForm(f => ({ ...f, resource_type: v }))}>
@@ -323,8 +341,9 @@ function UploadModal({ classes, onClose }: { classes: any[], onClose: () => void
           ) : (
             <div className="space-y-1.5">
               <Label>File *</Label>
-              <div onClick={() => fileRef.current?.click()}
-                className={cn('cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition-colors',
+              <button type="button" onClick={() => fileRef.current?.click()}
+                className={cn('w-full cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                   file ? 'border-primary/40 bg-primary/5' : 'border-border hover:border-primary/40 hover:bg-muted/40')}>
                 {file ? (
                   <div>
@@ -338,7 +357,7 @@ function UploadModal({ classes, onClose }: { classes: any[], onClose: () => void
                     <p className="mt-1 text-xs text-muted-foreground">PDF, DOC, PPT, images up to 10MB</p>
                   </div>
                 )}
-              </div>
+              </button>
               <input ref={fileRef} type="file" className="hidden"
                 accept=".pdf,.doc,.docx,.ppt,.pptx,.jpg,.jpeg,.png,.xls,.xlsx,.txt"
                 onChange={e => setFile(e.target.files?.[0] ?? null)} />

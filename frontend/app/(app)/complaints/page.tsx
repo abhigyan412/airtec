@@ -11,6 +11,8 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { StatCard } from '@/components/shared/StatCard'
 import { EmptyState } from '@/components/shared/EmptyState'
 import {
@@ -52,7 +54,7 @@ export default function ComplaintsPage() {
   const [priorityFilter, setPriorityFilter] = useState('')
   const qc = useQueryClient()
 
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['complaint-stats'],
     queryFn: () => complaintsApi.stats().then(r => r.data),
   })
@@ -77,23 +79,32 @@ export default function ComplaintsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Complaints</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Track and resolve student and parent complaints</p>
-        </div>
-        <Button onClick={() => setShowNew(true)}>
-          <Plus className="h-4 w-4" /> New Complaint
-        </Button>
-      </div>
+      <PageHeader
+        title="Complaints"
+        description="Track and resolve student and parent complaints"
+        icon={MessageSquare}
+        actions={
+          <Button onClick={() => setShowNew(true)}>
+            <Plus className="h-4 w-4" /> New Complaint
+          </Button>
+        }
+      />
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Open" value={stats?.open ?? 0} icon={AlertCircle} accent="warning" />
-        <StatCard label="In Progress" value={stats?.in_progress ?? 0} icon={Clock} accent="info" />
-        <StatCard label="Resolved" value={stats?.resolved ?? 0} icon={CheckCircle} accent="success" />
-        <StatCard label="Urgent" value={stats?.urgent ?? 0} icon={AlertCircle} accent="destructive" />
-      </div>
+      {statsLoading ? (
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[120px] rounded-xl" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <StatCard label="Open" value={stats?.open ?? 0} icon={AlertCircle} accent="warning" />
+          <StatCard label="In Progress" value={stats?.in_progress ?? 0} icon={Clock} accent="info" />
+          <StatCard label="Resolved" value={stats?.resolved ?? 0} icon={CheckCircle} accent="success" />
+          <StatCard label="Urgent" value={stats?.urgent ?? 0} icon={AlertCircle} accent="destructive" />
+        </div>
+      )}
 
       {/* Filters */}
       <Card>
@@ -121,13 +132,31 @@ export default function ComplaintsPage() {
       {/* Complaints list */}
       <Card>
         {isLoading ? (
-          <div className="p-12 text-center text-muted-foreground">Loading...</div>
+          <div className="divide-y divide-border">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="space-y-2 px-6 py-4">
+                <Skeleton className="h-5 w-56" />
+                <Skeleton className="h-4 w-40" />
+                <Skeleton className="h-3 w-64" />
+              </div>
+            ))}
+          </div>
         ) : !(complaints ?? []).length ? (
-          <EmptyState icon={MessageSquare} title="No complaints yet" />
+          <EmptyState
+            icon={MessageSquare}
+            title={statusFilter || priorityFilter ? 'No complaints match these filters' : 'No complaints yet'}
+            description={statusFilter || priorityFilter
+              ? 'Try widening the status or priority filter above.'
+              : 'Nothing has been raised so far. Log a complaint here to track it through to resolution.'}
+            action={statusFilter || priorityFilter
+              ? <Button variant="outline" onClick={() => { setStatusFilter(''); setPriorityFilter('') }}>Clear filters</Button>
+              : <Button onClick={() => setShowNew(true)}><Plus className="h-4 w-4" /> New Complaint</Button>}
+          />
         ) : (
           <div className="divide-y divide-border">
             {(complaints ?? []).map((c: any) => (
-              <div key={c.id} className="cursor-pointer px-6 py-4 transition-colors hover:bg-muted/50"
+              <button key={c.id} type="button"
+                className="block w-full px-6 py-4 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 onClick={() => setSelected(c)}>
                 <div className="flex items-start gap-4">
                   <div className="min-w-0 flex-1">
@@ -152,7 +181,7 @@ export default function ComplaintsPage() {
                     {c.status.replace('_', ' ')}
                   </Badge>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         )}
@@ -194,7 +223,7 @@ function NewComplaintModal({ onClose }: { onClose: () => void }) {
           <DialogTitle>New Complaint</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Category</Label>
               <Select value={form.category} onValueChange={v => setForm(f => ({ ...f, category: v }))}>
@@ -290,7 +319,7 @@ function ComplaintDetailModal({ complaint, onClose, onUpdate }: { complaint: any
           </div>
 
           {/* Status update */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Update Status</Label>
               <Select defaultValue={complaint.status} onValueChange={v => onUpdate(complaint.id, { status: v })}>

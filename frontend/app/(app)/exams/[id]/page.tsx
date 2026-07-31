@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation'
 import { api, admitCardApi, documentsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone } from 'lucide-react'
+import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone, BookOpen } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
@@ -14,6 +14,8 @@ import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
@@ -25,6 +27,8 @@ import {
 } from '@/components/ui/select'
 
 const TABS = ['Datesheet', 'Marks Entry', 'Results']
+
+const titleCase = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
 const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   draft: 'secondary',
@@ -66,53 +70,88 @@ export default function ExamDetailPage() {
   })
 
   if (isLoading) {
-    return <div className="p-12 text-center text-muted-foreground">Loading exam...</div>
+    return (
+      <div className="max-w-5xl space-y-6">
+        <div className="flex items-start gap-4">
+          <Skeleton className="h-10 w-10 shrink-0 rounded-xl" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-7 w-64" />
+            <Skeleton className="h-4 w-48" />
+          </div>
+        </div>
+        <Skeleton className="h-10 w-72 rounded-lg" />
+        <Skeleton className="h-64 w-full rounded-2xl" />
+      </div>
+    )
   }
 
   if (!exam) {
-    return <div className="p-12 text-center text-muted-foreground">Exam not found</div>
+    return (
+      <div className="max-w-5xl space-y-6">
+        <Button variant="ghost" size="sm" asChild>
+          <Link href="/exams">
+            <ArrowLeft className="h-4 w-4" /> Back to exams
+          </Link>
+        </Button>
+        <Card>
+          <EmptyState
+            icon={FileText}
+            title="Exam not found"
+            description="This exam may have been deleted, or the link is out of date. Pick another exam from the list."
+            action={
+              <Button asChild>
+                <Link href="/exams">Back to exams</Link>
+              </Button>
+            }
+          />
+        </Card>
+      </div>
+    )
   }
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild aria-label="Back to exams">
+      <div>
+        <Button variant="ghost" size="sm" asChild className="-ml-2 mb-2 text-muted-foreground">
           <Link href="/exams">
-            <ArrowLeft className="h-5 w-5 text-muted-foreground" />
+            <ArrowLeft className="h-4 w-4" /> Back to exams
           </Link>
         </Button>
-        <div className="flex-1">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">{exam.name}</h1>
-            <Badge variant={STATUS_VARIANT[exam.status] ?? 'secondary'} className="capitalize">
-              {exam.status?.replace(/_/g, ' ')}
-            </Badge>
-          </div>
-          <p className="mt-0.5 text-sm capitalize text-muted-foreground">
-            {exam.exam_type?.replace('_', ' ')} · {exam.academic_years?.name}
-            {exam.start_date && ` · ${formatDate(exam.start_date)}`}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" asChild>
-            <a href={admitCardApi.bulk(id)} target="_blank" rel="noreferrer">
-              Bulk Admit Cards
-            </a>
-          </Button>
-          {(exam.status === 'completed' || exam.status === 'ongoing') && (
-            <Button
-              onClick={() => generateResults.mutate()}
-              disabled={generateResults.isPending}
-              className="bg-success text-success-foreground hover:bg-success/90"
-            >
-              {generateResults.isPending
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <BarChart2 className="h-4 w-4" />
-              }
-              Generate Results
-            </Button>
-          )}
-        </div>
+
+        <PageHeader
+          title={exam.name}
+          description={[
+            titleCase(exam.exam_type ?? ''),
+            exam.academic_years?.name,
+            exam.start_date ? formatDate(exam.start_date) : null,
+          ].filter(Boolean).join(' · ')}
+          icon={BookOpen}
+          actions={
+            <>
+              <Badge variant={STATUS_VARIANT[exam.status] ?? 'secondary'} className="capitalize">
+                {exam.status?.replace(/_/g, ' ')}
+              </Badge>
+              <Button variant="outline" asChild>
+                <a href={admitCardApi.bulk(id)} target="_blank" rel="noreferrer">
+                  Bulk Admit Cards
+                </a>
+              </Button>
+              {(exam.status === 'completed' || exam.status === 'ongoing') && (
+                <Button
+                  onClick={() => generateResults.mutate()}
+                  disabled={generateResults.isPending}
+                  className="bg-success text-success-foreground hover:bg-success/90"
+                >
+                  {generateResults.isPending
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <BarChart2 className="h-4 w-4" />
+                  }
+                  Generate Results
+                </Button>
+              )}
+            </>
+          }
+        />
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -134,7 +173,12 @@ export default function ExamDetailPage() {
               <EmptyState
                 icon={FileText}
                 title="No subjects added yet"
-                description="Add subjects to build the datesheet"
+                description="Add a subject with its date and max marks to build this exam's datesheet."
+                action={
+                  <Button onClick={() => setShowAddSubject(true)}>
+                    <Plus className="h-4 w-4" /> Add Subject
+                  </Button>
+                }
               />
             ) : (
               <Table>
@@ -251,8 +295,20 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
 
   if (isLoading) {
     return (
-      <Card className="flex items-center justify-center p-6">
-        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      <Card className="space-y-5 p-6">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-5 w-56" />
+          <Skeleton className="h-6 w-24 rounded-full" />
+        </div>
+        <div className="flex items-center gap-6">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="flex flex-1 flex-col items-center gap-1.5">
+              <Skeleton className="h-9 w-9 rounded-full" />
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="h-2.5 w-16" />
+            </div>
+          ))}
+        </div>
       </Card>
     )
   }
@@ -496,7 +552,7 @@ function MarksEntry({ examId, exam, classes }: any) {
 
   return (
     <Card className="space-y-4 p-6">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-1.5">
           <Label>Select Class</Label>
           <Select value={selectedClass}
@@ -525,13 +581,20 @@ function MarksEntry({ examId, exam, classes }: any) {
       </div>
 
       {!selectedClass && (
-        <EmptyState icon={Upload} title="Select a class and subject to enter marks" className="py-10" />
+        <EmptyState
+          icon={Upload}
+          title="Select a class and subject to enter marks"
+          description="Pick a class above, then the subject you're entering marks for."
+          className="py-10"
+        />
       )}
 
       {selectedClass && selectedSubject && (
         <div>
           {isLoading ? (
-            <div className="py-8 text-center text-muted-foreground">Loading students...</div>
+            <div className="space-y-3 py-4">
+              {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+            </div>
           ) : (
             <div>
               <Table className="mb-4">
@@ -564,8 +627,9 @@ function MarksEntry({ examId, exam, classes }: any) {
                         </TableCell>
                         <TableCell>
                           <input type="checkbox" checked={m.absent ?? false}
+                            aria-label={`Mark ${s.first_name} ${s.last_name} absent`}
                             onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], absent: e.target.checked, marks: '' } }))}
-                            className="h-4 w-4 rounded border-input accent-primary" />
+                            className="h-4 w-4 rounded border-input accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" />
                         </TableCell>
                       </TableRow>
                     )
@@ -596,7 +660,11 @@ function ResultsView({ examId }: { examId: string }) {
   })
 
   if (isLoading) {
-    return <div className="p-12 text-center text-muted-foreground">Loading results...</div>
+    return (
+      <Card className="space-y-3 p-6">
+        {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+      </Card>
+    )
   }
 
   if (!(data ?? []).length) {
@@ -605,7 +673,7 @@ function ResultsView({ examId }: { examId: string }) {
         <EmptyState
           icon={BarChart2}
           title="No results yet"
-          description="Upload marks and click Generate Results"
+          description="Enter marks on the Marks Entry tab, then use Generate Results to build report cards."
         />
       </Card>
     )
@@ -710,7 +778,7 @@ function AddSubjectModal({ examId, classes, onClose }: any) {
             <Input id="subject-name" value={form.subject_name} onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))}
               placeholder="e.g. Mathematics" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="subject-date">Exam Date</Label>
               <Input id="subject-date" type="date" value={form.exam_date} onChange={e => setForm(f => ({ ...f, exam_date: e.target.value }))} />

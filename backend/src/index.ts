@@ -6,6 +6,7 @@ import morgan from 'morgan'
 import rateLimit from 'express-rate-limit'
 import cron from 'node-cron'
 import { runFeeReminders } from './shared/utils/feeReminders'
+import { runDeliveries } from './shared/utils/delivery'
 
 import authRoutes from './modules/auth/routes'
 import sisRoutes from './modules/sis/routes'
@@ -26,24 +27,65 @@ const app = express()
 const PORT = process.env.PORT ?? 4000
 
 app.use(helmet({ contentSecurityPolicy: false }))
-// Two separate frontend apps now call this API: the staff admin app
-// and the parent/student family app (split from what used to be one
-// Next.js app's route groups). Each needs its own allowed origin.
-const allowedOrigins = [
-  process.env.FRONTEND_URL ?? 'http://localhost:3000',
-  process.env.FAMILY_FRONTEND_URL ?? 'http://localhost:3001',
-]
+// Both frontends proxy /api through their own Next server (see the
+// rewrites in each next.config.js), so the browser only ever talks to
+// the app's own origin and these requests reach us with no Origin header
+// at all — nothing to allowlist, whatever domain the app is served from.
+//
+// This is only load-bearing for something calling the API cross-origin:
+// a build where NEXT_PUBLIC_API_URL was set to an absolute backend URL
+// instead of /api (which silently opts out of the proxy), or a separately
+// hosted client. Comma-separated, so one deployment can name several
+// hostnames without a code change.
+const parseOrigins = (...values: (string | undefined)[]) =>
+  values
+    .flatMap(v => (v ?? '').split(','))
+    .map(s => s.trim().replace(/\/$/, ''))   // tolerate a trailing slash
+    .filter(Boolean)
+
+const configuredOrigins = parseOrigins(
+  process.env.ALLOWED_ORIGINS,
+  process.env.FRONTEND_URL,
+  process.env.FAMILY_FRONTEND_URL,
+)
+
+// Local dev origins stay allowed unless this is production, so setting
+// the prod domains doesn't break everyone's laptop.
+const allowedOrigins = Array.from(new Set([
+  ...configuredOrigins,
+  ...(process.env.NODE_ENV === 'production' ? [] : ['http://localhost:3000', 'http://localhost:3001']),
+]))
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
-    callback(new Error(`Origin ${origin} not allowed by CORS`))
+    // No Origin header = same-origin, curl, or a server-side call.
+    if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ''))) return callback(null, true)
+    // Log the rejection: the browser only ever shows a generic CORS
+    // failure, which is impossible to diagnose from the client side.
+    console.warn(`[cors] blocked origin ${origin} — allowed: ${allowedOrigins.join(', ') || '(none configured)'}`)
+    // Deny by withholding the CORS headers rather than throwing. Throwing
+    // turned every unlisted origin into a 500 from the error handler,
+    // which reads like the API is broken; the browser blocks the response
+    // either way, and the warning above is the real diagnostic.
+    callback(null, false)
   },
   credentials: true,
 }))
 app.use(morgan('dev'))
 app.use(express.json({ limit: '10mb' }))
 
-app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }))
+// Brute-force protection, scoped to the endpoints where a guess is
+// actually worth something. It used to sit on all of /api/auth, which
+// swept in /auth/me — fired on every single page load — and /auth/refresh,
+// the silent re-auth path. Twenty requests per 15 minutes is nothing for
+// those two (a dozen page loads exhausts it), and since the limiter keys
+// on IP, everyone behind one office NAT shared the same tiny budget:
+// normal use locked itself out with 429s that look exactly like a broken
+// login.
+const credentialLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 })
+app.use('/api/auth/login', credentialLimiter)
+app.use('/api/auth/register-school', credentialLimiter)
+
 app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 300 }))
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'airtec-api' }))
@@ -75,12 +117,28 @@ cron.schedule('0 7 * * *', () => {
     .catch(err => console.error('[fee-reminders] failed:', err))
 })
 
+// Drain the delivery outbox every minute. createNotification() also nudges
+// it via setImmediate, so this tick is the safety net for retries and for
+// anything enqueued while the worker was busy — not the primary path.
+//
+// Same caveat as the fee sweep above: an in-process schedule only runs
+// while the process is up, which on a host that sleeps when idle means it
+// may never fire. POST /notifications/run-deliveries is the external-
+// scheduler equivalent (design.md §7).
+cron.schedule('* * * * *', () => {
+  runDeliveries().catch(err => console.error('[delivery] tick failed:', err?.message))
+})
+
 app.listen(PORT, () => {
   console.log(`
   ┌─────────────────────────────────────┐
   │   AIRTEC API running on :${PORT}       │
   └─────────────────────────────────────┘
   `)
+  // Printed because a CORS rejection is invisible from the browser — it
+  // surfaces as a generic network failure with no hint of what the server
+  // would have accepted.
+  console.log(`  CORS allows: ${allowedOrigins.join(', ') || '(nothing configured — set ALLOWED_ORIGINS)'}\n`)
 })
 
 export default app

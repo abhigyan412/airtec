@@ -4,13 +4,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { hrmsApi } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, User, Calendar, IndianRupee, Loader2, Check, X, Edit3 } from 'lucide-react'
+import { ArrowLeft, User, Users, Calendar, IndianRupee, Loader2, Check, X, Edit3 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -67,44 +68,62 @@ export default function StaffDetailPage() {
   if (isLoading) {
     return (
       <div className="max-w-5xl space-y-6">
-        <Skeleton className="h-12 w-64" />
-        <Skeleton className="h-10 w-72" />
-        <Skeleton className="h-64 w-full rounded-2xl" />
+        <Skeleton className="h-14 w-72" />
+        <Skeleton className="h-10 w-64 rounded-lg" />
+        <Skeleton className="h-72 w-full rounded-xl" />
+        <Skeleton className="h-40 w-full rounded-xl" />
       </div>
     )
   }
-  if (!data) return <div className="py-20 text-center text-muted-foreground">Staff member not found</div>
+  if (!data) {
+    return (
+      <EmptyState
+        icon={User}
+        title="Staff member not found"
+        description="This profile may have been removed, or the link is out of date."
+        action={
+          <Button variant="outline" asChild>
+            <Link href="/hr/staff"><ArrowLeft className="h-4 w-4" /> Back to staff directory</Link>
+          </Button>
+        }
+      />
+    )
+  }
 
   const profile = data.profile
 
   return (
     <div className="max-w-5xl space-y-6">
       {/* Header */}
-      <div className="flex items-start gap-4">
-        <Button variant="ghost" size="icon" asChild className="mt-1">
-          <Link href="/hr/staff" aria-label="Back to staff directory"><ArrowLeft className="h-5 w-5" /></Link>
+      <div>
+        <Button variant="ghost" size="sm" asChild className="-ml-2 mb-3 text-muted-foreground">
+          <Link href="/hr/staff"><ArrowLeft className="h-4 w-4" /> Staff Directory</Link>
         </Button>
-        <div className="flex-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">{data.full_name}</h1>
-            <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold capitalize text-primary ring-1 ring-inset ring-primary/20">
-              {data.role?.replace('_', ' ')}
-            </span>
-            {profile?.employment_status && (
-              <span className={cn('rounded-full px-2.5 py-1 text-xs font-semibold capitalize ring-1 ring-inset',
-                profile.employment_status === 'active'
-                  ? 'bg-success/10 text-success ring-success/20'
-                  : 'bg-warning/10 text-warning ring-warning/20')}>
-                {profile.employment_status.replace('_', ' ')}
+        <PageHeader
+          className="mb-0"
+          title={data.full_name}
+          description={[
+            profile?.designation ?? 'No designation set',
+            profile?.department,
+            profile?.employee_id,
+          ].filter(Boolean).join(' · ')}
+          icon={Users}
+          actions={
+            <>
+              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold capitalize text-primary ring-1 ring-inset ring-primary/20">
+                {data.role?.replace('_', ' ')}
               </span>
-            )}
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {profile?.designation ?? 'No designation set'}
-            {profile?.department && ` · ${profile.department}`}
-            {profile?.employee_id && ` · ${profile.employee_id}`}
-          </p>
-        </div>
+              {profile?.employment_status && (
+                <span className={cn('rounded-full px-2.5 py-1 text-xs font-semibold capitalize ring-1 ring-inset',
+                  profile.employment_status === 'active'
+                    ? 'bg-success/10 text-success ring-success/20'
+                    : 'bg-warning/10 text-warning ring-warning/20')}>
+                  {profile.employment_status.replace('_', ' ')}
+                </span>
+              )}
+            </>
+          }
+        />
       </div>
 
       {/* Tabs */}
@@ -214,7 +233,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
             )}
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <Field label="Employee ID" name="employee_id" />
             <Field label="Designation" name="designation" />
             <Field label="Department" name="department" />
@@ -238,7 +257,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
       <Card>
         <CardContent className="p-6">
           <h3 className="mb-4 font-semibold text-foreground">Address</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="col-span-3"><Field label="Address" name="address" /></div>
             <Field label="City" name="city" />
             <Field label="State" name="state" />
@@ -249,7 +268,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
       <Card>
         <CardContent className="p-6">
           <h3 className="mb-4 font-semibold text-foreground">Bank &amp; Tax Details</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <Field label="Bank Name" name="bank_name" />
             <Field label="Account Number" name="bank_account_number" />
             <Field label="IFSC Code" name="bank_ifsc" />
@@ -261,7 +280,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
       <Card>
         <CardContent className="p-6">
           <h3 className="mb-4 font-semibold text-foreground">Emergency Contact</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <Field label="Contact Name" name="emergency_contact_name" />
             <Field label="Contact Phone" name="emergency_contact_phone" />
           </div>
@@ -302,7 +321,11 @@ function LeaveTab({ data, balances, staffId, onApprove, onReject, isPending }: a
         </CardHeader>
         <CardContent className="p-0">
           {(data.recent_leaves ?? []).length === 0 ? (
-            <EmptyState icon={Calendar} title="No leave requests yet" />
+            <EmptyState
+              icon={Calendar}
+              title="No leave requests yet"
+              description="Leave this staff member applies for will show up here for approval."
+            />
           ) : (
             <div className="divide-y divide-border">
               {(data.recent_leaves ?? []).map((lr: any) => (
@@ -368,21 +391,31 @@ function PayrollTab({ data, staffId, userName }: any) {
           </div>
 
           {!salary ? (
-            <EmptyState icon={IndianRupee} title="No salary structure set" className="py-8" />
+            <EmptyState
+              icon={IndianRupee}
+              title="No salary structure set"
+              description="Set basic pay, allowances and deductions before this staff member can be included in a payroll run."
+              className="py-8"
+              action={
+                <Button variant="outline" size="sm" onClick={() => setShowSalaryModal(true)}>
+                  <Edit3 className="h-3.5 w-3.5" /> Set Salary
+                </Button>
+              }
+            />
           ) : (
-            <div className="grid grid-cols-3 gap-x-8 gap-y-3 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-3 text-sm">
               <div><p className="text-xs text-muted-foreground">Basic Salary</p><p className="font-semibold text-foreground">₹{Number(salary.basic_salary).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">HRA</p><p className="font-semibold text-foreground">₹{Number(salary.hra ?? 0).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">DA</p><p className="font-semibold text-foreground">₹{Number(salary.da ?? 0).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">Conveyance</p><p className="font-semibold text-foreground">₹{Number(salary.conveyance_allowance ?? 0).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">Medical Allowance</p><p className="font-semibold text-foreground">₹{Number(salary.medical_allowance ?? 0).toLocaleString('en-IN')}</p></div>
               <div><p className="text-xs text-muted-foreground">Other Allowances</p><p className="font-semibold text-foreground">₹{Number(salary.other_allowances ?? 0).toLocaleString('en-IN')}</p></div>
-              <div className="col-span-3 grid grid-cols-3 gap-x-8 border-t border-border pt-3">
+              <div className="col-span-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 border-t border-border pt-3">
                 <div><p className="text-xs text-muted-foreground">Gross Salary</p><p className="font-bold text-success">₹{gross.toLocaleString('en-IN')}</p></div>
                 <div><p className="text-xs text-muted-foreground">Total Deductions</p><p className="font-bold text-destructive">₹{deductions.toLocaleString('en-IN')}</p></div>
                 <div><p className="text-xs text-muted-foreground">Net Salary</p><p className="text-lg font-bold text-primary">₹{net.toLocaleString('en-IN')}</p></div>
               </div>
-              <div className="col-span-3 grid grid-cols-3 gap-x-8 border-t border-border pt-2 text-xs text-muted-foreground">
+              <div className="col-span-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 border-t border-border pt-2 text-xs text-muted-foreground">
                 <div>PF: ₹{Number(salary.pf_deduction ?? 0).toLocaleString('en-IN')}</div>
                 <div>Prof. Tax: ₹{Number(salary.professional_tax ?? 0).toLocaleString('en-IN')}</div>
                 <div>Other: ₹{Number(salary.other_deductions ?? 0).toLocaleString('en-IN')}</div>
@@ -402,7 +435,12 @@ function PayrollTab({ data, staffId, userName }: any) {
             <EmptyState
               icon={IndianRupee}
               title="No payslips generated yet"
-              description="Generate from HR → Payroll"
+              description="Payslips appear here once a monthly payroll run including this staff member has been generated."
+              action={
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/hr/payroll">Go to Payroll</Link>
+                </Button>
+              }
             />
           ) : (
             <Table>
@@ -490,7 +528,7 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
         <div className="space-y-4">
           <div>
             <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Earnings</p>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <Field label="Basic Salary *" name="basic_salary" />
               <Field label="HRA" name="hra" />
               <Field label="DA" name="da" />
@@ -501,7 +539,7 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
           </div>
           <div>
             <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Deductions</p>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <Field label="PF" name="pf_deduction" />
               <Field label="Professional Tax" name="professional_tax" />
               <Field label="Other Deductions" name="other_deductions" />

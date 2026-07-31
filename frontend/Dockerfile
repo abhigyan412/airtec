@@ -17,6 +17,11 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 # points at the internal backend service on the Docker network.
 ARG BACKEND_URL=http://backend:4000
 ENV BACKEND_URL=$BACKEND_URL
+# Where a parent/student who lands on the staff login gets sent. The
+# browser follows this, so in prod it must be the portal's PUBLIC domain,
+# not an internal service name.
+ARG NEXT_PUBLIC_FAMILY_APP_URL=http://localhost:3001
+ENV NEXT_PUBLIC_FAMILY_APP_URL=$NEXT_PUBLIC_FAMILY_APP_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 # `public/` may not exist in this repo; ensure it does so the COPY below never fails.
 RUN mkdir -p public && npm run build

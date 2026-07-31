@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#4f46e5" />
+    <title>Offline — AIRTEC Family</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #fafafe;
+        color: #18181b;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #030711; color: #e2e8f0; }
+        .card { background: #0b1120; border-color: #1e293b; }
+        .muted { color: #94a3b8; }
+      }
+      .card {
+        width: 100%;
+        max-width: 380px;
+        text-align: center;
+        background: #fff;
+        border: 1px solid #e4e4e7;
+        border-radius: 16px;
+        padding: 40px 28px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+      }
+      .logo {
+        width: 56px;
+        height: 56px;
+        margin: 0 auto 20px;
+        border-radius: 14px;
+        background: #4f46e5;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      h1 { font-size: 18px; margin: 0 0 8px; font-weight: 700; }
+      p { font-size: 14px; line-height: 1.5; margin: 0 0 20px; }
+      .muted { color: #52525b; }
+      button {
+        font: inherit;
+        font-weight: 600;
+        font-size: 14px;
+        color: #fff;
+        background: #4f46e5;
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 20px;
+        cursor: pointer;
+      }
+      button:hover { background: #4338ca; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="logo">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+          <path d="M6 12v5c3 3 9 3 12 0v-5" />
+        </svg>
+      </div>
+      <h1>You're offline</h1>
+      <p class="muted">
+        AIRTEC needs a connection to load this page. Check your network and try
+        again.
+      </p>
+      <button onclick="location.reload()">Retry</button>
+    </div>
+  </body>
+</html>

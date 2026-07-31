@@ -1,4 +1,5 @@
 import { supabase } from '../../shared/db/client'
+import { invalidatePermissionsForUser } from '../../shared/middleware/permissions-v2'
 
 // ═══════════════════════════════════════════════════════════════
 // Default RBAC role → permission_code mapping.
@@ -152,6 +153,7 @@ export async function assignDefaultUserRole(userId: string, schoolId: string, le
     school_id: schoolId,
   })
   if (error) throw new Error(`Failed to assign user role: ${error.message}`)
+  invalidatePermissionsForUser(userId, schoolId)
 }
 
 /**
@@ -172,4 +174,5 @@ export async function setPrimaryUserRole(userId: string, schoolId: string, newLe
   }
 
   await assignDefaultUserRole(userId, schoolId, newLegacyRole)
+  invalidatePermissionsForUser(userId, schoolId)
 }

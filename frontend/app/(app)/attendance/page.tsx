@@ -15,6 +15,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import {
@@ -24,6 +25,9 @@ import {
 type AttendanceStatus = 'present' | 'absent' | 'late' | 'leave'
 type Tab = 'mark' | 'report'
 
+// Present/absent/late map onto the semantic tokens. "Leave" has no semantic
+// equivalent — it's a neutral category, not a good/bad state — so it keeps a
+// solid blue-500 fill, which reads correctly against white text in both themes.
 const STATUS_CONFIG = {
   present: { label: 'P', color: 'bg-success text-success-foreground', border: 'border-success', icon: CheckCircle },
   absent:  { label: 'A', color: 'bg-destructive text-destructive-foreground', border: 'border-destructive', icon: XCircle },
@@ -78,11 +82,13 @@ export default function AttendancePage() {
 
   if (!permLoading && !canView) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center text-muted-foreground">
-        <ShieldOff className="mb-3 h-12 w-12 text-muted-foreground/40" />
-        <p className="font-semibold text-foreground">Access Denied</p>
-        <p className="mt-1 text-sm">You don't have permission to view attendance.</p>
-      </div>
+      <Card>
+        <EmptyState
+          icon={ShieldOff}
+          title="You don't have access to attendance"
+          description="Your role doesn't include the attendance.view permission. Ask a school admin if you need it."
+        />
+      </Card>
     )
   }
 
@@ -184,7 +190,13 @@ function ClassWiseAttendanceChart({ date }: { date: string }) {
   const dateLabel = new Date(date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
 
   if (isLoading) {
-    return <Card className="h-64 animate-pulse" />
+    return (
+      <Card className="space-y-4 p-6">
+        <Skeleton className="h-5 w-48" />
+        <Skeleton className="h-3 w-56" />
+        <Skeleton className="h-[140px] w-full rounded-xl" />
+      </Card>
+    )
   }
 
   return (
@@ -195,20 +207,26 @@ function ClassWiseAttendanceChart({ date }: { date: string }) {
       <p className="mb-4 text-xs text-muted-foreground">{dateLabel}</p>
 
       {!data?.is_working_day ? (
-        <div className="flex h-[140px] flex-col items-center justify-center text-muted-foreground/50">
-          <Calendar className="mb-2 h-10 w-10" />
-          <p className="text-sm text-muted-foreground">No school on this date</p>
-        </div>
+        <EmptyState
+          icon={Calendar}
+          title="No school on this date"
+          description="It's a holiday or weekly off, so there's no attendance to compare."
+          className="py-8"
+        />
       ) : !allClasses.length ? (
-        <div className="flex h-[140px] flex-col items-center justify-center text-muted-foreground/50">
-          <BarChart3 className="mb-2 h-10 w-10" />
-          <p className="text-sm text-muted-foreground">No students found</p>
-        </div>
+        <EmptyState
+          icon={BarChart3}
+          title="No students found"
+          description="Add students to your classes and their attendance will show up here."
+          className="py-8"
+        />
       ) : !markedClasses.length ? (
-        <div className="flex h-[140px] flex-col items-center justify-center text-muted-foreground/50">
-          <ClipboardList className="mb-2 h-10 w-10" />
-          <p className="text-sm text-muted-foreground">No class has been marked yet for this date</p>
-        </div>
+        <EmptyState
+          icon={ClipboardList}
+          title="No class has been marked yet for this date"
+          description="Once a class teacher marks attendance, the comparison appears here."
+          className="py-8"
+        />
       ) : (
         <>
           <ResponsiveContainer width="100%" height={Math.max(140, markedClasses.length * 40)}>
@@ -363,7 +381,8 @@ function MarkTab({ classId, sectionId, className, canManage }: {
                 <div className="flex gap-2">
                   {(Object.keys(STATUS_CONFIG) as AttendanceStatus[]).map(s => (
                     <button key={s} onClick={() => markAll(s)}
-                      className={cn('rounded-lg border px-3 py-2 text-xs font-bold transition-colors', STATUS_CONFIG[s].color, STATUS_CONFIG[s].border)}>
+                      aria-label={`Mark everyone ${s}`}
+                      className={cn('rounded-lg border px-3 py-2 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2', STATUS_CONFIG[s].color, STATUS_CONFIG[s].border)}>
                       All {STATUS_CONFIG[s].label}
                     </button>
                   ))}
@@ -382,7 +401,7 @@ function MarkTab({ classId, sectionId, className, canManage }: {
       )}
 
       {classId && stats.total > 0 && (
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
             { label: 'Present', count: stats.present, key: 'present', pct: Math.round((stats.present/stats.total)*100) },
             { label: 'Absent',  count: stats.absent,  key: 'absent',  pct: Math.round((stats.absent/stats.total)*100) },
@@ -391,7 +410,7 @@ function MarkTab({ classId, sectionId, className, canManage }: {
           ].map(s => (
             <Card key={s.label}>
               <CardContent className="p-4">
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-2 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-sm text-muted-foreground">{s.label}</span>
                   <span className="text-lg font-bold text-foreground">{s.count}</span>
                 </div>
@@ -409,15 +428,23 @@ function MarkTab({ classId, sectionId, className, canManage }: {
 
       {!classId ? (
         <Card>
-          <EmptyState icon={Calendar} title={`Select a class to ${canManage ? 'mark' : 'view'} attendance`} />
+          <EmptyState
+            icon={Calendar}
+            title={`Select a class to ${canManage ? 'mark' : 'view'} attendance`}
+            description="Choose a class (and section, if you use them) above to load its register."
+          />
         </Card>
       ) : isLoading ? (
-        <Card>
-          <div className="p-12 text-center text-muted-foreground">Loading students...</div>
+        <Card className="space-y-3 p-6">
+          {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}
         </Card>
       ) : !(sheet?.students ?? []).length ? (
         <Card>
-          <EmptyState icon={Calendar} title="No students found in this class" />
+          <EmptyState
+            icon={Calendar}
+            title="No students found in this class"
+            description="Nobody is enrolled in this class or section yet, so there's nothing to mark."
+          />
         </Card>
       ) : (
         <Card className="overflow-hidden">
@@ -473,8 +500,10 @@ function MarkTab({ classId, sectionId, className, canManage }: {
                       <button key={s}
                         onClick={() => canManage && setAttendance(a => ({ ...a, [student.id]: s }))}
                         disabled={!canManage}
+                        aria-pressed={attendance[student.id] === s}
+                        aria-label={`Mark ${student.first_name} ${student.last_name} ${s}`}
                         className={cn(
-                          'h-9 w-9 rounded-xl border-2 text-xs font-bold transition-all',
+                          'h-9 w-9 rounded-xl border-2 text-xs font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                           attendance[student.id] === s
                             ? config.color + ' ' + config.border + ' scale-110 shadow-sm'
                             : 'border-border bg-background text-muted-foreground hover:border-muted-foreground/40',
@@ -539,12 +568,14 @@ function ReportTab({ classId, sectionId, className }: { classId: string; section
                 <Label>Period</Label>
                 <div className="flex items-center gap-1 rounded-lg bg-muted p-1">
                   <button onClick={() => setScope('month')}
-                    className={cn('rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
+                    aria-pressed={scope === 'month'}
+                    className={cn('rounded-md px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                       scope === 'month' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
                     Month
                   </button>
                   <button onClick={() => setScope('year')}
-                    className={cn('rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
+                    aria-pressed={scope === 'year'}
+                    className={cn('rounded-md px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                       scope === 'year' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
                     Academic Year
                   </button>
@@ -579,19 +610,27 @@ function ReportTab({ classId, sectionId, className }: { classId: string; section
 
       {!classId ? (
         <Card>
-          <EmptyState icon={BarChart3} title="Select a class to view its attendance report" />
+          <EmptyState
+            icon={BarChart3}
+            title="Select a class to view its attendance report"
+            description="Choose a class above to see each student's present, absent and leave totals."
+          />
         </Card>
       ) : scope === 'year' && !academicYear ? (
         <div className="rounded-2xl border border-warning/20 bg-warning/10 px-5 py-4 text-sm text-warning">
           No academic year is configured for this school yet.
         </div>
       ) : isLoading ? (
-        <Card>
-          <div className="p-12 text-center text-muted-foreground">Loading report...</div>
+        <Card className="space-y-3 p-6">
+          {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
         </Card>
       ) : students.length === 0 ? (
         <Card>
-          <EmptyState icon={BarChart3} title="No students found in this class" />
+          <EmptyState
+            icon={BarChart3}
+            title="No students found in this class"
+            description="Nobody is enrolled in this class or section yet, so there's nothing to report on."
+          />
         </Card>
       ) : workingDays === 0 ? (
         <div className="rounded-2xl border border-warning/20 bg-warning/10 px-5 py-4 text-sm text-warning">

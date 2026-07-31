@@ -150,7 +150,7 @@ export default function RegisterPage() {
                   <Input id="school_name" value={form.school_name} onChange={e => set('school_name', e.target.value)}
                     placeholder="e.g. Delhi Public School" />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label htmlFor="school_city">City</Label>
                     <Input id="school_city" value={form.school_city} onChange={e => set('school_city', e.target.value)}
@@ -162,7 +162,7 @@ export default function RegisterPage() {
                       placeholder="Uttar Pradesh" />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label htmlFor="school_phone">Phone</Label>
                     <Input id="school_phone" value={form.school_phone} onChange={e => set('school_phone', e.target.value)}
@@ -192,7 +192,7 @@ export default function RegisterPage() {
             {step === 1 && (
               <div className="space-y-5">
                 <div>
-                  <button onClick={() => setStep(0)} className="mb-4 flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
+                  <button onClick={() => setStep(0)} className="mb-4 flex items-center gap-1 rounded text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                     <ArrowLeft className="h-3.5 w-3.5" /> Back
                   </button>
                   <h1 className="text-xl font-bold text-foreground">Admin account</h1>
@@ -208,7 +208,7 @@ export default function RegisterPage() {
                   <Input id="email" type="email" value={form.email} onChange={e => set('email', e.target.value)}
                     placeholder="admin@yourschool.com" autoComplete="email" />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label htmlFor="password">Password *</Label>
                     <Input id="password" type="password" value={form.password} onChange={e => set('password', e.target.value)}

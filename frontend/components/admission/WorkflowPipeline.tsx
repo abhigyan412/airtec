@@ -10,6 +10,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
 
 interface WorkflowPipelineProps {
   applicationId: string
@@ -64,8 +65,24 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
 
   if (isLoading) {
     return (
-      <Card className="p-6 flex items-center justify-center">
-        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      <Card>
+        <CardContent className="p-6 space-y-5">
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-5 w-24 rounded-full" />
+          </div>
+          <div className="flex items-center gap-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="flex flex-1 flex-col items-center gap-1.5">
+                <Skeleton className="h-8 w-8 rounded-full" />
+                <Skeleton className="h-3 w-20" />
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-border pt-4">
+            <Skeleton className="h-4 w-64" />
+          </div>
+        </CardContent>
       </Card>
     )
   }
@@ -124,8 +141,9 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
           <StatusBadge status={status} />
         </div>
 
-        {/* Pipeline steps */}
-        <div className="flex items-center gap-1">
+        {/* Pipeline steps — role/action labels are whitespace-nowrap, so on a
+            narrow screen the row scrolls rather than overflowing the card. */}
+        <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1">
           {allSteps.length > 0 && renderSteps(allSteps, approvals, currentStep, status)}
         </div>
 

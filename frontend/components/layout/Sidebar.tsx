@@ -12,7 +12,6 @@ import {
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
-import { NotificationBell } from './NotificationBell'
 
 interface NavItem {
   label: string
@@ -158,10 +157,22 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const schoolName = (user as any)?.schools?.name ?? 'School ERP'
 
   return (
+    <>
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 [animation-duration:var(--duration-fast)] animate-in fade-in-0 lg:hidden"
+          onClick={onClose}
+        />
+      )}
+
       <aside
         className={cn(
-          'fixed left-0 top-0 z-50 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-300 ease-in-out',
-          'lg:static lg:z-auto lg:translate-x-0',
+          // The drawer travels on the iOS curve rather than ease-in-out: an
+          // ease-in start delays the first few pixels, which is exactly the
+          // moment the user is watching after tapping the menu button.
+          'fixed left-0 top-0 z-50 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar',
+          'transition-transform [transition-duration:var(--duration-base)] ease-drawer',
+          'lg:static lg:z-auto lg:translate-x-0 lg:transition-none',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
@@ -176,16 +187,16 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               <span className="block truncate text-[11px] leading-none text-muted-foreground">{schoolName}</span>
             </div>
           </Link>
-          <div className="flex items-center gap-1">
-            <NotificationBell />
-            <button
-              onClick={onClose}
-              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
-              aria-label="Close menu"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+          {/* The notification bell lives in the header, not here: its
+              dropdown is wider than the sidebar and got clipped by the
+              shell's overflow-hidden. */}
+          <button
+            onClick={onClose}
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
+            aria-label="Close menu"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
 
         {/* Nav */}
@@ -224,6 +235,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           ))}
         </div>
       </aside>
+    </>
   )
 }
 
@@ -250,7 +262,7 @@ function NavEntry({
         href={item.href}
         onClick={onClose}
         className={cn(
-          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
+          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors [transition-duration:var(--duration-press)] ease-out',
           active
             ? 'bg-sidebar-accent text-sidebar-accent-foreground'
             : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
@@ -269,7 +281,7 @@ function NavEntry({
       <button
         onClick={() => onToggle(item.label)}
         className={cn(
-          'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
+          'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors [transition-duration:var(--duration-press)] ease-out',
           anyChildActive ? 'text-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
         )}
       >
@@ -279,7 +291,10 @@ function NavEntry({
       </button>
 
       {isOpen && item.children && (
-        <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border pl-3">
+        // A group opening with no transition reads as the page jumping rather
+        // than as this group revealing its contents. Short and slide-only —
+        // this is opened a few times a session, so it must not feel like a wait.
+        <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border pl-3 [animation-duration:var(--duration-fast)] animate-in fade-in-0 slide-in-from-top-1">
           {item.children.map((child) => {
             const ChildIcon = child.icon
             const active = child.href ? isActive(child.href) : false
@@ -289,7 +304,7 @@ function NavEntry({
                 href={child.href ?? '#'}
                 onClick={onClose}
                 className={cn(
-                  'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-all duration-200',
+                  'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors [transition-duration:var(--duration-press)] ease-out',
                   active
                     ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
                     : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',

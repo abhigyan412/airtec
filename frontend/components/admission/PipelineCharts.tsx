@@ -2,18 +2,24 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, LabelList } from 'recharts'
 import { TrendingUp, Users } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/shared/EmptyState'
 
 // Sequential pipeline stages, in the order a real inquiry actually moves
 // through. Rejected/Lost are deliberately excluded from this chart — they
 // are exits from the pipeline, not a step in it, and mixing them into a
 // left-to-right stage order would misread as "the pipeline gets worse at
 // the end" rather than "these are the ones that left".
-// Series colors use fixed HSL values that read well in both light and dark mode.
+// Series colors are categorical (they identify a stage, not a state) so they
+// sit outside the semantic token scale — recharts needs real color values here,
+// not classes. They use fixed HSL values that read well in both light and dark
+// mode, and mirror the hue each stage gets in the pill map on the pipeline page
+// (indigo / amber / purple / orange / teal / green) so the chart and the stage
+// counters below it agree.
 const STAGE_ORDER = [
   { key: 'new', label: 'New', color: 'hsl(243 75% 62%)' },
   { key: 'follow_up', label: 'Follow Up', color: 'hsl(38 92% 55%)' },
   { key: 'interested', label: 'Interested', color: 'hsl(262 70% 62%)' },
-  { key: 'documents_submitted', label: 'Docs Submitted', color: 'hsl(280 65% 65%)' },
+  { key: 'documents_submitted', label: 'Docs Submitted', color: 'hsl(25 95% 58%)' },
   { key: 'approved', label: 'Approved', color: 'hsl(173 58% 45%)' },
   { key: 'admitted', label: 'Admitted', color: 'hsl(152 62% 45%)' },
 ]
@@ -63,10 +69,12 @@ export function PipelineCharts({ stats }: { stats: any }) {
         </CardHeader>
         <CardContent>
           {!hasPipelineData ? (
-            <div className="h-[220px] flex flex-col items-center justify-center text-muted-foreground">
-              <TrendingUp className="w-10 h-10 mb-2 opacity-40" />
-              <p className="text-sm">No inquiries in the pipeline yet</p>
-            </div>
+            <EmptyState
+              icon={TrendingUp}
+              title="No inquiries in the pipeline yet"
+              description="Once inquiries are logged, this chart shows how many are sitting at each stage."
+              className="h-[220px] py-0"
+            />
           ) : (
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={pipelineData} margin={{ top: 8, right: 24, left: -10 }}>
@@ -98,10 +106,12 @@ export function PipelineCharts({ stats }: { stats: any }) {
         </CardHeader>
         <CardContent>
           {!hasSourceData ? (
-            <div className="h-[220px] flex flex-col items-center justify-center text-muted-foreground">
-              <Users className="w-10 h-10 mb-2 opacity-40" />
-              <p className="text-sm">No inquiries yet</p>
-            </div>
+            <EmptyState
+              icon={Users}
+              title="No inquiries yet"
+              description="Sources appear here once inquiries record where the lead came from."
+              className="h-[220px] py-0"
+            />
           ) : (
             <ResponsiveContainer width="100%" height={Math.max(200, sourceData.length * 34)}>
               <BarChart data={sourceData} layout="vertical" margin={{ left: 8, right: 24 }}>

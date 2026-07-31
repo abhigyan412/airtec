@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { Search, Users, UserCheck, UserMinus, Briefcase, ChevronRight } from 'lucide-react'
+import { Search, Users, UserCheck, UserMinus, UserPlus, Briefcase, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { StatCard } from '@/components/shared/StatCard'
@@ -48,7 +48,7 @@ export default function StaffDirectoryPage() {
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState('')
 
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['hr-staff-stats'],
     queryFn: () => hrmsApi.staff.stats().then(r => r.data),
   })
@@ -80,11 +80,17 @@ export default function StaffDirectoryPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        <StatCard label="Total Staff"    value={stats?.total_staff ?? 0}            icon={Users}     accent="primary" />
-        <StatCard label="Active"         value={stats?.active_staff ?? 0}           icon={UserCheck} accent="success" />
-        <StatCard label="On Leave"       value={stats?.on_leave ?? 0}               icon={UserMinus} accent="warning" />
-        <StatCard label="Pending Leaves" value={stats?.pending_leave_requests ?? 0} icon={UserMinus} accent="info" />
-        <StatCard label="Open Positions" value={stats?.open_positions ?? 0}         icon={Briefcase} accent="info" />
+        {statsLoading ? (
+          Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[124px] rounded-xl" />)
+        ) : (
+          <>
+            <StatCard label="Total Staff"    value={stats?.total_staff ?? 0}            icon={Users}     accent="primary" />
+            <StatCard label="Active"         value={stats?.active_staff ?? 0}           icon={UserCheck} accent="success" />
+            <StatCard label="On Leave"       value={stats?.on_leave ?? 0}               icon={UserMinus} accent="warning" />
+            <StatCard label="Pending Leaves" value={stats?.pending_leave_requests ?? 0} icon={UserMinus} accent="info" />
+            <StatCard label="Open Positions" value={stats?.open_positions ?? 0}         icon={Briefcase} accent="info" />
+          </>
+        )}
       </div>
 
       {/* Filters */}
@@ -124,7 +130,29 @@ export default function StaffDirectoryPage() {
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
           </div>
         ) : (staffData?.data ?? []).length === 0 ? (
-          <EmptyState icon={Users} title="No staff found" />
+          search || roleFilter ? (
+            <EmptyState
+              icon={Search}
+              title="No staff match these filters"
+              description="Try a different name, or switch the role filter back to All Roles."
+              action={
+                <Button variant="outline" onClick={() => { setSearch(''); setRoleFilter('') }}>
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={Users}
+              title="No staff yet"
+              description="Staff appear here once they've been invited and have accepted their account."
+              action={
+                <Button asChild>
+                  <Link href="/settings/team"><UserPlus className="h-4 w-4" /> Invite a team member</Link>
+                </Button>
+              }
+            />
+          )
         ) : (
           <Table>
             <TableHeader>
@@ -142,8 +170,10 @@ export default function StaffDirectoryPage() {
               {(staffData?.data ?? []).map((s: any) => (
                 <TableRow key={s.id} onClick={() => window.location.href = `/hr/staff/${s.id}`} className="group">
                   <TableCell>
-                    <p className="font-semibold text-foreground">{s.full_name}</p>
-                    <p className="text-xs text-muted-foreground">{s.email}</p>
+                    <div className="max-w-[9rem] sm:max-w-none">
+                      <p className="truncate font-semibold text-foreground">{s.full_name}</p>
+                      <p className="truncate text-xs text-muted-foreground">{s.email}</p>
+                    </div>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">{ROLE_LABELS[s.role] ?? s.role}</TableCell>
                   <TableCell className="hidden text-muted-foreground md:table-cell">{s.staff_profile?.designation ?? '—'}</TableCell>

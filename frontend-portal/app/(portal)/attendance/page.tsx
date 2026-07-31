@@ -1,12 +1,23 @@
 'use client'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, CalendarCheck } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarOff, CalendarClock } from 'lucide-react'
 import { studentsApi, academicYearsApi } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, attendanceTone } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { StatTile } from '@/components/shared/StatTile'
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const todayStr = new Date().toISOString().slice(0, 10)
+
+// attendanceTone names the tone; these map it onto the two places the page
+// paints it — the headline figure and the bar under it.
+const TONE_TEXT = { success: 'text-success', warning: 'text-warning', destructive: 'text-destructive' }
+const TONE_BAR = { success: 'bg-success', warning: 'bg-warning', destructive: 'bg-destructive' }
 
 // Same helper as the staff Report tab (frontend/app/(app)/attendance/page.tsx)
 // — kept local rather than shared since it's a few lines and this is the
@@ -57,79 +68,133 @@ export default function PortalAttendancePage() {
     setMonth(m); setYear(y)
   }
 
-  const pctColor = (pct: number) =>
-    pct >= 75 ? 'text-emerald-600 bg-emerald-50' : pct >= 50 ? 'text-amber-600 bg-amber-50' : 'text-rose-600 bg-rose-50'
-
   return (
     <div className="space-y-5">
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-lg font-bold text-gray-900 flex items-center gap-2"><CalendarCheck className="w-5 h-5 text-gray-400" /> Attendance</h1>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-            <button onClick={() => setScope('month')}
-              className={cn('px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors',
-                scope === 'month' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-              Month
+      <PageHeader
+        title="Attendance"
+        description="How many days were attended, and whether that clears the 75% most boards need for exams."
+      />
+
+      {/* Period controls sit full-width under the title rather than crammed
+          beside it — on a phone that keeps every target thumb-sized. */}
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+          {([['month', 'This month'], ['year', 'Academic year']] as const).map(([value, label]) => (
+            <button
+              key={value}
+              onClick={() => setScope(value)}
+              aria-pressed={scope === value}
+              className={cn(
+                'h-11 rounded-md px-3 text-sm font-semibold transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                scope === value ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {label}
             </button>
-            <button onClick={() => setScope('year')}
-              className={cn('px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors',
-                scope === 'year' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-              Academic Year
-            </button>
-          </div>
-          {scope === 'month' && (
-            <div className="flex items-center gap-2">
-              <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                <ChevronLeft className="w-4 h-4 text-gray-500" />
-              </button>
-              <span className="text-sm font-medium text-gray-900 w-32 text-center">{MONTHS[month - 1]} {year}</span>
-              <button onClick={() => changeMonth(1)} disabled={isFutureMonth} className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-40">
-                <ChevronRight className="w-4 h-4 text-gray-500" />
-              </button>
-            </div>
-          )}
+          ))}
         </div>
+
+        {scope === 'month' && (
+          <div className="flex items-center gap-2 rounded-lg border bg-card p-1">
+            <Button variant="ghost" size="icon" aria-label="Previous month" onClick={() => changeMonth(-1)}>
+              <ChevronLeft />
+            </Button>
+            <span className="flex-1 text-center text-sm font-semibold text-foreground">
+              {MONTHS[month - 1]} {year}
+            </span>
+            <Button variant="ghost" size="icon" aria-label="Next month" disabled={isFutureMonth} onClick={() => changeMonth(1)}>
+              <ChevronRight />
+            </Button>
+          </div>
+        )}
       </div>
 
       {scope === 'year' && !academicYear ? (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 text-sm text-amber-700">
-          No academic year is configured for this school yet.
-        </div>
+        <Card>
+          <EmptyState
+            icon={CalendarOff}
+            title="No academic year set up yet"
+            description={'Your school hasn’t recorded its academic year dates, so there’s nothing to total up across the year. Month by month still works.'}
+            action={<Button variant="outline" onClick={() => setScope('month')}>Show this month</Button>}
+          />
+        </Card>
       ) : isLoading ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-400">Loading...</div>
-      ) : !student || workingDays === 0 ? (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 text-sm text-amber-700">
-          No attendance was marked for {periodLabel} yet.
+        <div className="space-y-5">
+          <Skeleton className="h-44 w-full rounded-lg" />
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Skeleton className="h-[6.5rem] rounded-lg" />
+            <Skeleton className="h-[6.5rem] rounded-lg" />
+            <Skeleton className="h-[6.5rem] rounded-lg" />
+            <Skeleton className="h-[6.5rem] rounded-lg" />
+          </div>
         </div>
+      ) : !student || workingDays === 0 ? (
+        <Card>
+          <EmptyState
+            icon={isFutureMonth ? CalendarClock : CalendarOff}
+            title={isFutureMonth ? `${periodLabel} hasn't happened yet` : `Nothing marked for ${periodLabel}`}
+            description={
+              isFutureMonth
+                ? 'Attendance appears here once school has run and the class teacher has marked the register.'
+                : 'The class teacher hasn’t marked the register for any day in this period — school may have been closed. Try another month, or ask the school office.'
+            }
+          />
+        </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            {[
-              { label: 'Present', count: student.present, color: 'bg-emerald-500' },
-              { label: 'Absent', count: student.absent, color: 'bg-rose-500' },
-              { label: 'Late', count: student.late, color: 'bg-amber-500' },
-              { label: 'Leave', count: student.leave, color: 'bg-indigo-500' },
-            ].map(s => (
-              <div key={s.label} className="bg-white rounded-xl border border-gray-200 p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-gray-500">{s.label}</span>
-                  <span className="text-lg font-bold text-gray-900">{s.count}</span>
-                </div>
-                <div className="w-full bg-gray-100 rounded-full h-1.5">
-                  <div className={cn('h-1.5 rounded-full', s.color)} style={{ width: `${workingDays > 0 ? Math.round((s.count / workingDays) * 100) : 0}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-white rounded-2xl border border-gray-200 p-6 flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500">Overall attendance — {periodLabel}</p>
-              <p className="text-xs text-gray-400 mt-0.5">{workingDays} working day{workingDays !== 1 ? 's' : ''}</p>
+          {/* The percentage leads: it's the one figure that decides whether a
+              child can sit their exams, so it gets the size and the colour. */}
+          <Card className="p-5 sm:p-6">
+            <p className="text-sm font-medium text-muted-foreground">Overall attendance · {periodLabel}</p>
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <p className={cn('text-5xl font-bold tabular-nums tracking-tight', TONE_TEXT[attendanceTone(student.percentage)])}>
+                {student.percentage}%
+              </p>
+              <p className="text-sm text-muted-foreground">
+                <span className="tabular-nums">{student.present}</span> of{' '}
+                <span className="tabular-nums">{workingDays}</span> working day{workingDays !== 1 ? 's' : ''} present
+              </p>
             </div>
-            <span className={cn('px-3 py-1.5 rounded-full text-lg font-bold', pctColor(student.percentage))}>
-              {student.percentage}%
-            </span>
+
+            {/* 75% is marked on the track rather than left for a parent to work
+                out from the number alone. */}
+            <div className="relative mt-5 h-2.5 w-full rounded-full bg-muted" aria-hidden>
+              <div
+                className={cn('absolute inset-y-0 left-0 rounded-full', TONE_BAR[attendanceTone(student.percentage)])}
+                style={{ width: `${Math.min(Math.max(student.percentage, 0), 100)}%` }}
+              />
+              <span className="absolute -inset-y-1 left-[75%] w-0.5 -translate-x-1/2 rounded-full bg-foreground/40" />
+            </div>
+            <div className="relative mt-2 h-4">
+              <span className="absolute left-[75%] -translate-x-1/2 whitespace-nowrap text-[11px] font-medium text-muted-foreground">
+                75% needed
+              </span>
+            </div>
+
+            <p className="mt-3 text-sm text-muted-foreground">
+              {student.percentage >= 75
+                ? 'Clears the 75% attendance most boards require to sit exams.'
+                : 'Below the 75% attendance most boards require to sit exams.'}
+            </p>
+          </Card>
+
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              { label: 'Present', count: student.present, tone: 'success' as const },
+              { label: 'Absent', count: student.absent, tone: 'destructive' as const },
+              { label: 'Late', count: student.late, tone: 'warning' as const },
+              { label: 'On leave', count: student.leave, tone: 'default' as const },
+            ].map(s => (
+              <StatTile
+                key={s.label}
+                label={s.label}
+                value={s.count}
+                // A zero stays neutral — a red "0 absent" reads as a problem.
+                tone={s.count > 0 ? s.tone : 'default'}
+                hint={`of ${workingDays} day${workingDays !== 1 ? 's' : ''}`}
+              />
+            ))}
           </div>
         </>
       )}

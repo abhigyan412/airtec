@@ -1,13 +1,16 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
+import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
+import { buildStudentSearchFilter } from '../../shared/utils/studentSearch'
 
 const router = Router()
+
 router.use(authenticate)
 
 const CreateStudentSchema = z.object({
@@ -78,7 +81,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     .eq('school_id', school_id)
     .range(from, to)
 
-  if (search) query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,admission_number.ilike.%${search}%`)
+  if (search) query = query.or(buildStudentSearchFilter(String(search)))
   if (class_id) query = query.eq('class_id', class_id)
   if (section_id) query = query.eq('section_id', section_id)
   if (status) query = query.eq('status', status)
@@ -121,15 +124,17 @@ router.get('/attendance/today', asyncHandler(async (req: AuthRequest, res: Respo
   const school_id = req.user!.school_id
   const today = toLocalDateStr(new Date())
 
-  const nonWorkingSets = await getNonWorkingDaySets(school_id, today, today)
+  // The holiday/weekly-off lookup does not depend on the roster or the
+  // register, so it joins the same batch instead of running before it.
+  const [nonWorkingSets, { data: students, error: studentsErr }, { data: records, error: attErr }] =
+    await Promise.all([
+      getNonWorkingDaySets(school_id, today, today),
+      supabase.from('students')
+        .select('id, class_id, section_id, classes(name), sections(name)')
+        .eq('school_id', school_id).eq('status', 'active'),
+      supabase.from('attendance').select('student_id, status').eq('school_id', school_id).eq('date', today),
+    ])
   const is_working_day = isWorkingDate(today, nonWorkingSets)
-
-  const [{ data: students, error: studentsErr }, { data: records, error: attErr }] = await Promise.all([
-    supabase.from('students')
-      .select('id, class_id, section_id, classes(name), sections(name)')
-      .eq('school_id', school_id).eq('status', 'active'),
-    supabase.from('attendance').select('student_id, status').eq('school_id', school_id).eq('date', today),
-  ])
   if (studentsErr) return res.status(500).json({ success: false, error: studentsErr.message })
   if (attErr) return res.status(500).json({ success: false, error: attErr.message })
 
@@ -388,7 +393,7 @@ router.post('/attendance', requireRole('school_admin', 'principal', 'teacher'),
             schoolId: school_id, type: 'attendance_absent',
             title: 'Marked absent today',
             message: `${s.first_name} ${s.last_name} was marked absent on ${date}.`,
-            link: '/portal/attendance',
+            link: '/attendance',
             relatedEntityType: 'attendance', relatedEntityId: attendanceIdByStudent.get(s.id),
           })
         }
@@ -890,8 +895,7 @@ router.post('/', requireRole('school_admin', 'principal', 'counselor'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = CreateStudentSchema.parse(req.body)
     const school_id = req.user!.school_id
-    const { count } = await supabase.from('students').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-    const admissionNumber = `ADM${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(4, '0')}`
+    const admissionNumber = await nextDocumentNumber(school_id, 'ADM')
     const { father_name, father_phone, father_email, mother_name, mother_phone, mother_email, ...studentData } = body
     const cleanData = Object.fromEntries(Object.entries(studentData).map(([k, v]) => [k, v === '' ? null : v]))
     const { data: student, error } = await supabase.from('students').insert({ ...cleanData, school_id, admission_number: admissionNumber }).select().single()
@@ -929,8 +933,7 @@ router.post('/:id/tc', requireRole('school_admin', 'principal', 'accountant'),
     if (!student) return res.status(404).json({ success: false, error: 'Student not found' })
  
     const { reason, last_attendance_date, conduct = 'Good' } = req.body
-    const { count } = await supabase.from('transfer_certificates').select('*', { count: 'exact', head: true }).eq('school_id', school_id)
-    const tcNumber = `TC${new Date().getFullYear()}${String((count ?? 0) + 1).padStart(4, '0')}`
+    const tcNumber = await nextDocumentNumber(school_id, 'TC')
  
     const { data: tc, error } = await supabase.from('transfer_certificates')
       .insert({
@@ -1037,7 +1040,7 @@ router.post('/:id/tc/:tcId/workflow-action', asyncHandler(async (req: AuthReques
         message: newTcStatus === 'approved'
           ? 'Your Transfer Certificate request has been approved and is ready.'
           : 'Your Transfer Certificate request was rejected.',
-        link: '/portal',
+        link: '/',
         relatedEntityType: 'transfer_certificate', relatedEntityId: tcId,
       })
     } catch (notifyErr) {

@@ -1,25 +1,39 @@
 # ─────────────────────────────────────────────────────────────────────
 # AIRTEC — full stack for Dokploy (Compose deployment) or local Docker.
 #
+# Three services: the API, the staff admin app, and the parent/student
+# family portal. Both apps proxy /api/* to the backend over the internal
+# Docker network, so the backend needs no public domain and there is no
+# CORS to configure for either.
+#
 # In Dokploy: create a "Compose" application pointing at this repo, set the
 # environment variables below in the Environment tab, then assign a domain
-# to ONLY the frontend (target the container port, 3000). The frontend
-# proxies /api/* to the backend over the internal Docker network, so the
-# backend needs no public domain and there is no CORS to configure.
+# to EACH of the two web apps, targeting their container ports:
+#   staff admin   → frontend, container port 3000
+#   family portal → portal,   container port 3001
 #
 # Host ports are loopback-bound (127.0.0.1) and taken from env. Defaults
-# are 3010/4010 (NOT 3000/4000) so they don't collide with another app on
-# a shared Dokploy host — if that host already runs something on the port
-# you pick, the container fails to start with "port is already allocated".
-#   WEB_HOST_PORT     (frontend, default 3010)
-#   BACKEND_HOST_PORT (backend,  default 4010)
+# are 3010/3011/4010 (NOT 3000/3001/4000) so they don't collide with
+# another app on a shared Dokploy host — if that host already runs
+# something on the port you pick, the container fails to start with
+# "port is already allocated".
+#   WEB_HOST_PORT     (staff app, default 3010)
+#   PORTAL_HOST_PORT  (portal,    default 3011)
+#   BACKEND_HOST_PORT (backend,   default 4010)
 # Set them in the Dokploy Environment tab to any free ports.
 #
 # The public DOMAIN is independent of these: Dokploy/Traefik routes the
-# domain to the CONTAINER port (frontend = 3000), so the domain works
-# regardless of the host port. Assign one frontend domain → port 3000.
+# domain to the CONTAINER port, so the domain works regardless of the
+# host port.
 #
-# Local run:  docker compose up --build   → http://localhost:${WEB_HOST_PORT:-3010}
+# One cross-app link needs real public URLs (the browser follows them, so
+# internal service names won't do): NEXT_PUBLIC_STAFF_APP_URL on the
+# portal, and NEXT_PUBLIC_FAMILY_APP_URL on the staff app — the latter is
+# where a parent/student who lands on the staff login gets redirected.
+#
+# Local run:  docker compose up --build
+#   staff  → http://localhost:${WEB_HOST_PORT:-3010}
+#   portal → http://localhost:${PORTAL_HOST_PORT:-3011}
 # ─────────────────────────────────────────────────────────────────────
 services:
   backend:
@@ -34,6 +48,12 @@ services:
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       JWT_SECRET: ${JWT_SECRET}
+      # Web push signing pair (npx web-push generate-vapid-keys). Push is
+      # simply skipped when these are absent, so leaving them unset is a
+      # supported configuration rather than a startup failure.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     expose:
       - "4000"
     ports:
@@ -51,6 +71,9 @@ services:
         #  - BACKEND_URL: the /api rewrite target (internal service name)
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
         BACKEND_URL: ${BACKEND_URL:-http://backend:4000}
+        # Public URL of the family portal — where a parent/student who
+        # lands on the staff login gets redirected.
+        NEXT_PUBLIC_FAMILY_APP_URL: ${NEXT_PUBLIC_FAMILY_APP_URL:-http://localhost:${PORTAL_HOST_PORT:-3011}}
     image: airtec-frontend
     restart: unless-stopped
     depends_on:
@@ -62,3 +85,29 @@ services:
       - "3000"
     ports:
       - "127.0.0.1:${WEB_HOST_PORT:-3010}:3000"
+
+  # Parent/student app — a separate Next.js app with its own login and its
+  # own domain, not a route group inside the staff app. It proxies /api to
+  # the same backend over the internal network exactly as the staff app
+  # does, so it needs no public backend URL and no CORS entry.
+  portal:
+    build:
+      context: ./frontend-portal
+      args:
+        NEXT_PUBLIC_API_URL: ${PORTAL_NEXT_PUBLIC_API_URL:-/api}
+        BACKEND_URL: ${BACKEND_URL:-http://backend:4000}
+        # Absolute, cross-app link on the portal's login screen ("staff
+        # sign in here") — must be the staff app's PUBLIC domain, since
+        # the browser follows it, not the container network.
+        NEXT_PUBLIC_STAFF_APP_URL: ${NEXT_PUBLIC_STAFF_APP_URL:-http://localhost:${WEB_HOST_PORT:-3010}}
+    image: airtec-portal
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+    expose:
+      - "3001"
+    ports:
+      - "127.0.0.1:${PORTAL_HOST_PORT:-3011}:3001"

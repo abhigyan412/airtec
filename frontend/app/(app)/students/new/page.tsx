@@ -2,10 +2,11 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Loader2, CheckCircle, User, BookOpen, Phone } from 'lucide-react'
+import { ArrowLeft, Loader2, CheckCircle, User, BookOpen, Phone, UserPlus } from 'lucide-react'
 import { studentsApi, admissionApi } from '@/lib/api'
 import { toast } from 'sonner'
 import Link from 'next/link'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input as UiInput } from '@/components/ui/input'
@@ -85,16 +86,18 @@ export default function NewStudentPage() {
 
   return (
     <div className="max-w-3xl space-y-6">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild aria-label="Back to students">
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="icon" asChild aria-label="Back to students" className="mt-1 shrink-0">
           <Link href="/students">
             <ArrowLeft className="h-5 w-5" />
           </Link>
         </Button>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Add New Student</h1>
-          <p className="text-sm text-muted-foreground">Fill in student details to enrol</p>
-        </div>
+        <PageHeader
+          className="mb-0 flex-1"
+          title="Add New Student"
+          description="Fill in student details to enrol"
+          icon={UserPlus}
+        />
       </div>
 
       {/* Section tabs */}
@@ -112,7 +115,7 @@ export default function NewStudentPage() {
       <Card>
         <CardContent className="p-6 sm:p-8">
           {section === 'personal' && (
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <Input label="First Name" field="first_name" required placeholder="Rahul" />
               <Input label="Last Name" field="last_name" required placeholder="Sharma" />
               <Input label="Date of Birth" field="date_of_birth" type="date" />
@@ -133,7 +136,7 @@ export default function NewStudentPage() {
           )}
 
           {section === 'academic' && (
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <Select label="Class" field="class_id" required
                 options={(classesData ?? []).map((c: any) => ({ value: c.id, label: c.name }))} />
               <Select label="Section" field="section_id"
@@ -151,7 +154,7 @@ export default function NewStudentPage() {
                   <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/10 text-xs text-blue-600 dark:text-blue-400">F</span>
                   Father&apos;s Details
                 </p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Input label="Father's Name" field="father_name" placeholder="Mr. Rajesh Sharma" />
                   <Input label="Father's Phone" field="father_phone" placeholder="+91 98765 43210" />
                   <div className="col-span-2">
@@ -164,7 +167,7 @@ export default function NewStudentPage() {
                   <span className="flex h-6 w-6 items-center justify-center rounded-full bg-pink-500/10 text-xs text-pink-600 dark:text-pink-400">M</span>
                   Mother&apos;s Details
                 </p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Input label="Mother's Name" field="mother_name" placeholder="Mrs. Priya Sharma" />
                   <Input label="Mother's Phone" field="mother_phone" placeholder="+91 98765 43210" />
                   <div className="col-span-2">

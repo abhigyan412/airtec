@@ -3,8 +3,10 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { teamApi, rbacApi } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
-import { UserPlus, Key, Loader2, Copy, Check, ShieldCheck, ShieldAlert, Power, Shield, Plus } from 'lucide-react'
+import { UserPlus, Key, Loader2, Copy, Check, ShieldCheck, ShieldAlert, Power, Shield, Plus, Settings as SettingsIcon } from 'lucide-react'
 import { toast } from 'sonner'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { EmptyState } from '@/components/shared/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -88,117 +90,131 @@ export default function TeamPage() {
 
   return (
     <div className="space-y-6">
-      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Settings</p>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Team Members</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Manage staff accounts, roles and login access</p>
-        </div>
-        <Button onClick={() => setShowInvite(true)}>
-          <UserPlus className="h-4 w-4" /> Invite Team Member
-        </Button>
-      </div>
+      <PageHeader
+        title="Team Members"
+        description="Manage staff accounts, roles and login access"
+        icon={SettingsIcon}
+        className="mb-0"
+        actions={
+          <Button onClick={() => setShowInvite(true)}>
+            <UserPlus className="h-4 w-4" /> Invite Team Member
+          </Button>
+        }
+      />
 
       <Card className="overflow-hidden">
         {isLoading ? (
           <div className="space-y-3 p-6">
             {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
           </div>
+        ) : (team ?? []).length === 0 ? (
+          <EmptyState
+            icon={UserPlus}
+            title="No team members yet"
+            description="Invite your principal, teachers and accountants — each one gets a login and a role that scopes what they can see."
+            action={
+              <Button onClick={() => setShowInvite(true)}>
+                <UserPlus className="h-4 w-4" /> Invite Team Member
+              </Button>
+            }
+          />
         ) : (
-          <Table className="min-w-[800px]">
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Login Status</TableHead>
-                <TableHead>Joined</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(team ?? []).map((u: any) => (
-                <TableRow key={u.id} className="cursor-default">
-                  <TableCell className="font-semibold text-foreground">
-                    {u.full_name}
-                    {!u.is_active && <Badge variant="secondary" className="ml-2">Inactive</Badge>}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{u.email}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Select value={u.role} onValueChange={role => roleMutation.mutate({ id: u.id, role })}>
-                        <SelectTrigger
-                          className={cn(
-                            'h-7 w-auto gap-1 border-0 px-2 text-xs font-semibold shadow-none',
-                            ROLE_COLORS[u.role],
-                          )}
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Object.entries(ROLE_LABELS).map(([k, v]) => (
-                            <SelectItem key={k} value={k}>{v}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {(extraRoles?.[u.id] ?? []).map((roleName: string) => (
-                        <span
-                          key={roleName}
-                          className="whitespace-nowrap rounded-lg bg-muted px-2 py-1 text-xs font-semibold text-muted-foreground"
-                        >
-                          + {roleName}
-                        </span>
-                      ))}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 text-muted-foreground hover:text-primary"
-                        onClick={() => setRolesTarget(u)}
-                        title="Manage additional roles"
-                        aria-label="Manage additional roles"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    {u.has_login ? (
-                      <span className="flex items-center gap-1 text-xs font-medium text-success"><ShieldCheck className="h-3.5 w-3.5" /> Active Login</span>
-                    ) : (
-                      <span className="flex items-center gap-1 text-xs font-medium text-warning"><ShieldAlert className="h-3.5 w-3.5" /> No Login</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{formatDate(u.created_at)}</TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-primary"
-                        onClick={() => setResetTarget(u)}
-                        title={u.has_login ? 'Reset password' : 'Create login'}
-                        aria-label={u.has_login ? 'Reset password' : 'Create login'}
-                      >
-                        <Key className="h-4 w-4" />
-                      </Button>
-                      {u.is_active && (
+          <div className="overflow-x-auto">
+            <Table className="min-w-[800px]">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Name</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Login Status</TableHead>
+                  <TableHead>Joined</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(team ?? []).map((u: any) => (
+                  <TableRow key={u.id} className="cursor-default">
+                    <TableCell className="font-semibold text-foreground">
+                      {u.full_name}
+                      {!u.is_active && <Badge variant="secondary" className="ml-2">Inactive</Badge>}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{u.email}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Select value={u.role} onValueChange={role => roleMutation.mutate({ id: u.id, role })}>
+                          <SelectTrigger
+                            className={cn(
+                              'h-7 w-auto gap-1 border-0 px-2 text-xs font-semibold shadow-none',
+                              ROLE_COLORS[u.role],
+                            )}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(ROLE_LABELS).map(([k, v]) => (
+                              <SelectItem key={k} value={k}>{v}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {(extraRoles?.[u.id] ?? []).map((roleName: string) => (
+                          <span
+                            key={roleName}
+                            className="whitespace-nowrap rounded-lg bg-muted px-2 py-1 text-xs font-semibold text-muted-foreground"
+                          >
+                            + {roleName}
+                          </span>
+                        ))}
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                          onClick={() => { if (confirm(`Deactivate ${u.full_name}?`)) deactivateMutation.mutate(u.id) }}
-                          title="Deactivate"
-                          aria-label="Deactivate"
+                          className="h-6 w-6 text-muted-foreground hover:text-primary"
+                          onClick={() => setRolesTarget(u)}
+                          title="Manage additional roles"
+                          aria-label="Manage additional roles"
                         >
-                          <Power className="h-4 w-4" />
+                          <Plus className="h-3.5 w-3.5" />
                         </Button>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {u.has_login ? (
+                        <span className="flex items-center gap-1 text-xs font-medium text-success"><ShieldCheck className="h-3.5 w-3.5" /> Active Login</span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-xs font-medium text-warning"><ShieldAlert className="h-3.5 w-3.5" /> No Login</span>
                       )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{formatDate(u.created_at)}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-primary"
+                          onClick={() => setResetTarget(u)}
+                          title={u.has_login ? 'Reset password' : 'Create login'}
+                          aria-label={u.has_login ? 'Reset password' : 'Create login'}
+                        >
+                          <Key className="h-4 w-4" />
+                        </Button>
+                        {u.is_active && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={() => { if (confirm(`Deactivate ${u.full_name}?`)) deactivateMutation.mutate(u.id) }}
+                            title="Deactivate"
+                            aria-label="Deactivate"
+                          >
+                            <Power className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </Card>
 
@@ -277,12 +293,12 @@ function RoleManagerModal({ user, extraRoles, onClose }: { user: any, extraRoles
                     <span className="text-xs text-muted-foreground">Locked</span>
                   ) : isAssigned ? (
                     <button onClick={() => removeMutation.mutate(r.id)} disabled={removeMutation.isPending}
-                      className="text-xs font-semibold text-destructive hover:text-destructive/80 disabled:opacity-50">
+                      className="rounded text-xs font-semibold text-destructive hover:text-destructive/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">
                       Remove
                     </button>
                   ) : (
                     <button onClick={() => assignMutation.mutate(r.id)} disabled={assignMutation.isPending}
-                      className="text-xs font-semibold text-primary hover:text-primary/80 disabled:opacity-50">
+                      className="rounded text-xs font-semibold text-primary hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">
                       Assign
                     </button>
                   )}
@@ -320,7 +336,7 @@ function CredentialsBox({ email, password }: { email: string, password: string }
         <p><span className="text-muted-foreground">Email:</span> {email}</p>
         <p><span className="text-muted-foreground">Password:</span> {password}</p>
       </div>
-      <button onClick={copy} className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-success hover:text-success/80">
+      <button onClick={copy} className="mt-2 flex items-center gap-1.5 rounded text-xs font-semibold text-success hover:text-success/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
         {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied!' : 'Copy credentials'}
       </button>
       <p className="mt-2 text-xs text-success/80">This password won&apos;t be shown again — make sure to share it now.</p>
@@ -353,7 +369,7 @@ function InviteModal({ onClose }: { onClose: () => void }) {
         {result ? (
           <CredentialsBox email={result.email} password={result.password} />
         ) : (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="col-span-2 space-y-1.5">
               <Label htmlFor="inv-name">Full Name *</Label>
               <Input id="inv-name" value={form.full_name} onChange={e => setForm(f => ({ ...f, full_name: e.target.value }))} placeholder="e.g. Priya Sharma" />

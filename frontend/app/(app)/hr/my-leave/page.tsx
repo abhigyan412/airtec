@@ -4,11 +4,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { Plus, Calendar, Clock, CheckCircle, XCircle, Ban, AlertTriangle } from 'lucide-react'
+import { Plus, Calendar, CalendarDays, Clock, CheckCircle, XCircle, Ban, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { ApplyLeaveModal } from '@/components/hr/ApplyLeaveModal'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -48,15 +49,16 @@ export default function MyLeavePage() {
 
   return (
     <div className="max-w-4xl space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">My Leave</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Apply for leave and track your requests</p>
-        </div>
-        <Button onClick={() => setShowApply(true)}>
-          <Plus className="h-4 w-4" /> Apply for Leave
-        </Button>
-      </div>
+      <PageHeader
+        title="My Leave"
+        description="Apply for leave and track your requests"
+        icon={CalendarDays}
+        actions={
+          <Button onClick={() => setShowApply(true)}>
+            <Plus className="h-4 w-4" /> Apply for Leave
+          </Button>
+        }
+      />
 
       {/* Leave balances */}
       <Card>
@@ -65,7 +67,16 @@ export default function MyLeavePage() {
         </CardHeader>
         <CardContent>
           {balancesLoading ? (
-            <Skeleton className="h-16 w-full rounded-xl" />
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[100px] rounded-xl" />)}
+            </div>
+          ) : (balances ?? []).length === 0 ? (
+            <EmptyState
+              icon={Calendar}
+              title="No leave types allocated"
+              description="Your school hasn't set up a leave quota for you yet — ask an administrator to allocate one."
+              className="py-8"
+            />
           ) : (
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               {(balances ?? []).map((b: any) => (
@@ -93,7 +104,16 @@ export default function MyLeavePage() {
               {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
           ) : (requests ?? []).length === 0 ? (
-            <EmptyState icon={Calendar} title="No leave requests yet" />
+            <EmptyState
+              icon={Calendar}
+              title="No leave requests yet"
+              description="Apply for leave and you'll be able to track its approval status here."
+              action={
+                <Button onClick={() => setShowApply(true)}>
+                  <Plus className="h-4 w-4" /> Apply for Leave
+                </Button>
+              }
+            />
           ) : (
             <div className="divide-y divide-border">
               {(requests ?? []).map((r: any) => {

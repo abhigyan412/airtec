@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 
@@ -63,12 +64,19 @@ function MyHomeworkView() {
       <PageHeader title="My Homework" description="Homework and classwork assigned to you" icon={BookOpen} />
 
       {isLoading ? (
-        <div className="bg-card rounded-2xl border border-border p-12 text-center">
-          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
+        // Same grid and card height as the real list below.
+        <div className="grid gap-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-[108px] w-full rounded-2xl" />
+          ))}
         </div>
       ) : (data ?? []).length === 0 ? (
         <div className="bg-card rounded-2xl border border-border">
-          <EmptyState icon={BookOpen} title="Nothing assigned yet" />
+          <EmptyState
+            icon={BookOpen}
+            title="Nothing assigned yet"
+            description="Homework and classwork your teachers assign will show up here."
+          />
         </div>
       ) : (
         <div className="grid gap-3">
@@ -172,10 +180,11 @@ function StaffHomeworkView({ canCreate, canSeeSyllabus, canPlanSyllabus, canLogS
         <SyllabusOverview scope={isSeniorManagement ? 'all' : (myClasses ?? [])} />
       )}
 
-      <div className="flex items-center gap-1 bg-muted p-1 rounded-lg w-fit">
+      <div className="flex items-center gap-1 bg-muted p-1 rounded-lg w-full overflow-x-auto sm:w-fit">
         {TABS.filter(t => t.show).map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={cn('flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold transition-all',
+          <button key={t.id} onClick={() => setTab(t.id)} aria-pressed={tab === t.id}
+            className={cn('flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold transition-all whitespace-nowrap',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               tab === t.id ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground')}>
             <t.icon className="w-3.5 h-3.5" /> {t.label}
           </button>
@@ -208,7 +217,19 @@ function StaffHomeworkView({ canCreate, canSeeSyllabus, canPlanSyllabus, canLogS
 
       {!selectedClass ? (
         <div className="bg-card rounded-2xl border border-border">
-          <EmptyState icon={BookOpen} title={classesData.length === 0 && !isSeniorManagement ? "You're not scheduled to teach any class yet — check your timetable" : 'Select a class to get started'} />
+          {classesData.length === 0 && !isSeniorManagement ? (
+            <EmptyState
+              icon={BookOpen}
+              title="You're not scheduled to teach any class yet"
+              description="Your classes come from the timetable — ask your school admin to schedule you, then they'll appear here."
+            />
+          ) : (
+            <EmptyState
+              icon={BookOpen}
+              title="Select a class to get started"
+              description="Pick a class above to see its homework calendar and syllabus progress."
+            />
+          )}
         </div>
       ) : tab === 'homework' ? (
         <HomeworkTab classId={selectedClass} sectionId={selectedSection} canCreate={canCreate} allowedSubjects={myAllowedSubjects} />
@@ -340,7 +361,7 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
   const dayItems = byDate[selectedDate] ?? []
 
   return (
-    <div className="grid grid-cols-[1fr_320px] gap-4 items-start">
+    <div className="grid grid-cols-1 gap-4 items-start lg:grid-cols-[1fr_320px]">
       <MonthCalendar month={month} onMonthChange={setMonth} selectedDate={selectedDate} onSelectDate={setSelectedDate} eventsByDate={eventsByDate} />
 
       <div className="bg-card rounded-2xl border border-border p-5 space-y-4">
@@ -357,9 +378,21 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
         </div>
 
         {isLoading ? (
-          <div className="py-8 text-center"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" /></div>
+          // Matches the assignment cards that land in this rail.
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-[76px] w-full rounded-xl" />
+            ))}
+          </div>
         ) : dayItems.length === 0 ? (
-          <p className="text-xs text-muted-foreground">Nothing due this day</p>
+          <EmptyState
+            icon={CalendarDays}
+            title="Nothing due this day"
+            description={canCreate
+              ? 'Pick another date on the calendar, or assign something for this one.'
+              : 'Pick another date on the calendar to see what was assigned.'}
+            className="py-8"
+          />
         ) : (
           <div className="space-y-3">
             {dayItems.map((hw: any) => (
@@ -380,7 +413,8 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
                     {hw.description && <p className="text-xs text-muted-foreground mt-0.5">{hw.description}</p>}
                   </div>
                   {canCreate && (
-                    <button onClick={() => deleteMutation.mutate(hw.id)} aria-label="Delete" className="text-muted-foreground/50 hover:text-destructive transition-colors flex-shrink-0">
+                    <button onClick={() => deleteMutation.mutate(hw.id)} aria-label={`Delete ${hw.title}`}
+                      className="-mr-1.5 -mt-1.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   )}
@@ -451,7 +485,7 @@ function AddHomeworkModal({ classId, sectionId, initialDueDate, allowedSubjects,
           <DialogTitle>Assign Homework / Classwork</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Type</Label>
               <Select value={type} onValueChange={v => setType(v as any)}>
@@ -643,11 +677,10 @@ function SyllabusTab({ classId, sectionId, canPlan, canLog, allowedSubjects }: {
         </div>
       </div>
 
-      <div className="grid grid-cols-[1fr_320px] gap-4 items-start">
+      <div className="grid grid-cols-1 gap-4 items-start lg:grid-cols-[1fr_320px]">
         {isLoading ? (
-          <div className="bg-card rounded-2xl border border-border p-12 text-center">
-            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
-          </div>
+          // Stands in for the month calendar so the two-column layout holds.
+          <Skeleton className="h-[420px] w-full rounded-2xl sm:h-[540px]" />
         ) : (
           <MonthCalendar month={month} onMonthChange={setMonth} selectedDate={selectedDate} onSelectDate={setSelectedDate} eventsByDate={eventsByDate} />
         )}
@@ -685,12 +718,14 @@ function SyllabusTab({ classId, sectionId, canPlan, canLog, allowedSubjects }: {
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {canLog && ch.status !== 'completed' && (
-                            <button onClick={() => openLogModal(ch)} className="text-[11px] font-semibold text-primary hover:text-primary/80">
+                            <button onClick={() => openLogModal(ch)}
+                              className="-my-1.5 flex h-9 items-center rounded-md px-1.5 text-[11px] font-semibold text-primary transition-colors hover:bg-accent hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                               Log progress
                             </button>
                           )}
                           {canPlan && (
-                            <button onClick={() => deleteChapterMutation.mutate(ch.id)} aria-label="Remove chapter" className="text-muted-foreground/50 hover:text-destructive transition-colors">
+                            <button onClick={() => deleteChapterMutation.mutate(ch.id)} aria-label={`Remove chapter ${ch.chapter_name}`}
+                              className="-mr-1.5 -my-1.5 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
@@ -729,7 +764,8 @@ function SyllabusTab({ classId, sectionId, canPlan, canLog, allowedSubjects }: {
                         <p className="text-[10px] text-muted-foreground mt-1">{log.users?.full_name}</p>
                       </div>
                       {canLog && (
-                        <button onClick={() => deleteLogMutation.mutate(log.id)} aria-label="Remove log" className="text-muted-foreground/50 hover:text-destructive transition-colors flex-shrink-0">
+                        <button onClick={() => deleteLogMutation.mutate(log.id)} aria-label="Remove progress log entry"
+                          className="-mr-1.5 -mt-1.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       )}
@@ -792,7 +828,7 @@ function LogProgressModal({ classId, sectionId, chapters, initialChapter, initia
           <DialogDescription>What did you actually cover this period? This drives the covered-vs-left tracking.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Subject *</Label>
               <Select value={subjectName || undefined} onValueChange={v => { setSubjectName(v); setChapterId('') }}>
@@ -825,10 +861,11 @@ function LogProgressModal({ classId, sectionId, chapters, initialChapter, initia
 
           <div className="space-y-1.5">
             <Label>Status</Label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {(['started', 'in_progress', 'completed'] as const).map(s => (
-                <button key={s} onClick={() => setStatus(s)}
-                  className={cn('py-2 rounded-lg text-xs font-semibold border transition-all',
+                <button key={s} onClick={() => setStatus(s)} aria-pressed={status === s}
+                  className={cn('h-9 rounded-lg text-xs font-semibold border transition-all',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                     status === s ? 'bg-primary border-primary text-primary-foreground' : 'border-input text-muted-foreground hover:bg-muted/50')}>
                   {s === 'started' ? 'Started' : s === 'in_progress' ? 'In Progress' : 'Completed'}
                 </button>
@@ -963,7 +1000,7 @@ function AddChaptersModal({ classId, sectionId, initialDate, onClose }: { classI
               </div>
             ))}
             <button onClick={() => setRows(rs => [...rs, { chapter_name: '', due_mode: 'custom', exam_id: '', planned_date: '' }])}
-              className="text-xs font-semibold text-primary hover:text-primary/80 flex items-center gap-1">
+              className="-ml-2 flex h-9 items-center gap-1 rounded-md px-2 text-xs font-semibold text-primary transition-colors hover:bg-accent hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
               <Plus className="w-3 h-3" /> Add another chapter
             </button>
           </div>

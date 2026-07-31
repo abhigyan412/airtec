@@ -38,7 +38,7 @@ export default function ExamsPage() {
   const [showNew, setShowNew] = useState(false)
   const qc = useQueryClient()
 
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['exam-stats'],
     queryFn: () => api.get('/exams/stats').then(r => r.data.data),
   })
@@ -72,12 +72,18 @@ export default function ExamsPage() {
       />
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Exams" value={stats?.total ?? 0} icon={BookOpen} accent="primary" />
-        <StatCard label="Draft" value={stats?.draft ?? 0} icon={Clock} accent="info" />
-        <StatCard label="Ongoing" value={stats?.ongoing ?? 0} icon={FileText} accent="warning" />
-        <StatCard label="Results Declared" value={stats?.completed ?? 0} icon={CheckCircle} accent="success" />
-      </div>
+      {statsLoading ? (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[104px] rounded-xl" />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard label="Total Exams" value={stats?.total ?? 0} icon={BookOpen} accent="primary" />
+          <StatCard label="Draft" value={stats?.draft ?? 0} icon={Clock} accent="info" />
+          <StatCard label="Ongoing" value={stats?.ongoing ?? 0} icon={FileText} accent="warning" />
+          <StatCard label="Results Declared" value={stats?.completed ?? 0} icon={CheckCircle} accent="success" />
+        </div>
+      )}
 
       {/* Exams list */}
       <Card>
@@ -93,24 +99,34 @@ export default function ExamsPage() {
             <EmptyState
               icon={BookOpen}
               title="No exams yet"
-              description="Create your first exam to get started"
+              description="Create an exam to build its datesheet, enter marks and publish results."
+              action={
+                <Button onClick={() => setShowNew(true)}>
+                  <Plus className="h-4 w-4" /> New Exam
+                </Button>
+              }
             />
           ) : (
             <div className="divide-y divide-border">
               {(exams ?? []).map((exam: any) => (
-                <div key={exam.id} className="flex items-center gap-4 px-6 py-4 transition-colors hover:bg-muted/50">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    <BookOpen className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
+                <div key={exam.id} className="flex flex-col gap-3 px-4 py-4 transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:gap-4 sm:px-6">
+                  <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <BookOpen className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
                     <p className="font-semibold text-foreground">{exam.name}</p>
-                    <div className="mt-0.5 flex items-center gap-3">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
                       <span className="text-xs capitalize text-muted-foreground">{exam.exam_type?.replace('_', ' ')}</span>
                       {exam.start_date && <span className="text-xs text-muted-foreground">{formatDate(exam.start_date)}</span>}
                       <span className="text-xs text-muted-foreground">{exam.academic_years?.name}</span>
                     </div>
+                    </div>
                   </div>
-                  <Badge variant={STATUS_VARIANT[exam.status] ?? 'secondary'} className="capitalize">
+                  {/* pl-[3.25rem] lines the action row up under the exam name on
+                      mobile (40px icon + 12px gap); on sm+ it sits inline instead. */}
+                  <div className="flex flex-wrap items-center gap-2 pl-[3.25rem] sm:pl-0">
+                  <Badge variant={STATUS_VARIANT[exam.status] ?? 'secondary'} className="shrink-0 capitalize">
                     {exam.status?.replace('_', ' ')}
                   </Badge>
                   {/* Status actions */}
@@ -135,6 +151,7 @@ export default function ExamsPage() {
                         Manage <ChevronRight className="h-3 w-3" />
                       </Link>
                     </Button>
+                  </div>
                   </div>
                 </div>
               ))}
@@ -193,7 +210,7 @@ function NewExamModal({ onClose }: { onClose: () => void }) {
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="exam-start">Start Date</Label>
               <Input id="exam-start" type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} />

@@ -12,36 +12,44 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-// Decorative per-subject color coding for timetable cells — light + dark
-// variants so the grid stays legible in both themes.
+// Decorative per-subject color coding for timetable cells. These are
+// categorical — they identify a subject, not a state — so they deliberately sit
+// outside the semantic token scale and must stay distinguishable from each
+// other. Every entry uses the `bg-<hue>-500/10 + text-<hue>-600
+// dark:text-<hue>-400 + inset ring` form, which reads in both themes; the old
+// `bg-<hue>-50 + text-<hue>-800` form vanished on a near-black page.
+// Break / Lunch / Assembly are not subjects — they're gaps in the day — so they
+// take the neutral surface token instead of a hue.
 const SUBJECT_COLORS: Record<string, string> = {
-  'Mathematics':       'bg-indigo-50 border-indigo-300 text-indigo-800 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300',
-  'English':           'bg-blue-50 border-blue-300 text-blue-800 dark:bg-blue-950/40 dark:border-blue-800 dark:text-blue-300',
-  'Science':           'bg-emerald-50 border-emerald-300 text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300',
-  'Hindi':             'bg-orange-50 border-orange-300 text-orange-800 dark:bg-orange-950/40 dark:border-orange-800 dark:text-orange-300',
-  'Social Studies':    'bg-purple-50 border-purple-300 text-purple-800 dark:bg-purple-950/40 dark:border-purple-800 dark:text-purple-300',
-  'Computer':          'bg-cyan-50 border-cyan-300 text-cyan-800 dark:bg-cyan-950/40 dark:border-cyan-800 dark:text-cyan-300',
-  'Art':               'bg-pink-50 border-pink-300 text-pink-800 dark:bg-pink-950/40 dark:border-pink-800 dark:text-pink-300',
-  'Physical Ed':       'bg-lime-50 border-lime-300 text-lime-800 dark:bg-lime-950/40 dark:border-lime-800 dark:text-lime-300',
-  'Sanskrit':          'bg-yellow-50 border-yellow-300 text-yellow-800 dark:bg-yellow-950/40 dark:border-yellow-800 dark:text-yellow-300',
-  'Drawing':           'bg-rose-50 border-rose-300 text-rose-800 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300',
-  'Sports':            'bg-teal-50 border-teal-300 text-teal-800 dark:bg-teal-950/40 dark:border-teal-800 dark:text-teal-300',
-  'Activity':          'bg-violet-50 border-violet-300 text-violet-800 dark:bg-violet-950/40 dark:border-violet-800 dark:text-violet-300',
-  'Moral Science':     'bg-amber-50 border-amber-300 text-amber-800 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300',
-  'General Knowledge': 'bg-sky-50 border-sky-300 text-sky-800 dark:bg-sky-950/40 dark:border-sky-800 dark:text-sky-300',
-  'Break':             'bg-muted border-border text-muted-foreground',
-  'Lunch':             'bg-muted border-border text-muted-foreground',
-  'Assembly':          'bg-muted border-border text-muted-foreground',
+  'Mathematics':       'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 ring-1 ring-inset ring-indigo-500/20',
+  'English':           'bg-blue-500/10 text-blue-600 dark:text-blue-400 ring-1 ring-inset ring-blue-500/20',
+  'Science':           'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 ring-1 ring-inset ring-emerald-500/20',
+  'Hindi':             'bg-orange-500/10 text-orange-600 dark:text-orange-400 ring-1 ring-inset ring-orange-500/20',
+  'Social Studies':    'bg-purple-500/10 text-purple-600 dark:text-purple-400 ring-1 ring-inset ring-purple-500/20',
+  'Computer':          'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 ring-1 ring-inset ring-cyan-500/20',
+  'Art':               'bg-pink-500/10 text-pink-600 dark:text-pink-400 ring-1 ring-inset ring-pink-500/20',
+  'Physical Ed':       'bg-lime-500/10 text-lime-600 dark:text-lime-400 ring-1 ring-inset ring-lime-500/20',
+  'Sanskrit':          'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 ring-1 ring-inset ring-yellow-500/20',
+  'Drawing':           'bg-rose-500/10 text-rose-600 dark:text-rose-400 ring-1 ring-inset ring-rose-500/20',
+  'Sports':            'bg-teal-500/10 text-teal-600 dark:text-teal-400 ring-1 ring-inset ring-teal-500/20',
+  'Activity':          'bg-violet-500/10 text-violet-600 dark:text-violet-400 ring-1 ring-inset ring-violet-500/20',
+  'Moral Science':     'bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-1 ring-inset ring-amber-500/20',
+  'General Knowledge': 'bg-sky-500/10 text-sky-600 dark:text-sky-400 ring-1 ring-inset ring-sky-500/20',
+  'Break':             'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
+  'Lunch':             'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
+  'Assembly':          'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
 }
-const getColor = (s: string) => SUBJECT_COLORS[s] ?? 'bg-violet-50 border-violet-300 text-violet-800 dark:bg-violet-950/40 dark:border-violet-800 dark:text-violet-300'
+const SUBJECT_FALLBACK = 'bg-violet-500/10 text-violet-600 dark:text-violet-400 ring-1 ring-inset ring-violet-500/20'
+const getColor = (s: string) => SUBJECT_COLORS[s] ?? SUBJECT_FALLBACK
 
-const CONFLICT_CELL = 'bg-destructive/10 border-destructive text-destructive'
+const CONFLICT_CELL = 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/40'
 
 type ViewMode = 'class' | 'teacher' | 'free'
 
@@ -49,6 +57,7 @@ function SegBtn({ active, onClick, children }: { active: boolean; onClick: () =>
   return (
     <button onClick={onClick}
       className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
         active ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground')}>
       {children}
     </button>
@@ -174,11 +183,15 @@ export default function TimetablePage() {
             {viewMode !== 'free' && (
               <div className="flex items-center gap-1 bg-muted p-1 rounded-lg">
                 <button onClick={() => setGridOrList('grid')} aria-label="Grid view"
-                  className={cn('p-1.5 rounded-md transition-all', gridOrList === 'grid' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground')}>
+                  className={cn('flex h-7 w-7 items-center justify-center rounded-md transition-all',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                    gridOrList === 'grid' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground')}>
                   <Grid3X3 className="w-4 h-4" />
                 </button>
                 <button onClick={() => setGridOrList('list')} aria-label="List view"
-                  className={cn('p-1.5 rounded-md transition-all', gridOrList === 'list' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground')}>
+                  className={cn('flex h-7 w-7 items-center justify-center rounded-md transition-all',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                    gridOrList === 'list' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground')}>
                   <List className="w-4 h-4" />
                 </button>
               </div>
@@ -270,11 +283,21 @@ export default function TimetablePage() {
       {/* Empty state */}
       {((viewMode === 'class' && !selectedClass) || (viewMode === 'teacher' && !selectedTeacher)) ? (
         <div className="bg-card rounded-2xl border border-border">
-          <EmptyState icon={Clock} title={viewMode === 'class' ? 'Select a class to view timetable' : 'Select a teacher to view their schedule'} />
+          <EmptyState
+            icon={Clock}
+            title={viewMode === 'class' ? 'Select a class to view timetable' : 'Select a teacher to view their schedule'}
+            description={viewMode === 'class'
+              ? 'Pick a class above and its weekly grid of periods will load here.'
+              : 'Pick a teacher above to see every period they teach this week.'}
+          />
         </div>
       ) : isLoading ? (
-        <div className="bg-card rounded-2xl border border-border p-12 text-center">
-          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
+        // Skeleton mirrors the grid that lands: a header row plus six period rows.
+        <div className="bg-card rounded-2xl border border-border p-5 space-y-3">
+          <Skeleton className="h-10 w-full" />
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-14 w-full" />
+          ))}
         </div>
       ) : gridOrList === 'grid' ? (
         // ── GRID VIEW ─────────────────────────────────────────
@@ -292,7 +315,7 @@ export default function TimetablePage() {
                         <span className="text-xs font-bold text-foreground">{DAY_SHORT[idx]}</span>
                         {viewMode === 'class' && canManage && (
                           <button onClick={() => { setAddingDay(idx + 1); setShowAdd(true) }} aria-label={`Add period on ${day}`}
-                            className="text-primary/60 hover:text-primary transition-colors">
+                            className="-my-2 flex h-9 w-9 items-center justify-center rounded-md text-primary/60 transition-colors hover:bg-accent hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                             <Plus className="w-3.5 h-3.5" />
                           </button>
                         )}
@@ -315,7 +338,7 @@ export default function TimetablePage() {
                         <td key={dayNum} className="px-2 py-2 border-r border-border last:border-r-0 align-top">
                           {period ? (
                             <div className={cn(
-                              'group relative rounded-xl border px-3 py-2 text-xs transition-all hover:shadow-sm cursor-default',
+                              'group relative rounded-xl px-3 py-2 text-xs transition-all hover:shadow-sm cursor-default',
                               hasConflict ? CONFLICT_CELL : getColor(period.subject_name)
                             )}>
                               <div className="flex items-start justify-between gap-1">
@@ -324,8 +347,8 @@ export default function TimetablePage() {
                                   {period.subject_name}
                                 </p>
                                 {viewMode === 'class' && !period.is_break && canManage && (
-                                  <button onClick={() => deleteMutation.mutate(period.id)} aria-label="Remove period"
-                                    className="opacity-0 group-hover:opacity-100 flex-shrink-0 text-destructive/70 hover:text-destructive transition-all">
+                                  <button onClick={() => deleteMutation.mutate(period.id)} aria-label={`Remove ${period.subject_name}`}
+                                    className="-mr-1.5 -mt-1 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-destructive/70 opacity-0 transition-all hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100">
                                     <Trash2 className="w-3 h-3" />
                                   </button>
                                 )}
@@ -341,8 +364,8 @@ export default function TimetablePage() {
                               )}
                             </div>
                           ) : viewMode === 'class' && canManage ? (
-                            <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }} aria-label="Add period"
-                              className="w-full h-14 border-2 border-dashed border-border rounded-xl text-muted-foreground/40 hover:border-primary/40 hover:text-primary/60 transition-all flex items-center justify-center">
+                            <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }} aria-label={`Add period on ${DAY_SHORT[dayNum - 1]}, period ${periodNum}`}
+                              className="w-full h-14 border-2 border-dashed border-border rounded-xl text-muted-foreground/40 hover:border-primary/40 hover:text-primary/60 transition-all flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                               <Plus className="w-4 h-4" />
                             </button>
                           ) : (
@@ -355,9 +378,19 @@ export default function TimetablePage() {
                 ))}
                 {allPeriods.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
-                      <Clock className="w-10 h-10 mx-auto mb-2 text-muted-foreground/40" />
-                      <p className="font-medium">No periods scheduled yet</p>
+                    <td colSpan={7} className="p-0">
+                      <EmptyState
+                        icon={Clock}
+                        title="No periods scheduled yet"
+                        description={viewMode === 'class'
+                          ? 'This class has no timetable for the week. Add a period to any day to start building it.'
+                          : 'This teacher has no periods assigned this week.'}
+                        action={viewMode === 'class' && canManage ? (
+                          <Button onClick={() => { setAddingDay(1); setShowAdd(true) }}>
+                            <Plus className="w-4 h-4" /> Add Period
+                          </Button>
+                        ) : undefined}
+                      />
                     </td>
                   </tr>
                 )}
@@ -367,7 +400,7 @@ export default function TimetablePage() {
           {allPeriods.length > 0 && (
             <div className="px-5 py-3 border-t border-border bg-muted/30 flex flex-wrap gap-2">
               {Array.from(new Set((timetableData ?? []).filter((p: any) => !p.is_break).map((p: any) => p.subject_name))).map((subject: any) => (
-                <span key={subject} className={cn('px-2.5 py-1 rounded-full text-xs font-medium border', getColor(subject))}>
+                <span key={subject} className={cn('px-2.5 py-1 rounded-full text-xs font-medium', getColor(subject))}>
                   {subject}
                 </span>
               ))}
@@ -386,7 +419,7 @@ export default function TimetablePage() {
                   <h3 className="font-semibold text-foreground text-sm">{day}</h3>
                   {viewMode === 'class' && canManage && (
                     <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }}
-                      className="flex items-center gap-1 text-xs text-primary font-medium hover:text-primary/80">
+                      className="-my-1.5 flex h-9 items-center gap-1 rounded-md px-2 text-xs font-medium text-primary transition-colors hover:bg-accent hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                       <Plus className="w-3.5 h-3.5" /> Add Period
                     </button>
                   )}
@@ -399,7 +432,7 @@ export default function TimetablePage() {
                       const hasConflict = conflicts.has(p.id)
                       return (
                         <div key={p.id} className={cn(
-                          'group relative flex flex-col gap-1 px-4 py-3 rounded-xl border text-xs min-w-[130px]',
+                          'group relative flex flex-col gap-1 px-4 py-3 rounded-xl text-xs min-w-[130px]',
                           hasConflict ? CONFLICT_CELL : getColor(p.subject_name)
                         )}>
                           <div className="flex items-center justify-between gap-2">
@@ -408,8 +441,8 @@ export default function TimetablePage() {
                               {p.subject_name}
                             </span>
                             {viewMode === 'class' && !p.is_break && canManage && (
-                              <button onClick={() => deleteMutation.mutate(p.id)} aria-label="Remove period"
-                                className="opacity-0 group-hover:opacity-100 text-destructive/70 hover:text-destructive transition-opacity">
+                              <button onClick={() => deleteMutation.mutate(p.id)} aria-label={`Remove ${p.subject_name}`}
+                                className="-mr-1.5 -my-1 flex h-8 w-8 items-center justify-center rounded-md text-destructive/70 opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             )}
@@ -475,7 +508,7 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (day: 
   }
 
   if (isLoading) {
-    return <div className="bg-card rounded-2xl border border-border p-5 h-20 animate-pulse" />
+    return <Skeleton className="h-20 w-full rounded-2xl" />
   }
 
   // Sunday — nothing scheduled, nothing to check.
@@ -638,12 +671,19 @@ function FreeFacultyView() {
       </div>
 
       {isLoading ? (
-        <div className="bg-card rounded-2xl border border-border p-12 text-center">
-          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
+        // Two side-by-side panels (Free / Teaching) land here.
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <Skeleton key={i} className="h-64 w-full rounded-2xl" />
+          ))}
         </div>
       ) : availablePeriods.length === 0 ? (
         <div className="bg-card rounded-2xl border border-border">
-          <EmptyState icon={Clock} title={`No periods scheduled on ${DAYS[day - 1]} yet`} />
+          <EmptyState
+            icon={Clock}
+            title={`No periods scheduled on ${DAYS[day - 1]} yet`}
+            description="Who's free is worked out from the timetable — build this day's schedule first, then come back."
+          />
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -657,9 +697,16 @@ function FreeFacultyView() {
               <span className="text-xs text-muted-foreground">{shownFree.length}</span>
             </div>
             {period === '' ? (
-              <p className="px-5 py-6 text-sm text-muted-foreground">Pick a period to see who's free at that time.</p>
+              <EmptyState icon={Clock} title="Pick a period" description="Choose a period above to see which teachers are free at that time." className="py-10" />
             ) : shownFree.length === 0 ? (
-              <p className="px-5 py-6 text-sm text-muted-foreground">No one's free at this period{subjectFilter ? ` who teaches ${subjectFilter}` : ''}.</p>
+              <EmptyState
+                icon={UserCheck}
+                title="No one's free at this period"
+                description={subjectFilter
+                  ? `Every ${subjectFilter} teacher is already teaching. Clear the subject filter to widen the search.`
+                  : 'Every teacher is already teaching this period. Try a neighbouring period.'}
+                className="py-10"
+              />
             ) : (
               <div className="divide-y divide-border">
                 {shownFree.map((t: any) => (
@@ -685,9 +732,9 @@ function FreeFacultyView() {
               <span className="text-xs text-muted-foreground">{busyTeachers.length}</span>
             </div>
             {period === '' ? (
-              <p className="px-5 py-6 text-sm text-muted-foreground">Pick a period to see who's teaching.</p>
+              <EmptyState icon={Clock} title="Pick a period" description="Choose a period above to see who is teaching at that time." className="py-10" />
             ) : busyTeachers.length === 0 ? (
-              <p className="px-5 py-6 text-sm text-muted-foreground">No one is teaching at this period.</p>
+              <EmptyState icon={User} title="No one is teaching" description="Nothing is scheduled for this period — it's free for everyone." className="py-10" />
             ) : (
               <div className="divide-y divide-border">
                 {busyTeachers.map((b: any) => (
@@ -784,8 +831,9 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
           <div className="flex items-center justify-between p-3 bg-muted/50 rounded-xl">
             <span className="text-sm font-medium text-foreground">Break / Lunch</span>
             <button onClick={() => setForm(f => ({ ...f, is_break: !f.is_break, subject_name: !f.is_break ? 'Break' : '' }))}
-              aria-label="Toggle break"
-              className={cn('w-12 h-6 rounded-full relative transition-all', form.is_break ? 'bg-primary' : 'bg-muted-foreground/30')}>
+              aria-label="Toggle break" role="switch" aria-checked={form.is_break}
+              className={cn('w-12 h-6 rounded-full relative transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                form.is_break ? 'bg-primary' : 'bg-muted-foreground/30')}>
               <span className={cn('absolute top-0.5 w-5 h-5 bg-background rounded-full shadow transition-all', form.is_break ? 'left-6' : 'left-0.5')} />
             </button>
           </div>
@@ -840,7 +888,7 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label>Period No.</Label>
               <Input type="number" min="1" max="12" value={form.period_number}
@@ -860,10 +908,14 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
           {/* Day picker */}
           <div className="space-y-1.5">
             <Label>Day</Label>
-            <div className="grid grid-cols-6 gap-1">
+            <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1">
+              {/* Single letters repeat (Tue/Thu), so each button carries the
+                  full day name for screen readers. */}
               {['M','T','W','T','F','S'].map((d, i) => (
                 <button key={i} onClick={() => { setForm(f => ({ ...f, day_of_week: i+1 })); checkConflict(teacherId, i+1, form.period_number) }}
-                  className={cn('py-2 rounded-lg text-xs font-bold transition-all', form.day_of_week === i+1 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70')}>
+                  aria-label={DAYS[i]} aria-pressed={form.day_of_week === i+1}
+                  className={cn('h-9 rounded-lg text-xs font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                    form.day_of_week === i+1 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70')}>
                   {d}
                 </button>
               ))}

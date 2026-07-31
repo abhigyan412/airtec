@@ -18,8 +18,16 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
-      - key: FRONTEND_URL
-        value: https://airtec-frontend.onrender.com
+      # Web push signing pair. Generate once with
+      #   npx web-push generate-vapid-keys
+      # and paste into the dashboard — rotating them invalidates every
+      # existing browser subscription, so treat them as long-lived.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
 
   - type: web
     name: airtec-frontend
@@ -29,5 +37,12 @@ services:
     buildCommand: npm install && npm run build
     startCommand: npx next start -p $PORT
     envVars:
+      # Same-origin: the browser calls /api on this service and the
+      # rewrite in next.config.js proxies it onward, so there is no
+      # cross-origin request and nothing to allowlist. Setting an
+      # absolute backend URL here instead would bypass the proxy and
+      # put every browser call back into CORS territory.
       - key: NEXT_PUBLIC_API_URL
-        value: https://airtec-backend.onrender.com/api
+        value: /api
+      - key: BACKEND_URL
+        value: https://airtec-backend.onrender.com

@@ -1,7 +1,7 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Search, Plus, Users, Edit3, GraduationCap } from 'lucide-react'
 import Link from 'next/link'
 import { studentsApi } from '@/lib/api'
@@ -31,9 +31,18 @@ import {
 
 export default function StudentsPage() {
   const router = useRouter()
-  const [search, setSearch] = useState('')
+  const searchParams = useSearchParams()
+  // Seeded from ?search= so the header's global search lands here with the
+  // query already applied.
+  const [search, setSearch] = useState(searchParams.get('search') ?? '')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
+
+  useEffect(() => {
+    const q = searchParams.get('search') ?? ''
+    setSearch(q)
+    setPage(1)
+  }, [searchParams])
 
   const { data, isLoading } = useQuery({
     queryKey: ['students', { search, status, page }],
@@ -127,12 +136,12 @@ export default function StudentsPage() {
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead>Student</TableHead>
-                  <TableHead>Admission No.</TableHead>
+                  <TableHead className="hidden md:table-cell">Admission No.</TableHead>
                   <TableHead>Class</TableHead>
-                  <TableHead>House</TableHead>
+                  <TableHead className="hidden md:table-cell">House</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Joined</TableHead>
-                  <TableHead />
+                  <TableHead className="hidden md:table-cell">Joined</TableHead>
+                  <TableHead className="hidden md:table-cell" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -156,14 +165,14 @@ export default function StudentsPage() {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <span className="rounded-lg bg-muted px-2.5 py-1 font-mono text-xs text-muted-foreground">{s.admission_number ?? '—'}</span>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {s.classes?.name ?? '—'}
                       {s.sections?.name && <span className="text-muted-foreground/70"> · {s.sections.name}</span>}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {s.houses
                         ? <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold text-white" style={{ backgroundColor: s.houses.color ?? '#6366f1' }}>
                             <span className="h-1.5 w-1.5 rounded-full bg-white/60" />
@@ -177,8 +186,8 @@ export default function StudentsPage() {
                         {s.status}
                       </span>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{formatDate(s.created_at)}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell text-xs text-muted-foreground">{formatDate(s.created_at)}</TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <span className="text-xs font-semibold text-primary opacity-0 transition-opacity group-hover:opacity-100">
                         View →
                       </span>

@@ -6,6 +6,7 @@ import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
 import { UserX, MessageSquareWarning, FileWarning, Wallet, CalendarCheck, AlertTriangle } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 
 const todayStr = (() => {
   const d = new Date()
@@ -40,7 +41,7 @@ export function NeedsAttentionToday() {
     queryFn: () => feeApi.dues().then(r => r.data),
     enabled: canFees,
   })
-  const { data: attendanceToday } = useQuery({
+  const { data: attendanceToday, isLoading: attendanceLoading } = useQuery({
     queryKey: ['dashboard-attendance-today'],
     queryFn: () => studentsApi.attendanceToday().then(r => r.data),
     enabled: canAttendance,
@@ -132,13 +133,15 @@ export function NeedsAttentionToday() {
                 </span>
               </div>
               <p className="text-xs font-medium text-foreground">Today&apos;s Attendance</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                {!attendanceToday
-                  ? 'Loading...'
-                  : !attendanceToday.is_working_day
-                  ? 'Holiday / weekly off'
-                  : `${attendanceToday.sections_marked}/${attendanceToday.sections_total} sections marked`}
-              </p>
+              {attendanceLoading ? (
+                <Skeleton className="mt-1 h-3 w-28" />
+              ) : (
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {!attendanceToday?.is_working_day
+                    ? 'Holiday / weekly off'
+                    : `${attendanceToday.sections_marked}/${attendanceToday.sections_total} sections marked`}
+                </p>
+              )}
             </Link>
           )}
         </div>

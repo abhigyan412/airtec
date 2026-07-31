@@ -9,7 +9,11 @@ import axios, { AxiosError } from 'axios'
 // needs revisiting (auth/API-client drift between the two apps is the
 // tradeoff being made here).
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'
+// Same-origin by default: the browser hits this Next server at /api and
+// the rewrite in next.config.js proxies it to the backend. Keeps the app
+// on one origin, so no CORS allowlist entry is needed per deployed
+// hostname. Override only if you deliberately want cross-origin calls.
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api'
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -24,15 +28,76 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// ── Silent re-auth ───────────────────────────────────────────
+// Supabase access tokens expire after an hour. Without this, the first
+// request past that mark 401s and dumps the user back on the login
+// screen mid-session. On a 401 we spend the stored refresh_token once,
+// then replay the original request.
+//
+// The in-flight promise is shared: a page fires several queries at once
+// and they all 401 together — they must queue behind ONE refresh, or
+// they'd each burn the refresh token and the losers would fail against
+// an already-rotated token.
+let refreshInFlight: Promise<string> | null = null
+
+function hardLogout() {
+  localStorage.removeItem('airtec_token')
+  localStorage.removeItem('airtec_refresh_token')
+  localStorage.removeItem('airtec_user')
+  if (!window.location.pathname.startsWith('/auth/login')) {
+    window.location.href = '/auth/login'
+  }
+}
+
+async function refreshAccessToken(): Promise<string> {
+  const refresh_token = localStorage.getItem('airtec_refresh_token')
+  if (!refresh_token) throw new Error('no refresh token')
+
+  // Bare axios, not `api` — going through the instance would recurse
+  // back into this interceptor if the refresh itself 401s.
+  const res = await axios.post(`${API_BASE}/auth/refresh`, { refresh_token }, {
+    headers: { 'Content-Type': 'application/json' },
+  })
+  const { access_token, refresh_token: rotated } = res.data.data
+  localStorage.setItem('airtec_token', access_token)
+  // Supabase rotates the refresh token on every use; keeping the old one
+  // would make the *next* refresh fail.
+  if (rotated) localStorage.setItem('airtec_refresh_token', rotated)
+  return access_token
+}
+
 api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
-      localStorage.removeItem('airtec_token')
-      localStorage.removeItem('airtec_user')
-      window.location.href = '/auth/login'
+    const original = error.config as (typeof error.config & { _retried?: boolean }) | undefined
+
+    if (
+      error.response?.status !== 401 ||
+      typeof window === 'undefined' ||
+      !original ||
+      original._retried ||
+      // The credential endpoints legitimately return 401 — a wrong
+      // password must surface as a wrong password, not a refresh loop.
+      original.url?.includes('/auth/login') ||
+      original.url?.includes('/auth/refresh')
+    ) {
+      if (error.response?.status === 401 && typeof window !== 'undefined' && !original?.url?.includes('/auth/login')) {
+        hardLogout()
+      }
+      return Promise.reject(error)
     }
-    return Promise.reject(error)
+
+    original._retried = true
+    try {
+      refreshInFlight = refreshInFlight ?? refreshAccessToken().finally(() => { refreshInFlight = null })
+      const token = await refreshInFlight
+      original.headers = original.headers ?? {}
+      ;(original.headers as any).Authorization = `Bearer ${token}`
+      return api(original)
+    } catch {
+      hardLogout()
+      return Promise.reject(error)
+    }
   }
 )
 

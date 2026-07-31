@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { feeApi, academicYearsApi } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
-import { ArrowLeft, Loader2, ArrowRightLeft } from 'lucide-react'
+import { ArrowLeft, Loader2, ArrowRightLeft, BarChart3 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -16,6 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 
 const STATUS_STYLES: Record<string, string> = {
@@ -43,25 +45,29 @@ export default function ArrearsPage() {
 
   return (
     <div className="animate-fade-in space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-start gap-3">
-          <Button asChild variant="ghost" size="icon" className="mt-0.5" aria-label="Back to fees">
-            <Link href="/fees"><ArrowLeft className="h-5 w-5" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Arrears</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">Carried-forward dues from previous academic years</p>
-          </div>
-        </div>
-        <Button onClick={() => setShowCarryForward(true)}>
-          <ArrowRightLeft className="h-4 w-4" /> Carry Forward Dues
+      {/* The back arrow sits outside PageHeader so the shared header keeps its
+          icon + title + actions layout on every page. */}
+      <div className="mb-6 flex items-start gap-3">
+        <Button asChild variant="ghost" size="icon" className="mt-0.5 shrink-0" aria-label="Back to fees">
+          <Link href="/fees"><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
+        <PageHeader
+          title="Arrears"
+          description="Carried-forward dues from previous academic years"
+          icon={BarChart3}
+          className="mb-0 flex-1"
+          actions={
+            <Button onClick={() => setShowCarryForward(true)}>
+              <ArrowRightLeft className="h-4 w-4" /> Carry Forward Dues
+            </Button>
+          }
+        />
       </div>
 
       <Card>
         <CardContent className="p-5">
           <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Total Outstanding Arrears</p>
-          <p className="text-2xl font-bold text-destructive">{formatCurrency(totalOutstanding)}</p>
+          <p className="text-2xl font-bold tabular-nums text-destructive">{formatCurrency(totalOutstanding)}</p>
         </CardContent>
       </Card>
 
@@ -79,12 +85,21 @@ export default function ArrearsPage() {
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
-            <div className="p-12 text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" /></div>
+            <div className="space-y-3 p-6">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
           ) : !(arrears ?? []).length ? (
             <EmptyState
               icon={ArrowRightLeft}
-              title="No arrears found"
-              description='Use "Carry Forward Dues" at the start of a new academic year to bring unpaid balances forward'
+              title={statusFilter ? `No ${statusFilter} arrears` : 'No arrears found'}
+              description={statusFilter
+                ? 'Nothing matches this status filter — try "All" to see every arrear.'
+                : 'Use "Carry Forward Dues" at the start of a new academic year to bring unpaid balances forward.'}
+              action={statusFilter
+                ? <Button variant="outline" onClick={() => setStatusFilter('')}>Clear filter</Button>
+                : <Button onClick={() => setShowCarryForward(true)}><ArrowRightLeft className="h-4 w-4" /> Carry Forward Dues</Button>}
             />
           ) : (
             <Table>
@@ -92,9 +107,9 @@ export default function ArrearsPage() {
                 <TableRow className="hover:bg-transparent">
                   <TableHead>Student</TableHead>
                   <TableHead>From → To Year</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Paid</TableHead>
-                  <TableHead>Remaining</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="text-right">Paid</TableHead>
+                  <TableHead className="text-right">Remaining</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead />
                 </TableRow>
@@ -113,9 +128,9 @@ export default function ArrearsPage() {
                       <TableCell className="text-xs text-muted-foreground">
                         {a.from_year?.name ?? '—'} → {a.to_year?.name ?? '—'}
                       </TableCell>
-                      <TableCell className="text-foreground">{formatCurrency(a.amount)}</TableCell>
-                      <TableCell className="text-success">{formatCurrency(a.amount_paid)}</TableCell>
-                      <TableCell className="font-bold text-destructive">{formatCurrency(remaining)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-foreground">{formatCurrency(a.amount)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-success">{formatCurrency(a.amount_paid)}</TableCell>
+                      <TableCell className="text-right font-bold tabular-nums text-destructive">{formatCurrency(remaining)}</TableCell>
                       <TableCell>
                         <span className={cn('rounded-full px-2.5 py-1 text-xs font-semibold capitalize', STATUS_STYLES[a.status])}>
                           {a.status}

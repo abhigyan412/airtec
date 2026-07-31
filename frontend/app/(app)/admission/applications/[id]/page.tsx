@@ -4,11 +4,14 @@ import { useParams } from 'next/navigation'
 import { admissionApi } from '@/lib/api'
 import { WorkflowPipeline } from '@/components/admission/WorkflowPipeline'
 import { formatDate } from '@/lib/utils'
-import { ArrowLeft, Phone, User, Loader2 } from 'lucide-react'
+import { ArrowLeft, Phone, User, ClipboardList } from 'lucide-react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { PageHeader } from '@/components/shared/PageHeader'
 
 const STATUS_VARIANTS: Record<string, 'warning' | 'success' | 'destructive' | 'secondary'> = {
   pending: 'warning',
@@ -26,39 +29,51 @@ export default function ApplicationDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      <div className="max-w-3xl space-y-6">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-10 w-10 rounded-xl" />
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-56" />
+            <Skeleton className="h-4 w-64" />
+          </div>
+        </div>
+        <Skeleton className="h-[220px] w-full rounded-2xl" />
+        <Skeleton className="h-[260px] w-full rounded-2xl" />
       </div>
     )
   }
 
   if (!app) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-        <p className="font-medium text-foreground">Application not found</p>
-        <Link href="/admission/applications" className="text-primary text-sm mt-2 hover:underline">Back to Applications</Link>
-      </div>
+      <EmptyState
+        icon={ClipboardList}
+        title="Application not found"
+        description="This application may have been deleted, or the link is out of date."
+        action={
+          <Button variant="outline" asChild>
+            <Link href="/admission/applications">
+              <ArrowLeft className="w-4 h-4" /> Back to Applications
+            </Link>
+          </Button>
+        }
+      />
     )
   }
 
   return (
     <div className="max-w-3xl space-y-6">
       {/* Header */}
-      <div className="flex items-start gap-3">
-        <Button variant="ghost" size="icon" asChild className="mt-1">
-          <Link href="/admission/applications" aria-label="Back to Applications">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-        </Button>
-        <div className="flex-1">
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">{app.student_first_name} {app.student_last_name}</h1>
-            <Badge variant={STATUS_VARIANTS[app.status] ?? 'secondary'} className="capitalize">{app.status}</Badge>
-            <span className="text-xs text-muted-foreground font-mono bg-muted px-2 py-0.5 rounded">{app.application_number}</span>
-          </div>
-          <p className="text-muted-foreground text-sm mt-1">Submitted {formatDate(app.created_at)}</p>
-        </div>
-      </div>
+      <Button variant="ghost" size="sm" asChild className="-ml-3 -mb-2 text-muted-foreground">
+        <Link href="/admission/applications">
+          <ArrowLeft className="w-4 h-4" /> Back to Applications
+        </Link>
+      </Button>
+      <PageHeader
+        title={`${app.student_first_name} ${app.student_last_name}`}
+        description={`${app.application_number} · Submitted ${formatDate(app.created_at)}`}
+        icon={ClipboardList}
+        actions={<Badge variant={STATUS_VARIANTS[app.status] ?? 'secondary'} className="capitalize">{app.status}</Badge>}
+      />
 
       {/* Basic details */}
       <Card>
@@ -68,7 +83,7 @@ export default function ApplicationDetailPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
             <div>
               <p className="text-xs text-muted-foreground mb-0.5">Father's Phone</p>
               <p className="text-sm font-medium text-foreground flex items-center gap-1">

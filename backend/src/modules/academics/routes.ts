@@ -162,7 +162,7 @@ router.post('/homework', requirePermissionV2('homework.create'),
         schoolId: school_id, type: 'homework_assigned',
         title: `New ${body.type === 'classwork' ? 'classwork' : 'homework'}: ${body.subject_name}`,
         message: `"${body.title}"${body.due_date ? ` — due ${body.due_date}` : ''}`,
-        link: '/portal/homework',
+        link: '/homework',
         relatedEntityType: 'homework', relatedEntityId: homework.id,
       })
     } catch (notifyErr) {
@@ -247,18 +247,21 @@ router.get('/syllabus/stats', requirePermissionV2('syllabus.view'),
     if (class_id) query = query.eq('class_id', class_id as string)
     if (section_id) query = query.or(`section_id.eq.${section_id},section_id.is.null`)
 
-    const { data: chapters } = await query
-
     // When scoped to a specific section, every chapter's own section_id
     // may be null (a whole-class chapter folded into this section's
     // reading) — so the group's displayed section identity has to come
     // from the query param's section, looked up once, not from whichever
     // individual chapter happened to be grouped first.
-    let queriedSection: { id: string; name: string } | null = null
-    if (section_id) {
-      const { data: sec } = await supabase.from('sections').select('id, name').eq('id', section_id as string).maybeSingle()
-      queriedSection = sec ?? null
-    }
+    //
+    // That lookup does not depend on the chapters, so it runs alongside them
+    // rather than after (~245ms per round-trip to this Supabase).
+    const [{ data: chapters }, sectionResult] = await Promise.all([
+      query,
+      section_id
+        ? supabase.from('sections').select('id, name').eq('id', section_id as string).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ])
+    const queriedSection: { id: string; name: string } | null = (sectionResult as any)?.data ?? null
 
     const today = new Date().toISOString().slice(0, 10)
 

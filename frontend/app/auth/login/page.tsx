@@ -88,7 +88,7 @@ export default function LoginPage() {
               SIS · Admission CRM · Fee Management · Examinations — all in one platform.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {STATS.map((s) => (
               <div key={s.label} className="rounded-xl border border-white/10 bg-white/10 p-4 backdrop-blur-sm">
                 <p className="text-2xl font-bold text-white">{s.num}</p>
@@ -151,7 +151,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => setShowPassword((s) => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                    className="absolute right-1 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}

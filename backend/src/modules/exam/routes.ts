@@ -348,7 +348,7 @@ router.post('/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: R
                         schoolId: school_id, type: 'exam_result_published',
                         title: 'Exam results published',
                         message: `Results for "${exam?.name ?? 'the exam'}" are now available.`,
-                        link: '/portal/exams',
+                        link: '/exams',
                         relatedEntityType: 'exam', relatedEntityId: id,
                     })
                 } catch (notifyErr) {

@@ -17,9 +17,17 @@ import { DEFAULT_ROLE_PERMISSIONS, LEGACY_ROLE_TO_RBAC_ROLE } from '../seed'
 // Run with: npm test (from backend/)
 // ═══════════════════════════════════════════════════════════════
 
+// Fixture rows created by the other suites are deliberately excluded:
+// they are scaffolding, not real data, and an interrupted run can leave
+// them behind. Counting them made this suite fail for reasons that say
+// nothing about the state these invariants exist to protect.
+const FIXTURE_PREFIX = '__vitest'
+const isFixtureName = (v?: string | null) => !!v?.startsWith(FIXTURE_PREFIX)
+
 describe('RBAC live-data sync invariant', () => {
   it('every school has all default roles seeded', async () => {
-    const { data: schools, error: schoolsErr } = await supabase.from('schools').select('id, name')
+    const { data: allSchools, error: schoolsErr } = await supabase.from('schools').select('id, name')
+    const schools = (allSchools ?? []).filter(s => !isFixtureName((s as any).name))
     expect(schoolsErr).toBeNull()
 
     const { data: allRoles, error: rolesErr } = await supabase.from('roles').select('id, name, school_id')
@@ -57,7 +65,8 @@ describe('RBAC live-data sync invariant', () => {
   })
 
   it('no user_roles row leaks across schools', async () => {
-    const { data: users } = await supabase.from('users').select('id, school_id')
+    const { data: allSchoolUsers } = await supabase.from('users').select('id, school_id, email')
+    const users = (allSchoolUsers ?? []).filter(u => !isFixtureName((u as any).email))
     const { data: allRoles } = await supabase.from('roles').select('id, school_id')
     const { data: allUserRoles } = await supabase.from('user_roles').select('id, user_id, role_id, school_id')
 
@@ -76,7 +85,8 @@ describe('RBAC live-data sync invariant', () => {
   })
 
   it('every user has exactly one correctly-matched primary role', async () => {
-    const { data: users } = await supabase.from('users').select('id, full_name, email, role')
+    const { data: allUsers } = await supabase.from('users').select('id, full_name, email, role')
+    const users = (allUsers ?? []).filter(u => !isFixtureName((u as any).email))
     const { data: allRoles } = await supabase.from('roles').select('id, name')
     const { data: allUserRoles } = await supabase.from('user_roles').select('user_id, role_id')
 

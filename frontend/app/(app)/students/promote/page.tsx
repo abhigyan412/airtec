@@ -4,12 +4,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { studentsApi, admissionApi, academicYearsApi } from '@/lib/api'
 import { cn, STATUS_COLORS, formatDate } from '@/lib/utils'
-import { ArrowLeft, Search, CheckSquare, Square, Users, ArrowRight, Loader2, GraduationCap, AlertTriangle, History, ArrowRightLeft } from 'lucide-react'
+import { ArrowLeft, Search, CheckSquare, Square, Users, ArrowRight, Loader2, GraduationCap, AlertTriangle, History, ArrowRightLeft, ArrowUpNarrowWide } from 'lucide-react'
 import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
@@ -127,32 +129,34 @@ export default function PromoteStudentsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" asChild aria-label="Back to students">
-            <Link href="/students">
-              <ArrowLeft className="h-5 w-5" />
-            </Link>
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Promote / Transfer Students</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              {view === 'tool'
-                ? "Move students to a new class, section, or academic year — tracked in each student's promotion history"
-                : 'Every promotion, transfer, detention, and withdrawal recorded so far'}
-            </p>
-          </div>
-        </div>
-        <Tabs value={view} onValueChange={(v) => setView(v as 'tool' | 'history')}>
-          <TabsList>
-            <TabsTrigger value="tool">
-              <ArrowRightLeft className="h-4 w-4" /> Promote / Transfer
-            </TabsTrigger>
-            <TabsTrigger value="history">
-              <History className="h-4 w-4" /> History
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="icon" asChild aria-label="Back to students" className="mt-1 shrink-0">
+          <Link href="/students">
+            <ArrowLeft className="h-5 w-5" />
+          </Link>
+        </Button>
+        <PageHeader
+          className="mb-0 flex-1"
+          title="Promote / Transfer Students"
+          icon={ArrowUpNarrowWide}
+          description={
+            view === 'tool'
+              ? "Move students to a new class, section, or academic year — tracked in each student's promotion history"
+              : 'Every promotion, transfer, detention, and withdrawal recorded so far'
+          }
+          actions={
+            <Tabs value={view} onValueChange={(v) => setView(v as 'tool' | 'history')}>
+              <TabsList>
+                <TabsTrigger value="tool">
+                  <ArrowRightLeft className="h-4 w-4" /> Promote / Transfer
+                </TabsTrigger>
+                <TabsTrigger value="history">
+                  <History className="h-4 w-4" /> History
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          }
+        />
       </div>
 
       {view === 'history' && <PromotionHistory classesData={classesData} />}
@@ -198,7 +202,11 @@ export default function PromoteStudentsPage() {
         <Card className="overflow-hidden p-0">
           <div className="flex items-center justify-between border-b border-border px-6 py-4">
             <div className="flex items-center gap-3">
-              <button onClick={toggleAll} className="text-muted-foreground transition-colors hover:text-primary" aria-label="Toggle all">
+              <button
+                onClick={toggleAll}
+                className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                aria-label="Toggle all students"
+              >
                 {selected.size === students.length && students.length > 0
                   ? <CheckSquare className="h-5 w-5 text-primary" /> : <Square className="h-5 w-5" />}
               </button>
@@ -214,19 +222,29 @@ export default function PromoteStudentsPage() {
             )}
           </div>
           {isLoading ? (
-            <div className="p-12 text-center text-sm text-muted-foreground">Loading students...</div>
+            <div className="space-y-3 p-6">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
           ) : students.length === 0 ? (
-            <EmptyState icon={Users} title="No active students in this class/section" className="py-12" />
+            <EmptyState
+              icon={Users}
+              title="No active students here"
+              description="Nothing matched this class, section, or search. Try another section or clear the search box."
+              className="py-12"
+            />
           ) : (
             <div className="max-h-[360px] divide-y divide-border overflow-y-auto">
               {students.map((s: any) => {
                 const isSelected = selected.has(s.id)
                 return (
-                  <div key={s.id} onClick={() => toggleOne(s.id)}
-                    className={cn('flex cursor-pointer items-center gap-4 px-6 py-2.5 transition-colors', isSelected ? 'bg-primary/10' : 'hover:bg-muted/50')}>
-                    <button className="shrink-0 text-muted-foreground" aria-label="Toggle student">
+                  <button key={s.id} type="button" onClick={() => toggleOne(s.id)}
+                    aria-pressed={isSelected}
+                    className={cn('flex w-full items-center gap-4 px-6 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring', isSelected ? 'bg-primary/10' : 'hover:bg-muted/50')}>
+                    <span className="shrink-0 text-muted-foreground">
                       {isSelected ? <CheckSquare className="h-4 w-4 text-primary" /> : <Square className="h-4 w-4" />}
-                    </button>
+                    </span>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-foreground">{s.first_name} {s.last_name}</p>
                       <p className="text-xs text-muted-foreground">
@@ -235,7 +253,7 @@ export default function PromoteStudentsPage() {
                       </p>
                     </div>
                     <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', STATUS_COLORS[s.status])}>{s.status}</span>
-                  </div>
+                  </button>
                 )
               })}
             </div>
@@ -355,6 +373,7 @@ function PromotionHistory({ classesData }: { classesData: any }) {
     }).then(r => r.data),
   })
   const records = data ?? []
+  const isFiltered = !!(typeFilter || classFilter)
 
   const TYPE_STYLES: Record<string, string> = {
     promoted: 'bg-success/10 text-success',
@@ -390,9 +409,20 @@ function PromotionHistory({ classesData }: { classesData: any }) {
 
       <Card className="overflow-hidden p-0">
         {isLoading ? (
-          <div className="p-12 text-center text-sm text-muted-foreground">Loading history...</div>
+          <div className="space-y-3 p-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
+          </div>
         ) : records.length === 0 ? (
-          <EmptyState icon={History} title="No promotions or transfers recorded yet" className="py-12" />
+          <EmptyState
+            icon={History}
+            title={isFiltered ? 'No records match these filters' : 'No promotions or transfers recorded yet'}
+            description={isFiltered
+              ? 'Try a different type or class, or clear the filters to see every record.'
+              : 'Once you move students from the Promote / Transfer tab, every promotion, transfer, detention and withdrawal is logged here.'}
+            className="py-12"
+          />
         ) : (
           <Table>
             <TableHeader>
