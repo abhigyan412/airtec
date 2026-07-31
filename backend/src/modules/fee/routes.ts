@@ -4,7 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
-import { toLocalDateStr } from '../../shared/utils/academicCalendar'
+import { toLocalDateStr, dateRangeStrings } from '../../shared/utils/academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 
 const router = Router()
@@ -809,9 +809,44 @@ router.get('/stats', asyncHandler(async (req: AuthRequest, res: Response) => {
 // not a raw slice of the payment_date ISO string — that string is UTC,
 // and slicing it directly would misfile any payment made in the first
 // ~5.5 hours of a new local-calendar month (IST) into the previous month.
+//
+// Optional ?from=&to= (YYYY-MM-DD) switches to DAY-WISE bucketing across
+// that exact range instead — same underlying data, finer granularity,
+// for "show me collections for this specific week/date range" instead of
+// a fixed trailing-6-months view. Capped at 366 days so a client can't
+// force scanning years of payments in one request.
 router.get('/collection-trend', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const months = Math.min(24, Math.max(1, Number(req.query.months) || 6))
   const school_id = req.user!.school_id
+  const { from, to } = req.query as { from?: string; to?: string }
+
+  if (from && to) {
+    if (from > to) return res.status(400).json({ success: false, error: '"from" must be on or before "to"' })
+    const days = dateRangeStrings(from, to)
+    if (days.length > 366) return res.status(400).json({ success: false, error: 'Range too large — max 366 days' })
+
+    const { data: payments, error } = await supabase
+      .from('fee_payments')
+      .select('amount_paid, payment_date')
+      .eq('school_id', school_id)
+      .gte('payment_date', `${from}T00:00:00`)
+      .lte('payment_date', `${to}T23:59:59`)
+    if (error) return res.status(500).json({ success: false, error: error.message })
+
+    const sumByDay = new Map<string, number>()
+    for (const p of payments ?? []) {
+      const key = toLocalDateStr(new Date(p.payment_date))
+      sumByDay.set(key, (sumByDay.get(key) ?? 0) + Number(p.amount_paid))
+    }
+
+    const data = days.map(d => ({
+      month: d,
+      label: new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+      collected: sumByDay.get(d) ?? 0,
+    }))
+    return res.json({ success: true, data })
+  }
+
+  const months = Math.min(24, Math.max(1, Number(req.query.months) || 6))
   const now = new Date()
 
   const buckets = Array.from({ length: months }, (_, i) => {
