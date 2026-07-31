@@ -305,6 +305,8 @@ export const feeApi = {
     api.get('/fees/dues', { params }).then(r => r.data),
   collectionTrend: (months?: number) =>
     api.get('/fees/collection-trend', { params: { months } }).then(r => r.data),
+  collectionTrendRange: (from: string, to: string) =>
+    api.get('/fees/collection-trend', { params: { from, to } }).then(r => r.data),
   arrears: {
     list: (params?: Record<string, any>) =>
       api.get('/fees/arrears', { params }).then(r => r.data),
