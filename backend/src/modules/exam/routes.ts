@@ -401,7 +401,7 @@ router.get('/:id/results', asyncHandler(async (req: AuthRequest, res: Response) 
 
     const { data, error } = await supabase
         .from('report_cards')
-        .select('*, students(id, first_name, last_name, admission_number, roll_number, class_id, classes(name), sections(name))')
+        .select('*, students(id, first_name, last_name, admission_number, roll_number, class_id, section_id, classes(name, numeric_level), sections(name))')
         .eq('exam_id', id)
         .eq('school_id', school_id)
         .order('rank')

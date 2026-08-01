@@ -24,6 +24,11 @@ interface NavItem {
   requireAny?: string[]
   /** Visible only for these roles (super role always passes). */
   roles?: string[]
+  /** On top of any permission/roles check: for a legacy 'teacher' role
+   *  user specifically, also requires the RBAC "Class Teacher" role (an
+   *  active homeroom assignment this academic year). No-op for every
+   *  other role. */
+  teacherRequiresClassTeacher?: boolean
 }
 
 // Grouped navigation mapped to airtec's real routes and role_permissions_v2
@@ -59,7 +64,7 @@ const NAV: NavItem[] = [
     ],
   },
   { label: 'Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
-  { label: 'Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view' },
+  { label: 'Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true },
   { label: 'Timetable', href: '/timetable', icon: Clock, permission: 'timetable.view' },
   { label: 'Homework', href: '/homework', icon: NotebookPen, permission: 'homework.view' },
   { label: 'Complaints', href: '/complaints', icon: MessageSquare, permission: 'complaint.view' },
@@ -86,7 +91,8 @@ const NAV: NavItem[] = [
 const SETTINGS: NavItem[] = [
   { label: 'Team & Settings', href: '/settings/team', icon: SettingsIcon, requireAny: ['team.view', 'team.invite', 'role.manage'] },
   { label: 'Classes & Sections', href: '/settings/classes', icon: School, roles: ['principal'] },
-  { label: 'Academic Calendar', href: '/settings/calendar', icon: CalendarDays, roles: ['principal'] },
+  { label: 'Class Teachers', href: '/settings/teaching-assignments', icon: GraduationCap, roles: ['principal'] },
+  { label: 'Academic Calendar', href: '/settings/calendar', icon: CalendarDays, roles: ['principal', 'teacher'] },
 ]
 
 interface SidebarProps {
@@ -97,17 +103,19 @@ interface SidebarProps {
 export function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname()
   const { user, isRole } = useAuth()
-  const { can, canAny, isSuperRole } = usePermissions()
+  const { can, canAny, isSuperRole, roles } = usePermissions()
+  const isSubjectOnlyTeacher = user?.role === 'teacher' && !roles.includes('Class Teacher')
 
   const allowed = React.useCallback(
     (item: NavItem): boolean => {
       if (item.children?.length) return item.children.some(allowed)
+      if (item.teacherRequiresClassTeacher && isSubjectOnlyTeacher) return false
       if (item.roles) return isSuperRole || isRole(...item.roles)
       if (item.requireAny) return canAny(...item.requireAny)
       if (item.permission) return can(item.permission)
       return true
     },
-    [can, canAny, isRole, isSuperRole],
+    [can, canAny, isRole, isSuperRole, isSubjectOnlyTeacher],
   )
 
   // Only the single most-specific nav entry may be "active". Without this,
@@ -206,7 +214,17 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           </p>
           {NAV.map((item) => {
             if (!allowed(item)) return null
-            const children = item.children?.filter(allowed)
+            let children = item.children?.filter(allowed)
+            // A teacher's "Students" group is just their own scoped
+            // roster (the backend forces this regardless of query params
+            // — see GET /students) — the admin bulk-management children
+            // (Add/Promote/Bulk Edit) don't belong here even where a
+            // class teacher happens to hold the underlying permission.
+            if (item.label === 'Students' && user?.role === 'teacher') {
+              children = children
+                ?.filter((c) => c.href === '/students')
+                .map((c) => ({ ...c, label: 'My Students' }))
+            }
             if (item.children && !children?.length) return null
             return (
               <NavEntry

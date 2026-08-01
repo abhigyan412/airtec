@@ -8,6 +8,7 @@ import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } fro
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { toLocalDateStr, dateRangeStrings } from '../../shared/utils/academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
+import { getTeacherContext } from '../../shared/utils/teacherContext'
 
 const router = Router()
 
@@ -455,11 +456,21 @@ router.get('/dues', asyncHandler(async (req: AuthRequest, res: Response) => {
     if (!ownStudentId) return res.json({ success: true, data: [] })
   }
 
+  // A subject-only teacher must never see fee-due data at all, and a
+  // class teacher only their own homeroom section's — never the
+  // school-wide dues this route otherwise returns.
+  let teacherSectionId: string | null = null
+  if (req.user!.role === 'teacher') {
+    const ctx = await getTeacherContext(req.user!.id, school_id)
+    if (!ctx.homeroomSection) return res.status(403).json({ success: false, error: 'Only a class teacher can view fee dues, and only for their own section' })
+    teacherSectionId = ctx.homeroomSection.section_id
+  }
+
   let query = supabase
     .from('fee_invoices')
     .select(`
       id, invoice_number, total_amount, due_date, status, created_at,
-      students(id, first_name, last_name, admission_number, class_id, classes(name), sections(name))
+      students(id, first_name, last_name, admission_number, class_id, section_id, classes(name), sections(name))
     `)
     .eq('school_id', school_id)
     .in('status', ['unpaid', 'partial'])
@@ -471,7 +482,9 @@ router.get('/dues', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })
 
-  let filtered = (!ownStudentId && class_id)
+  let filtered = teacherSectionId
+    ? (data ?? []).filter((i: any) => i.students?.section_id === teacherSectionId)
+    : (!ownStudentId && class_id)
     ? (data ?? []).filter((i: any) => i.students?.class_id === class_id)
     : (data ?? [])
  

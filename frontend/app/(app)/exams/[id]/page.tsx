@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation'
 import { api, admitCardApi, documentsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone, BookOpen } from 'lucide-react'
+import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone, BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
@@ -653,10 +653,23 @@ function MarksEntry({ examId, exam, classes }: any) {
   )
 }
 
+// A school-wide exam's results are one row per student — 1000+ for a
+// full school — and report_cards.rank is scoped PER SECTION (see
+// seed.ts), so a flat table sorted by rank alone interleaves every
+// section's #1 together instead of meaning anything. Grouped by class +
+// section instead, collapsed by default, so opening the page doesn't
+// dump a thousand rows at once and each group's rank is locally
+// meaningful again.
 function ResultsView({ examId }: { examId: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['results', examId],
     queryFn: () => api.get(`/exams/${examId}/results`).then(r => r.data.data),
+  })
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggle = (key: string) => setExpanded(prev => {
+    const next = new Set(prev)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    return next
   })
 
   if (isLoading) {
@@ -667,7 +680,8 @@ function ResultsView({ examId }: { examId: string }) {
     )
   }
 
-  if (!(data ?? []).length) {
+  const rows = data ?? []
+  if (!rows.length) {
     return (
       <Card>
         <EmptyState
@@ -679,61 +693,106 @@ function ResultsView({ examId }: { examId: string }) {
     )
   }
 
+  const groupMap = new Map<string, { class_name: string; section_name: string; numeric_level: number; rows: any[] }>()
+  for (const rc of rows) {
+    const key = rc.students?.section_id ?? rc.students?.class_id ?? 'unknown'
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        class_name: rc.students?.classes?.name ?? 'Unknown class',
+        section_name: rc.students?.sections?.name ?? '',
+        numeric_level: rc.students?.classes?.numeric_level ?? 999,
+        rows: [],
+      })
+    }
+    groupMap.get(key)!.rows.push(rc)
+  }
+  const groups = Array.from(groupMap.entries())
+    .map(([key, g]) => ({ key, ...g, rows: g.rows.sort((a, b) => a.rank - b.rank) }))
+    .sort((a, b) => a.numeric_level - b.numeric_level || a.section_name.localeCompare(b.section_name))
+
   return (
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
-        <h3 className="font-semibold text-foreground">Results — {(data ?? []).length} students</h3>
+        <h3 className="font-semibold text-foreground">Results — {rows.length} students across {groups.length} sections</h3>
         <div className="text-sm text-muted-foreground">
-          Pass: <span className="font-semibold text-success">{(data ?? []).filter((r: any) => r.is_pass).length}</span>
-          &nbsp; Fail: <span className="font-semibold text-destructive">{(data ?? []).filter((r: any) => !r.is_pass).length}</span>
+          Pass: <span className="font-semibold text-success">{rows.filter((r: any) => r.is_pass).length}</span>
+          &nbsp; Fail: <span className="font-semibold text-destructive">{rows.filter((r: any) => !r.is_pass).length}</span>
         </div>
       </div>
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead>Rank</TableHead>
-            <TableHead>Student</TableHead>
-            <TableHead>Marks</TableHead>
-            <TableHead>Pct</TableHead>
-            <TableHead>Grade</TableHead>
-            <TableHead>Result</TableHead>
-            <TableHead></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {(data ?? []).map((rc: any) => (
-            <TableRow key={rc.id} className="cursor-default">
-              <TableCell className="font-bold text-primary">#{rc.rank}</TableCell>
-              <TableCell className="font-medium text-foreground">
-                {rc.students?.first_name} {rc.students?.last_name}
-                <span className="ml-2 text-xs text-muted-foreground">{rc.students?.classes?.name}</span>
-              </TableCell>
-              <TableCell className="text-muted-foreground">{rc.obtained_marks}/{rc.total_marks}</TableCell>
-              <TableCell className="font-semibold text-foreground">{rc.percentage}%</TableCell>
-              <TableCell>
-                <Badge variant={
-                  ['A+','A'].includes(rc.grade) ? 'success' :
-                  ['B+','B'].includes(rc.grade) ? 'info' :
-                  rc.grade === 'C' ? 'warning' : 'destructive'}>
-                  {rc.grade}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                <Badge variant={rc.is_pass ? 'success' : 'destructive'}>
-                  {rc.is_pass ? 'Pass' : 'Fail'}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                <a href={documentsApi.reportCard(rc.exam_id, rc.student_id)}
-                  target="_blank" rel="noreferrer"
-                  className="text-xs font-medium text-primary hover:text-primary/80">
-                  View Card
-                </a>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <div className="divide-y divide-border">
+        {groups.map(g => {
+          const isOpen = expanded.has(g.key)
+          const pass = g.rows.filter(r => r.is_pass).length
+          const fail = g.rows.length - pass
+          const avgPct = Math.round((g.rows.reduce((s, r) => s + Number(r.percentage), 0) / g.rows.length) * 10) / 10
+          return (
+            <div key={g.key}>
+              <button
+                onClick={() => toggle(g.key)}
+                className="flex w-full items-center justify-between px-6 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              >
+                <div className="flex items-center gap-2">
+                  {isOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                  <span className="font-medium text-foreground">{g.class_name} {g.section_name}</span>
+                  <span className="text-xs text-muted-foreground">{g.rows.length} students</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground">Avg {avgPct}%</span>
+                  <Badge variant="success">{pass} pass</Badge>
+                  {fail > 0 && <Badge variant="destructive">{fail} fail</Badge>}
+                </div>
+              </button>
+              {isOpen && (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Rank</TableHead>
+                      <TableHead>Student</TableHead>
+                      <TableHead>Marks</TableHead>
+                      <TableHead>Pct</TableHead>
+                      <TableHead>Grade</TableHead>
+                      <TableHead>Result</TableHead>
+                      <TableHead></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {g.rows.map((rc: any) => (
+                      <TableRow key={rc.id} className="cursor-default">
+                        <TableCell className="font-bold text-primary">#{rc.rank}</TableCell>
+                        <TableCell className="font-medium text-foreground">
+                          {rc.students?.first_name} {rc.students?.last_name}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{rc.obtained_marks}/{rc.total_marks}</TableCell>
+                        <TableCell className="font-semibold text-foreground">{rc.percentage}%</TableCell>
+                        <TableCell>
+                          <Badge variant={
+                            ['A+','A'].includes(rc.grade) ? 'success' :
+                            ['B+','B'].includes(rc.grade) ? 'info' :
+                            rc.grade === 'C' ? 'warning' : 'destructive'}>
+                            {rc.grade}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={rc.is_pass ? 'success' : 'destructive'}>
+                            {rc.is_pass ? 'Pass' : 'Fail'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <a href={documentsApi.reportCard(rc.exam_id, rc.student_id)}
+                            target="_blank" rel="noreferrer"
+                            className="text-xs font-medium text-primary hover:text-primary/80">
+                            View Card
+                          </a>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </Card>
   )
 }
