@@ -20,6 +20,7 @@ import { UpcomingExams } from '@/components/dashboard/UpcomingExams'
 import { ClassStrength } from '@/components/dashboard/ClassStrength'
 import { UpcomingEvents } from '@/components/dashboard/UpcomingEvents'
 import { FeeCollectionTrend } from '@/components/dashboard/FeeCollectionTrend'
+import { TeacherDashboard } from '@/components/teacher-dashboard/TeacherDashboard'
 
 const CHART_COLORS = [
   'hsl(243 75% 62%)',
@@ -44,6 +45,11 @@ function ViewAll({ href }: { href: string }) {
 export default function DashboardPage() {
   const { user } = useAuth()
   const { can, isLoading: permLoading } = usePermissions()
+
+  // Teachers get an entirely different, personally-scoped dashboard —
+  // not a stripped-down version of the admin one below (which shows
+  // school-wide fee/admissions figures a teacher must never see).
+  if (user?.role === 'teacher') return <TeacherDashboard />
 
   const canViewStudents = can('student.view')
   const canViewAdmission = can('admission.view')

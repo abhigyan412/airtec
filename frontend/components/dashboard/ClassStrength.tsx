@@ -22,12 +22,14 @@ export function ClassStrength() {
   if (!canView) return null
   const isWorkingDay = res?.is_working_day ?? true
   const sections = ((res?.sections ?? []) as any[])
-    .filter((s: any) => s.capacity > 0 && s.enrolled > 0)
-    .map((s: any) => ({ ...s, fill: Math.round((s.occupied / s.capacity) * 100) }))
+    .filter((s: any) => s.enrolled > 0)
+    .map((s: any) => ({ ...s, fill: Math.round((s.occupied / s.enrolled) * 100) }))
     .sort((a: any, b: any) => b.occupied - a.occupied)
     .slice(0, 8)
 
-  const barColor = (fill: number) => fill >= 100 ? 'bg-destructive' : fill >= 85 ? 'bg-warning' : 'bg-success'
+  // fill is now attendance rate (present / enrolled), so higher is better —
+  // the inverse of when this compared occupied seats to section capacity.
+  const barColor = (fill: number) => fill >= 90 ? 'bg-success' : fill >= 75 ? 'bg-warning' : 'bg-destructive'
 
   return (
     <Card>
@@ -43,7 +45,7 @@ export function ClassStrength() {
             Manage <ArrowRight className="h-3 w-3" />
           </Link>
         </div>
-        <p className="text-xs text-muted-foreground">Present today, out of section capacity</p>
+        <p className="text-xs text-muted-foreground">Present today, out of students enrolled</p>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -66,13 +68,13 @@ export function ClassStrength() {
                 <div className="mb-1 flex items-center justify-between">
                   <span className="text-xs font-medium text-foreground">{s.class_name} · {s.section_name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {s.marked_today > 0 ? `${s.occupied}/${s.capacity} present` : `${s.enrolled} enrolled · not marked yet`}
+                    {s.marked_today > 0 ? `${s.occupied}/${s.enrolled} present` : `${s.enrolled} enrolled · not marked yet`}
                   </span>
                 </div>
                 <div className="h-1.5 w-full rounded-full bg-muted">
                   <div
                     className={cn('h-1.5 rounded-full transition-all', s.marked_today > 0 ? barColor(s.fill) : 'bg-muted-foreground/30')}
-                    style={{ width: `${s.marked_today > 0 ? Math.min(100, s.fill) : Math.min(100, Math.round((s.enrolled / s.capacity) * 100))}%` }}
+                    style={{ width: `${s.marked_today > 0 ? Math.min(100, s.fill) : 100}%` }}
                   />
                 </div>
               </div>

@@ -717,7 +717,7 @@ router.get('/classes', asyncHandler(async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data })
 }))
 
-// GET /classes/strength — TODAY's occupied seats vs sections.max_strength,
+// GET /classes/strength — TODAY's occupied seats vs enrolled students,
 // per section, for the dashboard's class-wise strength widget. "Occupied"
 // is students actually marked present today, not just enrolled — a
 // section showing full-but-half-empty every day is a more useful signal
@@ -727,6 +727,12 @@ router.get('/classes', asyncHandler(async (req: AuthRequest, res: Response) => {
 // teacher marks a whole class at once without picking one section, which
 // would silently undercount if trusted directly (same issue fixed for
 // GET /students/attendance/today).
+//
+// capacity (sections.max_strength) rides along too but the dashboard no
+// longer divides by it — it's a configured seat limit, not how many
+// students are actually in the section, so using it as the denominator
+// made every section's "present" fraction reflect classroom capacity
+// instead of the class's real headcount.
 //
 // enrolled/is_working_day/marked_today ride along so the frontend can
 // tell "0 present because nobody's here" apart from "0 present because

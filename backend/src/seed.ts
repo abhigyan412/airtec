@@ -22,7 +22,7 @@ import type { NotificationType } from './shared/utils/notifications'
 // ═══════════════════════════════════════════════════════════════
 
 // ── Tunables ─────────────────────────────────────────────────
-const STUDENTS_PER_SECTION = 30   // × 28 sections = 840 students
+const STUDENTS_PER_SECTION = 40   // × 28 sections = 1120 students
 const ATTENDANCE_DAYS = 45        // working days of student attendance
 const STAFF_ATTENDANCE_DAYS = 45
 const PORTAL_FAMILIES = 8         // parent + student logins for the family app
@@ -419,12 +419,23 @@ async function seed() {
   const principalId = staff.find(s => s.designation === 'Principal')?.id ?? adminId
   console.log(`   ✅ ${staff.length} staff (${teachers.length} teachers), password: Staff@1234\n`)
 
-  // Class teachers — one per section, so every section detail page has one.
+  // Class teachers — one per section, for the CURRENT academic year.
+  // Per-year now (class_teacher_assignments), not a static column on
+  // sections — sections.class_teacher_id no longer exists (see
+  // supabase/migrations/20260801000000_teacher_dashboard.sql), so this
+  // is also seeded data's only record of "who's the homeroom teacher".
+  const sectionClassTeacher = new Map<string, string>()
+  const classTeacherRoleId = roleIdByName['Class Teacher']
+  const classTeacherAssignmentRows: any[] = []
   for (let i = 0; i < sections.length; i++) {
     const t = teachers[i % teachers.length]
-    sections[i].class_teacher_id = t.id
-    await supabase.from('sections').update({ class_teacher_id: t.id }).eq('id', sections[i].id)
+    sectionClassTeacher.set(sections[i].id, t.id)
+    classTeacherAssignmentRows.push({
+      school_id: schoolId, teacher_id: t.id, section_id: sections[i].id, academic_year_id: ay.id, is_active: true,
+    })
+    if (classTeacherRoleId) userRoleRows.push({ user_id: t.id, role_id: classTeacherRoleId, school_id: schoolId })
   }
+  await ins('class_teacher_assignments', classTeacherAssignmentRows)
 
   // ── 12. Students (every section filled) ──────────────────
   console.log(`1️⃣2️⃣  Creating ~${sections.length * STUDENTS_PER_SECTION} students...`)
@@ -840,7 +851,7 @@ async function seed() {
             school_id: schoolId, exam_id: ex.id, exam_subject_id: es.id, student_id: stu.id,
             marks_obtained: m, grade: m >= 90 ? 'A1' : m >= 75 ? 'A2' : m >= 60 ? 'B1' : m >= 45 ? 'B2' : m >= 33 ? 'C' : 'D',
             remarks: m >= 90 ? 'Outstanding' : m < 33 ? 'Needs improvement' : null,
-            entered_by: sec.class_teacher_id ?? anyTeacher(),
+            entered_by: sectionClassTeacher.get(sec.id) ?? anyTeacher(),
           })
         })
         const pct = Math.round((obtained / total) * 1000) / 10
@@ -869,7 +880,7 @@ async function seed() {
       school_id: schoolId, student_id: s.id, class_id: s.class_id, section_id: s.section_id, date: d,
       status: r === 0 ? 'absent' : r === 1 ? 'late' : r === 2 ? 'leave' : r === 3 && di % 11 === 0 ? 'holiday' : 'present',
       remarks: r === 2 ? 'Prior leave application' : null,
-      marked_by: sections.find(x => x.id === s.section_id)?.class_teacher_id ?? anyTeacher(),
+      marked_by: sectionClassTeacher.get(s.section_id) ?? anyTeacher(),
     })
   }))
   const attCount = await insQuiet('attendance', attRows, 1000)
@@ -958,7 +969,7 @@ async function seed() {
         title, description: `${title}. Submit by the due date.`,
         attachment_url: k % 4 === 0 ? (docFileUrls['other'] ?? logoUrl) : null,
         assigned_date: iso(dMinus(k * 3 + (secIdx % 3))), due_date: iso(dMinus(k * 3 + (secIdx % 3) - 3)),
-        created_by: sec.class_teacher_id ?? anyTeacher(),
+        created_by: sectionClassTeacher.get(sec.id) ?? anyTeacher(),
       })
     }
   })

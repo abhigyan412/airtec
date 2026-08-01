@@ -87,7 +87,6 @@ export interface Section {
   school_id: string
   class_id: string
   name: string
-  class_teacher_id?: string
   max_strength: number
 }
 

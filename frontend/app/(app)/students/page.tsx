@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Search, Plus, Users, Edit3, GraduationCap } from 'lucide-react'
 import Link from 'next/link'
 import { studentsApi } from '@/lib/api'
+import { usePermissions } from '@/lib/usePermissions'
 import { cn, STATUS_COLORS, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
@@ -32,6 +33,7 @@ import {
 export default function StudentsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { can } = usePermissions()
   // Seeded from ?search= so the header's global search lands here with the
   // query already applied.
   const [search, setSearch] = useState(searchParams.get('search') ?? '')
@@ -61,21 +63,27 @@ export default function StudentsPage() {
         icon={Users}
         actions={
           <>
-            <Button variant="outline" asChild>
-              <Link href="/students/promote">
-                <GraduationCap className="h-4 w-4" /> Promote / Transfer
-              </Link>
-            </Button>
-            <Button variant="outline" asChild>
-              <Link href="/students/bulk-edit">
-                <Edit3 className="h-4 w-4" /> Bulk Edit
-              </Link>
-            </Button>
-            <Button asChild>
-              <Link href="/students/new">
-                <Plus className="h-4 w-4" /> Add Student
-              </Link>
-            </Button>
+            {can('student.promote') && (
+              <Button variant="outline" asChild>
+                <Link href="/students/promote">
+                  <GraduationCap className="h-4 w-4" /> Promote / Transfer
+                </Link>
+              </Button>
+            )}
+            {can('student.edit') && (
+              <Button variant="outline" asChild>
+                <Link href="/students/bulk-edit">
+                  <Edit3 className="h-4 w-4" /> Bulk Edit
+                </Link>
+              </Button>
+            )}
+            {can('student.create') && (
+              <Button asChild>
+                <Link href="/students/new">
+                  <Plus className="h-4 w-4" /> Add Student
+                </Link>
+              </Button>
+            )}
           </>
         }
       />
@@ -123,11 +131,13 @@ export default function StudentsPage() {
             title="No students found"
             description="Add your first student to get started"
             action={
-              <Button asChild>
-                <Link href="/students/new">
-                  <Plus className="h-4 w-4" /> Add Student
-                </Link>
-              </Button>
+              can('student.create') ? (
+                <Button asChild>
+                  <Link href="/students/new">
+                    <Plus className="h-4 w-4" /> Add Student
+                  </Link>
+                </Button>
+              ) : undefined
             }
           />
         ) : (

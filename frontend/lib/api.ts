@@ -403,6 +403,18 @@ export const notificationsApi = {
   runFeeReminders: () => api.post('/notifications/run-fee-reminders').then(r => r.data),
 }
 
+export const teacherApi = {
+  dashboard: () => api.get('/teacher/dashboard').then(r => r.data),
+  subjectPerformance: (section_id: string, subject_id: string) =>
+    api.get('/teacher/subject-performance', { params: { section_id, subject_id } }).then(r => r.data),
+  classTeacherAssignments: {
+    list: (params?: { academic_year_id?: string }) => api.get('/teacher/class-teacher-assignments', { params }).then(r => r.data),
+    create: (data: { teacher_id: string; section_id: string; academic_year_id: string }) =>
+      api.post('/teacher/class-teacher-assignments', data).then(r => r.data),
+    remove: (id: string) => api.delete(`/teacher/class-teacher-assignments/${id}`).then(r => r.data),
+  },
+}
+
 export const hrmsApi = {
   staff: {
     list: (params?: any) => api.get('/hrms/staff', { params }).then(r => r.data),

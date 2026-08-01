@@ -8,6 +8,7 @@ import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/mi
 import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 import { buildStudentSearchFilter } from '../../shared/utils/studentSearch'
+import { getTeacherContext } from '../../shared/utils/teacherContext'
 
 const router = Router()
 
@@ -75,6 +76,18 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     return res.json({ success: true, data, meta: { total: data?.length ?? 0, page: 1, limit: lim } })
   }
 
+  // "My Students" — a teacher only ever sees students in sections they
+  // teach a subject in, or their own homeroom section. Forced regardless
+  // of class_id/section_id query params, same as the parent/student case
+  // above: a subject-only teacher passing another section's id must not
+  // be able to widen this past their own assignments.
+  let teacherSectionIds: string[] | null = null
+  if (req.user!.role === 'teacher') {
+    const ctx = await getTeacherContext(req.user!.id, school_id)
+    if (!ctx.sectionIds.length) return res.json({ success: true, data: [], meta: { total: 0, page: pg, limit: lim } })
+    teacherSectionIds = ctx.sectionIds
+  }
+
   let query = supabase
     .from('students')
     .select(`*, classes(id, name, numeric_level, stream), sections(id, name), houses(id, name, color), academic_years(id, name)`, { count: 'exact' })
@@ -82,8 +95,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     .range(from, to)
 
   if (search) query = query.or(buildStudentSearchFilter(String(search)))
+  if (teacherSectionIds) query = query.in('section_id', teacherSectionIds)
   if (class_id) query = query.eq('class_id', class_id)
-  if (section_id) query = query.eq('section_id', section_id)
+  if (section_id && (!teacherSectionIds || teacherSectionIds.includes(section_id as string))) query = query.eq('section_id', section_id)
   if (status) query = query.eq('status', status)
   if (house_id) query = query.eq('house_id', house_id)
   query = query.order('first_name')
@@ -374,6 +388,20 @@ router.post('/attendance', requireRole('school_admin', 'principal', 'teacher'),
     const { class_id, section_id, date, records } = req.body
     const school_id = req.user!.school_id
     if (!date || !records?.length) return res.status(400).json({ success: false, error: 'date and records required' })
+
+    // Every teacher holds attendance.mark (they need it for their own
+    // homeroom), but a subject-only teacher — no active class teacher
+    // assignment — must never be able to mark ANY section's attendance,
+    // and a class teacher may only mark their own homeroom section. This
+    // is stricter than the RBAC permission and applies regardless of it;
+    // school_admin/principal are unaffected.
+    if (req.user!.role === 'teacher') {
+      const ctx = await getTeacherContext(req.user!.id, school_id)
+      if (!ctx.isClassTeacher || ctx.homeroomSection?.section_id !== section_id) {
+        return res.status(403).json({ success: false, error: 'Only the class teacher for this section can mark its attendance' })
+      }
+    }
+
     const rows = records.map((r: any) => ({ school_id, student_id: r.student_id, class_id: class_id || null, section_id: section_id || null, date, status: r.status, remarks: r.remarks || null, marked_by: req.user!.id }))
     const { data, error } = await supabase.from('attendance').upsert(rows, { onConflict: 'student_id,date' }).select()
     if (error) return res.status(400).json({ success: false, error: error.message })
@@ -819,12 +847,29 @@ router.get('/timetable/attention-required', requireRole('school_admin', 'princip
 // Every other TC route is nested under /:id (one student's own TCs) —
 // nothing school-wide existed before this.
 router.get('/tc-requests/pending', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { data, error } = await supabase
+  const school_id = req.user!.school_id
+
+  // A teacher only ever sees TC requests for their own homeroom section
+  // (via the dashboard's homeroom-followups widget) — a subject-only
+  // teacher (no active class teacher assignment) sees none at all, not
+  // just a hidden widget. school_admin/principal see everything, as
+  // before.
+  let homeroomSectionId: string | null = null
+  if (req.user!.role === 'teacher') {
+    const ctx = await getTeacherContext(req.user!.id, school_id)
+    if (!ctx.homeroomSection) return res.json({ success: true, data: [] })
+    homeroomSectionId = ctx.homeroomSection.section_id
+  }
+
+  let query = supabase
     .from('transfer_certificates')
-    .select('id, tc_number, issue_date, reason, created_at, students(id, first_name, last_name, admission_number, classes(name))')
-    .eq('school_id', req.user!.school_id)
+    .select('id, tc_number, issue_date, reason, created_at, students!inner(id, first_name, last_name, admission_number, section_id, classes(name))')
+    .eq('school_id', school_id)
     .eq('status', 'pending')
     .order('created_at', { ascending: true })
+  if (homeroomSectionId) query = query.eq('students.section_id', homeroomSectionId)
+
+  const { data, error } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })
   res.json({ success: true, data })
 }))
@@ -887,6 +932,14 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const data = await fetchStudentWithFeeSummary(id, school_id)
   if (!data) return res.status(404).json({ success: false, error: 'Student not found' })
+
+  if (req.user!.role === 'teacher') {
+    const ctx = await getTeacherContext(req.user!.id, school_id)
+    if (!ctx.sectionIds.includes((data as any).section_id)) {
+      return res.status(403).json({ success: false, error: 'You can only view students in a section you teach' })
+    }
+  }
+
   res.json({ success: true, data })
 }))
 
