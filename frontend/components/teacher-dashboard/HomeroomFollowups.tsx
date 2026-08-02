@@ -40,7 +40,7 @@ export function HomeroomFollowups() {
               {top.map(f => (
                 <Link
                   key={f.student_id}
-                  href="/fees/arrears"
+                  href={`/students/${f.student_id}/fees`}
                   className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 transition-colors hover:bg-muted/50"
                 >
                   <p className="text-sm text-foreground">{f.first_name} {f.last_name}</p>
@@ -51,9 +51,13 @@ export function HomeroomFollowups() {
                 </Link>
               ))}
               {remaining_count > 0 && (
+                // Points at the dedicated full-list page (GET
+                // /teacher/homeroom-fee-dues), not /fees/arrears — that
+                // one needs fee.view, which a class teacher doesn't hold,
+                // and isn't scoped to just this section.
                 <Link
-                  href="/fees/arrears"
-                  className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/50"
+                  href="/fees/homeroom"
+                  className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
                 >
                   <span>+{remaining_count} more student{remaining_count > 1 ? 's' : ''}</span>
                   <span className="font-semibold">{formatCurrency(remaining_total)}</span>
@@ -70,13 +74,17 @@ export function HomeroomFollowups() {
           ) : (
             <div className="space-y-2">
               {followups.tc_requests.map(tc => (
-                <div key={tc.id} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+                <Link
+                  key={tc.id}
+                  href={`/students/${tc.students.id}`}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 transition-colors hover:bg-muted/50"
+                >
                   <div>
                     <p className="text-sm font-medium text-foreground">{tc.students.first_name} {tc.students.last_name}</p>
                     <p className="text-xs text-muted-foreground">{tc.students.admission_number} · {tc.reason}</p>
                   </div>
                   <p className="shrink-0 text-xs text-muted-foreground">{formatDate(tc.created_at)}</p>
-                </div>
+                </Link>
               ))}
             </div>
           )}

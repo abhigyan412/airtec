@@ -35,7 +35,7 @@ router.get('/dashboard', requireRole('teacher'), asyncHandler(async (req: AuthRe
       success: true,
       data: {
         header: { full_name: req.user!.full_name, date: todayDate, day_of_week, is_class_teacher: false, homeroom_section: null, sections_today: [] },
-        attendance_action: null, schedule_today: [], metrics: { to_grade: 0, homework_assigned: 0, upcoming_tests: 0 },
+        attendance_action: null, schedule_today: [], metrics: { homework_assigned: 0, upcoming_tests: 0 },
         metrics_trends: {
           attendance: { value: null, delta: null, sparkline: [null, null, null, null, null] },
           homework_completion: { value: null, delta: null, sparkline: [null, null, null, null, null] },
@@ -100,7 +100,7 @@ router.get('/dashboard', requireRole('teacher'), asyncHandler(async (req: AuthRe
   // rows were fanned out to students — bulk 'class' homework has no
   // per-student rows to count, so these counts reflect individually
   // tracked submissions only.
-  let to_grade = 0, homework_assigned = 0
+  let homework_assigned = 0
   // Grouped by (title, due_date) rather than one entry per homework row —
   // the same assignment given separately to two of this teacher's
   // sections would otherwise show as two identical-looking upcoming
@@ -114,8 +114,7 @@ router.get('/dashboard', requireRole('teacher'), asyncHandler(async (req: AuthRe
   for (const hw of (homeworkRows ?? []) as any[]) {
     const sectionLabel = `${hw.classes?.name ?? ''} ${hw.sections?.name ?? ''}`.trim()
     for (const hs of hw.homework_students ?? []) {
-      if (hs.status === 'submitted') to_grade++
-      else if (hs.status === 'assigned' && hw.due_date && hw.due_date >= todayDate) homework_assigned++
+      if (hs.status === 'assigned' && hw.due_date && hw.due_date >= todayDate) homework_assigned++
       if (hw.due_date && hs.student_id) {
         homeworkByStudent.set(hs.student_id, [...(homeworkByStudent.get(hs.student_id) ?? []), { due_date: hw.due_date, status: hs.status }])
       }
@@ -411,12 +410,130 @@ router.get('/dashboard', requireRole('teacher'), asyncHandler(async (req: AuthRe
       },
       attendance_action,
       schedule_today,
-      metrics: { to_grade, homework_assigned, upcoming_tests: upcomingTests.length },
+      metrics: { homework_assigned, upcoming_tests: upcomingTests.length },
       metrics_trends,
       classes_performance,
       needs_attention,
       upcoming: { tests: upcomingTests, homework_due: homeworkDue, events: holidayRows ?? [] },
       homeroom_followups,
+    },
+  })
+}))
+
+// ═══════════════════════════════════════════════════════════════
+// GET /teacher/homework-overview — every homework/classwork item THIS
+// teacher assigned, grouped by class and section, behind the "Homework
+// Assigned" metric card. Scoped to created_by=req.user.id, same as the
+// dashboard's own homework_assigned count — a subject-only teacher
+// never sees another teacher's assignments here either.
+//
+// 'class'-type homework has no per-student rows (see the comment on
+// homework_students throughout this file) — those items report
+// student_count from the roster instead of a submission breakdown,
+// which only exists for 'individual' assignments.
+// ═══════════════════════════════════════════════════════════════
+router.get('/homework-overview', requireRole('teacher'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const teacherId = req.user!.id
+  const school_id = req.user!.school_id
+
+  const { data: homeworkRows, error: hwErr } = await supabase
+    .from('homework')
+    .select('id, title, description, subject_name, type, assignment_type, assigned_date, due_date, class_id, section_id, classes(name), sections(name), homework_students(status)')
+    .eq('school_id', school_id).eq('created_by', teacherId)
+    .order('due_date', { ascending: false })
+  if (hwErr) return res.status(500).json({ success: false, error: hwErr.message })
+
+  const sectionIds = Array.from(new Set((homeworkRows ?? []).map((h: any) => h.section_id).filter(Boolean)))
+  const { data: students, error: stuErr } = sectionIds.length
+    ? await supabase.from('students').select('id, section_id').eq('school_id', school_id).eq('status', 'active').in('section_id', sectionIds)
+    : { data: [], error: null }
+  if (stuErr) return res.status(500).json({ success: false, error: stuErr.message })
+  const studentCountBySection = new Map<string, number>()
+  for (const s of (students ?? []) as any[]) {
+    studentCountBySection.set(s.section_id, (studentCountBySection.get(s.section_id) ?? 0) + 1)
+  }
+
+  const items = (homeworkRows ?? []).map((h: any) => {
+    const statuses = (h.homework_students ?? []).map((hs: any) => hs.status)
+    const tracked = h.assignment_type === 'individual'
+    return {
+      id: h.id, title: h.title, description: h.description, subject_name: h.subject_name,
+      type: h.type, assignment_type: h.assignment_type, assigned_date: h.assigned_date, due_date: h.due_date,
+      class_id: h.class_id, class_name: h.classes?.name ?? '', section_id: h.section_id, section_name: h.sections?.name ?? '',
+      student_count: tracked ? statuses.length : (studentCountBySection.get(h.section_id) ?? 0),
+      submitted_count: tracked ? statuses.filter((s: string) => s === 'submitted').length : null,
+      graded_count: tracked ? statuses.filter((s: string) => s === 'graded').length : null,
+      pending_count: tracked ? statuses.filter((s: string) => s === 'assigned').length : null,
+    }
+  })
+
+  const groupMap = new Map<string, { class_id: string; class_name: string; section_id: string; section_name: string; items: typeof items }>()
+  for (const item of items) {
+    const key = item.section_id ?? `${item.class_id}::no-section`
+    if (!groupMap.has(key)) {
+      groupMap.set(key, { class_id: item.class_id, class_name: item.class_name, section_id: item.section_id, section_name: item.section_name, items: [] })
+    }
+    groupMap.get(key)!.items.push(item)
+  }
+  const groups = Array.from(groupMap.values()).sort((a, b) => a.class_name.localeCompare(b.class_name, undefined, { numeric: true }) || a.section_name.localeCompare(b.section_name))
+
+  res.json({ success: true, data: { groups } })
+}))
+
+// ═══════════════════════════════════════════════════════════════
+// GET /teacher/homeroom-fee-dues — the full list behind "+N more
+// students" on the dashboard's Homeroom Follow-ups card, which only
+// ever shows the top 5. Same computation as that card's fee_dues block,
+// just without the cap. 403s for a subject-only teacher (no homeroom
+// section to scope to) rather than returning school-wide data — this is
+// deliberately NOT the admin /fees/arrears page, which needs fee.view
+// (a class teacher doesn't hold it) and isn't scoped to one section.
+// ═══════════════════════════════════════════════════════════════
+router.get('/homeroom-fee-dues', requireRole('teacher'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const teacherId = req.user!.id
+  const school_id = req.user!.school_id
+  const ctx = await getTeacherContext(teacherId, school_id)
+  if (!ctx.homeroomSection) {
+    return res.status(403).json({ success: false, error: 'Only a class teacher can view homeroom fee dues' })
+  }
+
+  const { data: homeroomStudents, error: stuErr } = await supabase
+    .from('students').select('id, first_name, last_name, admission_number')
+    .eq('school_id', school_id).eq('section_id', ctx.homeroomSection.section_id).eq('status', 'active')
+  if (stuErr) return res.status(500).json({ success: false, error: stuErr.message })
+  const studentIds = (homeroomStudents ?? []).map((s: any) => s.id)
+  const studentInfoById = new Map((homeroomStudents ?? []).map((s: any) => [s.id, s]))
+
+  const { data: dueInvoices, error: invErr } = studentIds.length
+    ? await supabase.from('fee_invoices').select('id, student_id, total_amount, due_date').eq('school_id', school_id).in('status', ['unpaid', 'partial']).in('student_id', studentIds)
+    : { data: [], error: null }
+  if (invErr) return res.status(500).json({ success: false, error: invErr.message })
+
+  const invoices = dueInvoices ?? []
+  const paidByInvoice = await fetchPaidByInvoice(invoices.map((i: any) => i.id))
+  const byStudent = new Map<string, { amount_overdue: number; earliest_due_date: string | null }>()
+  const now = new Date()
+  for (const inv of invoices as any[]) {
+    const amountDue = Number(inv.total_amount) - (paidByInvoice.get(inv.id) ?? 0)
+    if (amountDue <= 0) continue
+    const e = byStudent.get(inv.student_id) ?? { amount_overdue: 0, earliest_due_date: null }
+    e.amount_overdue += amountDue
+    if (inv.due_date && (!e.earliest_due_date || inv.due_date < e.earliest_due_date)) e.earliest_due_date = inv.due_date
+    byStudent.set(inv.student_id, e)
+  }
+  const students = Array.from(byStudent.entries())
+    .map(([studentId, e]) => {
+      const info: any = studentInfoById.get(studentId)
+      const days_overdue = e.earliest_due_date ? Math.max(0, Math.floor((now.getTime() - new Date(`${e.earliest_due_date}T00:00:00`).getTime()) / 86400000)) : 0
+      return { student_id: studentId, first_name: info?.first_name ?? '', last_name: info?.last_name ?? '', admission_number: info?.admission_number ?? '', amount_overdue: Math.round(e.amount_overdue), days_overdue }
+    })
+    .sort((a, b) => b.amount_overdue - a.amount_overdue)
+
+  res.json({
+    success: true,
+    data: {
+      section_name: ctx.homeroomSection.section_name, class_name: ctx.homeroomSection.class_name,
+      students, total_overdue: students.reduce((s, f) => s + f.amount_overdue, 0),
     },
   })
 }))

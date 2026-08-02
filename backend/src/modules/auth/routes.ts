@@ -94,7 +94,19 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = LoginSchema.parse(req.body)
 
   const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-  if (error) return res.status(401).json({ success: false, error: 'Invalid email or password' })
+  if (error) {
+    // supabase-js collapses a real "wrong password" rejection and a
+    // network/DNS failure reaching its own auth service into the same
+    // shape here — the latter tags itself 'AuthRetryableFetchError' (see
+    // @supabase/auth-js/lib/errors.js). Without this check, a transient
+    // outage on OUR side reads to the user as "your password is wrong,"
+    // which is actively misleading and sends them down the wrong path
+    // (retyping a password that was never the problem).
+    if (error.name === 'AuthRetryableFetchError') {
+      return res.status(503).json({ success: false, error: 'Unable to reach the authentication service right now. Please try again in a moment.' })
+    }
+    return res.status(401).json({ success: false, error: 'Invalid email or password' })
+  }
 
   // Get user profile
   // Get user profile
