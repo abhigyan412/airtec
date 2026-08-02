@@ -1,6 +1,7 @@
 'use client'
 import { useQuery } from '@tanstack/react-query'
 import { teacherApi } from './api'
+import { useAuth } from './auth'
 
 export interface MetricTrend {
   value: number | null
@@ -38,7 +39,7 @@ export interface TeacherDashboardData {
     is_current: boolean
     is_next: boolean
   }[]
-  metrics: { to_grade: number; homework_assigned: number; upcoming_tests: number }
+  metrics: { homework_assigned: number; upcoming_tests: number }
   metrics_trends: { attendance: MetricTrend; homework_completion: MetricTrend }
   classes_performance: {
     section_id: string
@@ -70,13 +71,19 @@ export interface TeacherDashboardData {
       remaining_count: number
       remaining_total: number
     }
-    tc_requests: { id: string; tc_number: string; reason: string; created_at: string; students: { first_name: string; last_name: string; admission_number: string } }[]
+    tc_requests: { id: string; tc_number: string; reason: string; created_at: string; students: { id: string; first_name: string; last_name: string; admission_number: string } }[]
   } | null
 }
 
 export function useTeacherDashboard() {
+  const { user } = useAuth()
   return useQuery({
-    queryKey: ['teacher-dashboard'],
+    // Keyed by user id, not just ['teacher-dashboard'] — belt-and-braces
+    // alongside the cache wipe on login (see lib/auth.tsx): even if
+    // something re-triggers this query before that wipe lands, a
+    // different teacher's id can never resolve to the same cache entry.
+    queryKey: ['teacher-dashboard', user?.id],
     queryFn: () => teacherApi.dashboard().then(r => r.data as TeacherDashboardData),
+    enabled: !!user,
   })
 }

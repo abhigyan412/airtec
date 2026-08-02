@@ -1,5 +1,6 @@
 'use client'
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { authApi } from './api'
 
 interface User {
@@ -33,6 +34,7 @@ const AuthContext = createContext<AuthContextType | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const queryClient = useQueryClient()
 
   useEffect(() => {
     const token = localStorage.getItem('airtec_token')
@@ -52,6 +54,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     const res = await authApi.login(email, password)
+    // Query keys like ['teacher-dashboard'] and ['rbac-permissions-me']
+    // aren't scoped by user id — logging in doesn't reload the page, so
+    // without this, signing into a second account in the same tab (no
+    // explicit logout first) would render whatever was cached for the
+    // PREVIOUS account until each query happened to refetch on its own.
+    // Wipe everything the instant a login succeeds, before it's used.
+    queryClient.clear()
     localStorage.setItem('airtec_token', res.data.access_token)
     // Kept so the API client can silently re-auth when the hour-long
     // access token expires (see the 401 interceptor in lib/api.ts).

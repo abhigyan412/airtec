@@ -405,6 +405,8 @@ export const notificationsApi = {
 
 export const teacherApi = {
   dashboard: () => api.get('/teacher/dashboard').then(r => r.data),
+  homeworkOverview: () => api.get('/teacher/homework-overview').then(r => r.data),
+  homeroomFeeDues: () => api.get('/teacher/homeroom-fee-dues').then(r => r.data),
   subjectPerformance: (section_id: string, subject_id: string) =>
     api.get('/teacher/subject-performance', { params: { section_id, subject_id } }).then(r => r.data),
   classTeacherAssignments: {

@@ -265,6 +265,34 @@ router.get('/timetable', asyncHandler(async (req: AuthRequest, res: Response) =>
     academic_year_id = undefined
   }
 
+  // A teacher gets exactly two legitimate views here, not the free-form
+  // class/teacher browser the admin timetable page otherwise allows:
+  //   - their own teaching periods (default, or an explicit teacher_id —
+  //     which is always forced back to themselves, not trusted from the
+  //     query string)
+  //   - the FULL timetable of their own homeroom section, if they're a
+  //     class teacher — every period in that section, not just the ones
+  //     they personally teach
+  // Anything else (someone else's schedule, another section) returns
+  // empty rather than the school-wide data this endpoint otherwise hands
+  // any staff member with timetable.view.
+  if (req.user!.role === 'teacher') {
+    const ctx = await getTeacherContext(req.user!.id, school_id)
+    const wantsHomeroom = !!section_id && !!ctx.homeroomSection && section_id === ctx.homeroomSection.section_id
+    if (wantsHomeroom) {
+      class_id = ctx.homeroomSection!.class_id
+      teacher_id = undefined
+    } else if (section_id) {
+      // A section was requested but it isn't this teacher's homeroom —
+      // not a legitimate request, not just "show my own schedule instead".
+      return res.json({ success: true, data: [] })
+    } else {
+      teacher_id = req.user!.id
+      class_id = undefined
+    }
+    academic_year_id = undefined
+  }
+
   let query = supabase
     .from('timetable_periods')
     .select('*, classes(name), sections(name), users:teacher_id(id, full_name)')
