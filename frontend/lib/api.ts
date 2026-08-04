@@ -180,6 +180,8 @@ export const studentsApi = {
     api.delete(`/students/${id}/documents/${docId}`).then(r => r.data),
   getAttendance: (id: string, month?: number, year?: number) =>
     api.get(`/students/${id}/attendance`, { params: { month, year } }).then(r => r.data),
+  performance: (id: string, examId?: string) =>
+    api.get(`/students/${id}/performance`, { params: { exam_id: examId } }).then(r => r.data),
   getClassAttendance: (classId: string, date: string, sectionId?: string) =>
     api.get('/students/attendance/class', { params: { class_id: classId, date, section_id: sectionId } }).then(r => r.data),
   saveAttendance: (data: any) =>
@@ -275,6 +277,11 @@ export const calendarApi = {
     get: () => api.get('/admission/weekly-off').then(r => r.data),
     update: (weekly_off_days: number[]) =>
       api.patch('/admission/weekly-off', { weekly_off_days }).then(r => r.data),
+  },
+  lowAttendanceThreshold: {
+    get: () => api.get('/admission/low-attendance-threshold').then(r => r.data),
+    update: (low_attendance_threshold_pct: number) =>
+      api.patch('/admission/low-attendance-threshold', { low_attendance_threshold_pct }).then(r => r.data),
   },
 }
 
@@ -415,6 +422,16 @@ export const teacherApi = {
       api.post('/teacher/class-teacher-assignments', data).then(r => r.data),
     remove: (id: string) => api.delete(`/teacher/class-teacher-assignments/${id}`).then(r => r.data),
   },
+}
+
+export const principalApi = {
+  dashboard: () => api.get('/principal/dashboard').then(r => r.data),
+  staffAttendance: (type: 'teaching' | 'non_teaching') =>
+    api.get('/principal/staff-attendance', { params: { type } }).then(r => r.data),
+  lowAttendanceStudents: (params?: { class_id?: string; section_id?: string }) =>
+    api.get('/principal/low-attendance-students', { params }).then(r => r.data),
+  syllabusChapters: (class_id: string, subject_name: string) =>
+    api.get('/principal/syllabus-chapters', { params: { class_id, subject_name } }).then(r => r.data),
 }
 
 export const hrmsApi = {

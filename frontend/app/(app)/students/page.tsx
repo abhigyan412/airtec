@@ -4,12 +4,15 @@ import { useQuery } from '@tanstack/react-query'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Search, Plus, Users, Edit3, GraduationCap } from 'lucide-react'
 import Link from 'next/link'
-import { studentsApi } from '@/lib/api'
+import { studentsApi, admissionApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
+import { useAuth } from '@/lib/auth'
 import { cn, STATUS_COLORS, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { StudentPerformanceChart } from '@/components/students/StudentPerformanceChart'
 import { Card } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -34,10 +37,18 @@ export default function StudentsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { can } = usePermissions()
+  const { user } = useAuth()
+  // Principal is read-only/oversight, not operational — clicking a name
+  // opens the performance drill-down inline instead of navigating into
+  // the full admin-only student profile (fees, documents, TC actions).
+  const isPrincipal = user?.role === 'principal'
+  const [performanceStudent, setPerformanceStudent] = useState<{ id: string; name: string } | null>(null)
   // Seeded from ?search= so the header's global search lands here with the
   // query already applied.
   const [search, setSearch] = useState(searchParams.get('search') ?? '')
   const [status, setStatus] = useState('')
+  const [classId, setClassId] = useState('')
+  const [sectionId, setSectionId] = useState('')
   const [page, setPage] = useState(1)
 
   useEffect(() => {
@@ -46,9 +57,24 @@ export default function StudentsPage() {
     setPage(1)
   }, [searchParams])
 
+  // Class > Section drill-down, same cascading picker as the Attendance
+  // page — the browse path the Principal dashboard's performance
+  // drill-down is meant to hang off (Students > class > section > click
+  // a name), not just a flat search box.
+  const { data: classesData } = useQuery({
+    queryKey: ['classes'],
+    queryFn: () => admissionApi.classes().then(r => r.data),
+  })
+  const selectedClassData = (classesData ?? []).find((c: any) => c.id === classId)
+  const sections = selectedClassData?.sections ?? []
+
   const { data, isLoading } = useQuery({
-    queryKey: ['students', { search, status, page }],
-    queryFn: () => studentsApi.list({ search: search || undefined, status: status || undefined, page, limit: 25 }),
+    queryKey: ['students', { search, status, classId, sectionId, page }],
+    queryFn: () => studentsApi.list({
+      search: search || undefined, status: status || undefined,
+      class_id: classId || undefined, section_id: sectionId || undefined,
+      page, limit: 25,
+    }),
     placeholderData: (prev: any) => prev,
   })
 
@@ -115,6 +141,32 @@ export default function StudentsPage() {
             <SelectItem value="suspended">Suspended</SelectItem>
           </SelectContent>
         </Select>
+        <Select
+          value={classId || 'all'}
+          onValueChange={v => { setClassId(v === 'all' ? '' : v); setSectionId(''); setPage(1) }}
+        >
+          <SelectTrigger className="min-w-[140px] sm:w-[160px]">
+            <SelectValue placeholder="All Classes" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Classes</SelectItem>
+            {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {sections.length > 0 && (
+          <Select
+            value={sectionId || 'all'}
+            onValueChange={v => { setSectionId(v === 'all' ? '' : v); setPage(1) }}
+          >
+            <SelectTrigger className="min-w-[130px] sm:w-[150px]">
+              <SelectValue placeholder="All Sections" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Sections</SelectItem>
+              {sections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
       </Card>
 
       {/* Table */}
@@ -158,7 +210,9 @@ export default function StudentsPage() {
                 {students.map((s: any) => (
                   <TableRow
                     key={s.id}
-                    onClick={() => router.push(`/students/${s.id}`)}
+                    onClick={() => isPrincipal
+                      ? setPerformanceStudent({ id: s.id, name: `${s.first_name} ${s.last_name}` })
+                      : router.push(`/students/${s.id}`)}
                     className="group"
                   >
                     <TableCell>
@@ -199,7 +253,7 @@ export default function StudentsPage() {
                     <TableCell className="hidden md:table-cell text-xs text-muted-foreground">{formatDate(s.created_at)}</TableCell>
                     <TableCell className="hidden md:table-cell">
                       <span className="text-xs font-semibold text-primary opacity-0 transition-opacity group-hover:opacity-100">
-                        View →
+                        {isPrincipal ? 'Performance →' : 'View →'}
                       </span>
                     </TableCell>
                   </TableRow>
@@ -220,6 +274,24 @@ export default function StudentsPage() {
           </>
         )}
       </Card>
+
+      {performanceStudent && (
+        <PerformanceModal student={performanceStudent} onClose={() => setPerformanceStudent(null)} />
+      )}
     </div>
+  )
+}
+
+function PerformanceModal({ student, onClose }: { student: { id: string; name: string }; onClose: () => void }) {
+  const [examId, setExamId] = useState<string | undefined>(undefined)
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{student.name} — Performance</DialogTitle>
+        </DialogHeader>
+        <StudentPerformanceChart studentId={student.id} examId={examId} onExamChange={setExamId} />
+      </DialogContent>
+    </Dialog>
   )
 }

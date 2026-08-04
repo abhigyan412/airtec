@@ -22,6 +22,11 @@ const WEEKDAYS = [
 export default function AcademicCalendarPage() {
   const { user } = useAuth()
   const canManage = user?.role === 'school_admin' || user?.role === 'principal'
+  // The low-attendance threshold stays school_admin-only to write, even
+  // here — Principal keeps read access (their dashboard depends on the
+  // value) but not the edit control, per the read-only requirement on
+  // that specific setting.
+  const canEditThreshold = user?.role === 'school_admin'
   const qc = useQueryClient()
 
   const [year, setYear] = useState(new Date().getFullYear())
@@ -46,6 +51,25 @@ export default function AcademicCalendarPage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['weekly-off'] }); toast.success('Weekly off updated') },
     onError: (e: any) => { toast.error(e?.response?.data?.error ?? 'Failed to update'); setPendingOffDays(null) },
   })
+
+  const { data: thresholdData } = useQuery({
+    queryKey: ['low-attendance-threshold'],
+    queryFn: () => calendarApi.lowAttendanceThreshold.get().then(r => r.data),
+  })
+  const [thresholdInput, setThresholdInput] = useState<string | null>(null)
+  const threshold = thresholdInput ?? String(thresholdData?.low_attendance_threshold_pct ?? 60)
+
+  const thresholdMutation = useMutation({
+    mutationFn: (pct: number) => calendarApi.lowAttendanceThreshold.update(pct),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['low-attendance-threshold'] }); toast.success('Low-attendance threshold updated') },
+    onError: (e: any) => { toast.error(e?.response?.data?.error ?? 'Failed to update'); setThresholdInput(null) },
+  })
+
+  const saveThreshold = () => {
+    const pct = Number(threshold)
+    if (!Number.isInteger(pct) || pct < 1 || pct > 100) return toast.error('Enter a whole number between 1 and 100')
+    thresholdMutation.mutate(pct)
+  }
 
   const toggleOffDay = (day: number) => {
     if (!canManage) return
@@ -109,6 +133,37 @@ export default function AcademicCalendarPage() {
                 {d.label}
               </Button>
             ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Low-attendance threshold */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Low Attendance Alert Threshold</CardTitle>
+          <CardDescription className="text-xs">
+            Students below this cumulative attendance % for the academic year surface on the Principal dashboard&apos;s low-attendance panel.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3">
+            <Input
+              type="number" min={1} max={100} value={threshold}
+              onChange={e => setThresholdInput(e.target.value)}
+              disabled={!canEditThreshold || thresholdMutation.isPending}
+              className="w-24"
+            />
+            <span className="text-sm text-muted-foreground">%</span>
+            {canEditThreshold && (
+              <Button
+                size="sm"
+                onClick={saveThreshold}
+                disabled={thresholdMutation.isPending || String(thresholdData?.low_attendance_threshold_pct ?? 60) === threshold}
+              >
+                {thresholdMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+              </Button>
+            )}
+            {!canEditThreshold && <span className="text-xs text-muted-foreground">Only School Admin can change this</span>}
           </div>
         </CardContent>
       </Card>

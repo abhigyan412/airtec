@@ -21,6 +21,7 @@ import { ClassStrength } from '@/components/dashboard/ClassStrength'
 import { UpcomingEvents } from '@/components/dashboard/UpcomingEvents'
 import { FeeCollectionTrend } from '@/components/dashboard/FeeCollectionTrend'
 import { TeacherDashboard } from '@/components/teacher-dashboard/TeacherDashboard'
+import { PrincipalDashboard } from '@/components/principal-dashboard/PrincipalDashboard'
 
 const CHART_COLORS = [
   'hsl(243 75% 62%)',
@@ -50,6 +51,14 @@ export default function DashboardPage() {
   // not a stripped-down version of the admin one below (which shows
   // school-wide fee/admissions figures a teacher must never see).
   if (user?.role === 'teacher') return <TeacherDashboard />
+
+  // Principals get an academic-oversight/escalation view, not the
+  // admin operational task list — school-wide aggregates and flagged
+  // insights only, never invoice-level or admission-stage-level detail.
+  // (Principal keeps their existing broad RBAC permissions elsewhere in
+  // the app for approvals — this dashboard is additive, not a
+  // permission restriction.)
+  if (user?.role === 'principal') return <PrincipalDashboard />
 
   const canViewStudents = can('student.view')
   const canViewAdmission = can('admission.view')
