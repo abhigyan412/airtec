@@ -1006,6 +1006,33 @@ router.patch('/weekly-off', requireRole('school_admin', 'principal'),
   })
 )
 
+// low_attendance_threshold_pct: the cumulative-attendance cutoff (as a %
+// of the academic year so far) below which a student surfaces on the
+// Principal dashboard's low-attendance panel. School-level, not
+// hardcoded, so each school can tune it. Read is open to any
+// authenticated staff (the Principal dashboard needs it); write is
+// school_admin only — the Principal role stays read-only for this
+// setting, unlike weekly-off above which predates that requirement.
+router.get('/low-attendance-threshold', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { data, error } = await supabase.from('schools').select('low_attendance_threshold_pct').eq('id', req.user!.school_id).single()
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data: { low_attendance_threshold_pct: data?.low_attendance_threshold_pct ?? 60 } })
+}))
+
+router.patch('/low-attendance-threshold', requireRole('school_admin'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { low_attendance_threshold_pct } = req.body
+    if (!Number.isInteger(low_attendance_threshold_pct) || low_attendance_threshold_pct < 1 || low_attendance_threshold_pct > 100) {
+      return res.status(400).json({ success: false, error: 'low_attendance_threshold_pct must be an integer 1-100' })
+    }
+    const { data, error } = await supabase
+      .from('schools').update({ low_attendance_threshold_pct }).eq('id', req.user!.school_id)
+      .select('low_attendance_threshold_pct').single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
 router.get('/academic-years', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase
     .from('academic_years')

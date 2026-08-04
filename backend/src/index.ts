@@ -21,6 +21,7 @@ import rbacRoutes from './modules/rbac/routes'
 import academicsRoutes from './modules/academics/routes'
 import notificationsRoutes from './modules/notifications/routes'
 import teacherRoutes from './modules/teacher/routes'
+import principalRoutes from './modules/principal/routes'
 
 
 
@@ -103,6 +104,7 @@ app.use('/api/rbac', rbacRoutes)
 app.use('/api/academics', academicsRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/teacher', teacherRoutes)
+app.use('/api/principal', principalRoutes)
 
 app.use(notFoundHandler)
 app.use(errorHandler)

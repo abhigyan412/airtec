@@ -231,6 +231,7 @@ export default function StudentDetailPage() {
             <div className="space-y-2">
               <QuickAction href={`/students/${id}/documents`} label="View Documents" />
               <QuickAction href={`/students/${id}/attendance`} label="View Attendance" />
+              <QuickAction href={`/students/${id}/performance`} label="View Performance" />
               <QuickAction href={documentsApi.idCard(id)} label="Print ID Card" external />
             </div>
           </Card>

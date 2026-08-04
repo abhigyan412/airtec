@@ -158,31 +158,45 @@ router.get('/attendance/today', asyncHandler(async (req: AuthRequest, res: Respo
   const total_active_students = (students ?? []).length
   const percentage = total_active_students > 0 ? Math.round((present / total_active_students) * 100) : 0
 
-  const sectionGroups = new Map<string, { class_id: string; class_name: string; section_id: string | null; section_name: string | null; total: number; marked: number }>()
+  const sectionGroups = new Map<string, { class_id: string; class_name: string; section_id: string | null; section_name: string | null; total: number; marked: number; present: number }>()
   for (const s of students ?? []) {
     const key = `${s.class_id}::${s.section_id ?? 'none'}`
     if (!sectionGroups.has(key)) {
       sectionGroups.set(key, {
         class_id: s.class_id, class_name: (s as any).classes?.name ?? '—',
         section_id: s.section_id, section_name: (s as any).sections?.name ?? null,
-        total: 0, marked: 0,
+        total: 0, marked: 0, present: 0,
       })
     }
     const group = sectionGroups.get(key)!
     group.total++
-    if (statusByStudent.has(s.id)) group.marked++
+    const status = statusByStudent.get(s.id)
+    if (status) group.marked++
+    if (status === 'present') group.present++
   }
 
   const allSections = [...sectionGroups.values()]
   const unmarked_sections = allSections.filter(g => g.marked === 0)
     .map(g => ({ class_id: g.class_id, class_name: g.class_name, section_id: g.section_id, section_name: g.section_name, student_count: g.total }))
 
+  // Full per-section breakdown (marked and unmarked alike), not-marked
+  // sorted first — the Principal dashboard's "Class attendance status"
+  // widget reuses this same query rather than duplicating it; the Admin
+  // "Needs Attention Today" widget keeps reading unmarked_sections above
+  // unchanged.
+  const sections = allSections
+    .map(g => ({
+      class_id: g.class_id, class_name: g.class_name, section_id: g.section_id, section_name: g.section_name,
+      enrolled: g.total, is_marked: g.marked > 0, present: g.present,
+    }))
+    .sort((a, b) => Number(a.is_marked) - Number(b.is_marked) || a.class_name.localeCompare(b.class_name, undefined, { numeric: true }))
+
   res.json({
     success: true,
     data: {
       date: today, is_working_day, present, total_marked, total_active_students, percentage,
       sections_total: allSections.length, sections_marked: allSections.length - unmarked_sections.length,
-      unmarked_sections,
+      unmarked_sections, sections,
     },
   })
 }))
@@ -1236,6 +1250,50 @@ router.get('/:id/attendance', asyncHandler(async (req: AuthRequest, res: Respons
   const late = data?.filter(a => a.status === 'late').length ?? 0
   const total = present + absent + late
   res.json({ success: true, data: { records: data ?? [], summary: { present, absent, late, total, percentage: total > 0 ? Math.round((present / total) * 100) : 0 } } })
+}))
+
+// ── GET /students/:id/performance — subject-wise marks for the drill-down
+// pie chart, aggregated across every exam recorded so far (mode
+// 'average') or scoped to one exam via ?exam_id= (mode 'single'). Also
+// returns the list of exams the student actually has marks for, to
+// drive the exam-selector — no point offering an exam with nothing
+// recorded yet.
+router.get('/:id/performance', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { id } = req.params
+  const { exam_id } = req.query
+  const school_id = req.user!.school_id
+
+  const { data: student } = await supabase.from('students').select('id').eq('id', id).eq('school_id', school_id).maybeSingle()
+  if (!student) return res.status(404).json({ success: false, error: 'Student not found' })
+
+  const { data: marks, error } = await supabase.from('student_marks')
+    .select('marks_obtained, is_absent, exam_id, exam_subjects(subject_name, max_marks), exams(name, start_date)')
+    .eq('school_id', school_id).eq('student_id', id)
+  if (error) return res.status(500).json({ success: false, error: error.message })
+
+  const examsSeen = new Map<string, { id: string; name: string; date: string | null }>()
+  for (const m of (marks ?? []) as any[]) {
+    if (!examsSeen.has(m.exam_id)) examsSeen.set(m.exam_id, { id: m.exam_id, name: m.exams?.name ?? 'Exam', date: m.exams?.start_date ?? null })
+  }
+  const exams = Array.from(examsSeen.values()).sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
+
+  const relevant = exam_id ? (marks ?? []).filter((m: any) => m.exam_id === exam_id) : (marks ?? [])
+
+  const bySubject = new Map<string, { total: number; max: number; count: number }>()
+  for (const m of relevant as any[]) {
+    if (m.is_absent || m.marks_obtained == null) continue
+    const subject_name = m.exam_subjects?.subject_name ?? 'Unknown'
+    const g = bySubject.get(subject_name) ?? { total: 0, max: 0, count: 0 }
+    g.total += Number(m.marks_obtained)
+    g.max += Number(m.exam_subjects?.max_marks ?? 100)
+    g.count++
+    bySubject.set(subject_name, g)
+  }
+  const subjects = Array.from(bySubject.entries())
+    .map(([subject_name, g]) => ({ subject_name, avg_pct: g.max > 0 ? Math.round((g.total / g.max) * 1000) / 10 : 0, exams_counted: g.count }))
+    .sort((a, b) => b.avg_pct - a.avg_pct)
+
+  res.json({ success: true, data: { exams, subjects, mode: exam_id ? 'single' : 'average' } })
 }))
 
 export default router

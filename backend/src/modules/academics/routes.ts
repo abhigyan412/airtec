@@ -204,8 +204,9 @@ const CreateChaptersSchema = z.object({
 
 // A chapter's effective due date: the linked exam's start_date if one's
 // set, otherwise its own planned_date. Centralized here so /syllabus,
-// /syllabus/stats, and the calendar all agree on what "due" means.
-function effectiveDueDate(chapter: { planned_date: string | null; exams?: { start_date: string | null } | null }): string | null {
+// /syllabus/stats, the calendar, and the principal dashboard's syllabus
+// rollup all agree on what "due" means.
+export function effectiveDueDate(chapter: { planned_date: string | null; exams?: { start_date: string | null } | null }): string | null {
   return chapter.exams?.start_date ?? chapter.planned_date
 }
 

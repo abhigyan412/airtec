@@ -975,30 +975,106 @@ async function seed() {
   })
   const hwCount = await insQuiet('homework', hwRows)
 
-  const chapterBank = ['Real Numbers', 'Polynomials', 'Light — Reflection', 'The French Revolution', 'Acids & Bases', 'Life Processes', 'Nationalism in India', 'Trigonometry', 'Electricity', 'Carbon Compounds', 'Democracy', 'Statistics', 'Motion', 'Gravitation', 'Tissues', 'Resources & Development']
+  // Per-subject chapter banks (real-feeling curriculum topic names, not
+  // a single generic list cycled across every subject) — 8-13 chapters
+  // per class+subject, spread across the year from AY_START to a
+  // syllabus-end cutoff a few weeks before AY_END (leaving revision
+  // time), with a per-(class,subject) pacing multiplier so completion %
+  // genuinely varies instead of every subject landing on the same
+  // fraction. Deterministic (seeded off class+subject, not Math.random)
+  // so re-running the seed against the same today() lands on the same
+  // shape, not a different random draw each time.
+  const CHAPTER_BANKS: Record<string, string[]> = {
+    Mathematics: ['Number Systems', 'Polynomials', 'Linear Equations', 'Quadratic Equations', 'Arithmetic Progressions', 'Triangles', 'Coordinate Geometry', 'Trigonometry', 'Circles', 'Surface Areas and Volumes', 'Statistics', 'Probability', 'Sets and Relations'],
+    Science: ['Food and Nutrition', 'Materials Around Us', 'The Living World', 'Motion and Force', 'Light and Shadows', 'Electricity and Circuits', 'Magnetism', 'Chemical Reactions', 'Sound', 'Reproduction in Organisms', 'Natural Resources', 'Pollution and Environment'],
+    'Social Science': ['The French Revolution', 'Nationalism in India', 'The Making of a Global World', 'Resources and Development', 'Agriculture', 'Democracy and Diversity', 'Power Sharing', 'Federalism', 'Money and Credit', 'Globalisation'],
+    English: ['Prose: A Letter to God', 'Prose: Nelson Mandela', 'Poetry: Dust of Snow', 'Poetry: Fire and Ice', 'Grammar: Tenses', 'Grammar: Modals', 'Writing: Letter Writing', 'Writing: Essay Writing', 'Literature: The Hundred Dresses', 'Literature: Mijbil the Otter', 'Reading Comprehension'],
+    Hindi: ['गद्य: साखी', 'गद्य: पद', 'पद्य: दोहे', 'व्याकरण: संधि', 'व्याकरण: समास', 'लेखन: पत्र लेखन', 'लेखन: निबंध लेखन', 'गद्य: बड़े भाई साहब', 'पद्य: कर चले हम फ़िदा', 'व्याकरण: मुहावरे'],
+    EVS: ['Family and Friends', 'Food We Eat', 'Our Environment', 'Water', 'Shelter', 'Travel and Transport', 'Plants Around Us', 'Animals Around Us', 'Air'],
+    'General Knowledge': ['World Capitals', 'National Symbols', 'Famous Scientists', 'Important Inventions', 'Indian History Basics', 'Sports General Knowledge', 'Current Affairs', 'World Geography Basics'],
+    'Art & Craft': ['Paper Craft', 'Clay Modelling', 'Drawing and Sketching', 'Water Colours', 'Collage Making', 'Origami', 'Nature Craft', 'Festival Decorations'],
+    'Computer Science': ['Introduction to Computers', 'Operating Systems Basics', 'MS Word Essentials', 'MS Excel Essentials', 'Introduction to the Internet', 'Introduction to Programming', 'Python Basics', 'Data Types and Variables', 'Loops and Conditionals', 'Introduction to Databases', 'HTML Basics', 'Cyber Safety'],
+    Physics: ['Physical World and Measurement', 'Kinematics', 'Laws of Motion', 'Work Energy and Power', 'Gravitation', 'Thermodynamics', 'Oscillations and Waves', 'Electrostatics', 'Current Electricity', 'Magnetic Effects of Current', 'Electromagnetic Induction', 'Ray Optics'],
+    Chemistry: ['Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements', 'Chemical Bonding', 'States of Matter', 'Chemical Thermodynamics', 'Equilibrium', 'Redox Reactions', 'p-Block Elements', 'Organic Chemistry Basics', 'Hydrocarbons', 'Environmental Chemistry'],
+    Biology: ['Diversity in Living Organisms', 'Cell Structure and Function', 'Tissues', 'Life Processes', 'Control and Coordination', 'Reproduction in Organisms', 'Heredity and Evolution', 'Human Physiology', 'Biomolecules', 'Ecology and Environment', 'Genetics Basics'],
+    'Physical Education': ['Physical Fitness Basics', 'Yoga and Wellness', 'Athletics Fundamentals', 'Team Sports: Basketball', 'Team Sports: Football', 'Health and Nutrition', 'Sports Injuries and First Aid', 'Olympic Movement'],
+    Accountancy: ['Introduction to Accounting', 'Accounting Equation', 'Journal Entries', 'Ledger Posting', 'Trial Balance', 'Financial Statements', 'Depreciation', 'Bank Reconciliation', 'Partnership Accounts', 'Company Accounts Basics'],
+    'Business Studies': ['Nature of Business', 'Forms of Business Organisation', 'Private and Public Sector', 'Business Services', 'Emerging Modes of Business', 'Social Responsibility of Business', 'Principles of Management', 'Business Environment', 'Marketing Management Basics', 'Consumer Protection'],
+    Economics: ['Introduction to Economics', 'Consumer Behaviour', 'Demand and Supply', 'Production and Costs', 'Market Structures', 'National Income', 'Money and Banking', 'Government Budget', 'Balance of Payments', 'Indian Economic Development'],
+    History: ['The Rise of Nationalism in Europe', 'Nationalism in India', 'The Making of a Global World', 'The Age of Industrialisation', 'Print Culture and the Modern World', 'Colonialism and the Countryside', 'The Story of Development', 'Novels Society and History'],
+    'Political Science': ['Power Sharing', 'Federalism', 'Democracy and Diversity', 'Gender Religion and Caste', 'Popular Struggles and Movements', 'Political Parties', 'Outcomes of Democracy', 'Challenges to Democracy'],
+    Geography: ['Resources and Development', 'Forest and Wildlife Resources', 'Water Resources', 'Agriculture', 'Minerals and Energy Resources', 'Manufacturing Industries', 'Lifelines of National Economy', 'Population'],
+  }
+  // Simple deterministic string hash → [0,1), so pacing is reproducible
+  // per (class, subject) rather than drawn fresh (and inconsistent) on
+  // every seed run.
+  const seededFraction = (s: string) => {
+    let h = 0
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+    return (h % 10000) / 10000
+  }
+  const ayStart = new Date(`${AY_START}T00:00:00`)
+  const syllabusEnd = dMinus(-((new Date(`${AY_END}T00:00:00`).getTime() - today.getTime()) / 86400000) + 45) // ~6 weeks of revision buffer before year-end
+  const spanDays = Math.max(30, (syllabusEnd.getTime() - ayStart.getTime()) / 86400000)
+  // teacher actually timetabled for a given class+subject (any section —
+  // the chapter plan itself is class-wide, not per-section), so the
+  // progress-note author matches who the principal dashboard already
+  // shows as teaching it.
+  const teacherByClassSubject = new Map<string, string>()
+  for (const p of ttRows) {
+    if (!p.teacher_id) continue
+    const key = `${p.class_id}::${(p.subject_name ?? '').toLowerCase()}`
+    if (!teacherByClassSubject.has(key)) teacherByClassSubject.set(key, p.teacher_id)
+  }
+
   const chapterRows: any[] = []
   classes.forEach(cls => {
-    classSubjects(cls.numeric_level).forEach((sub, si) => {
-      for (let ch = 1; ch <= 4; ch++) {
-        const done = ch <= 2
+    classSubjects(cls.numeric_level).forEach(sub => {
+      const bank = CHAPTER_BANKS[sub] ?? CHAPTER_BANKS.English
+      const baseKey = `${cls.id}::${sub}`
+      const chapterCount = 8 + Math.floor(seededFraction(`${baseKey}:count`) * 6) // 8-13
+      const pacing = 0.4 + seededFraction(`${baseKey}:pace`) * 0.9 // 0.4 (behind) .. 1.3 (ahead)
+      const plannedDates = Array.from({ length: chapterCount }, (_, i) =>
+        new Date(ayStart.getTime() + Math.round((spanDays / chapterCount) * (i + 1)) * 86400000))
+      const expectedByNow = plannedDates.filter(d => d <= today).length
+      const completedCount = Math.max(0, Math.min(chapterCount, Math.round(expectedByNow * pacing)))
+
+      for (let i = 0; i < chapterCount; i++) {
+        const planned = plannedDates[i]
+        let status: 'completed' | 'in_progress' | 'pending' = 'pending'
+        let actualCompletion: string | null = null
+        if (i < completedCount) {
+          status = 'completed'
+          const jitter = Math.floor(seededFraction(`${baseKey}:jit${i}`) * 6) - 2
+          const completedOn = new Date(planned.getTime() + jitter * 86400000)
+          actualCompletion = iso(completedOn > today ? today : completedOn)
+        } else if (i === completedCount && planned <= today) {
+          status = 'in_progress'
+        }
         chapterRows.push({
           school_id: schoolId, class_id: cls.id, subject_name: sub, academic_year_id: ay.id,
-          chapter_number: ch, chapter_name: pick(chapterBank, cls.numeric_level * 4 + si + ch),
-          planned_date: iso(dMinus(60 - ch * 12)),
-          actual_completion_date: done ? iso(dMinus(58 - ch * 12)) : null,
-          status: done ? 'completed' : ch === 3 ? 'in_progress' : 'pending',
+          chapter_number: i + 1, chapter_name: pick(bank, i),
+          planned_date: iso(planned), actual_completion_date: actualCompletion, status,
           created_by: adminId,
         })
       }
     })
   })
   const chapters = await ins('syllabus_chapters', chapterRows, 400)
-  await insQuiet('daily_progress_notes', chapters.filter((_, i) => i % 3 === 0).map((ch, i) => ({
-    school_id: schoolId, class_id: ch.class_id, section_id: null, subject_name: ch.subject_name,
-    teacher_id: pick(teachers, i).id, note_date: iso(dMinus(i % 30)),
-    note: `Covered "${ch.chapter_name}" — ${pick(['completed exercises', 'explained concepts', 'revised previous topic', 'started new section', 'class test conducted'], i)}.`,
-    chapter_id: ch.id, progress_status: ch.status === 'completed' ? 'completed' : ch.status === 'in_progress' ? 'in_progress' : 'started',
-  })))
+  const progressNoteBank = ['completed exercises', 'explained concepts', 'revised previous topic', 'started new section', 'class test conducted', 'group discussion held', 'NCERT questions solved', 'practical demonstration given']
+  const progressNoteRows = chapters
+    .filter(ch => ch.status !== 'pending')
+    .map((ch, i) => {
+      const teacherId = teacherByClassSubject.get(`${ch.class_id}::${ch.subject_name.toLowerCase()}`) ?? anyTeacher()
+      const noteDate = ch.status === 'completed' ? ch.actual_completion_date : iso(dMinus(Math.floor(seededFraction(`${ch.id}:notedate`) * 10)))
+      return {
+        school_id: schoolId, class_id: ch.class_id, section_id: null, subject_name: ch.subject_name,
+        teacher_id: teacherId, note_date: noteDate,
+        note: `Covered "${ch.chapter_name}" — ${pick(progressNoteBank, i)}.`,
+        chapter_id: ch.id, progress_status: ch.status === 'completed' ? 'completed' : 'in_progress',
+      }
+    })
+  await insQuiet('daily_progress_notes', progressNoteRows)
   console.log(`   ✅ ${hwCount} homework items, ${chapters.length} syllabus chapters + progress notes\n`)
 
   // ── 23. Resources ────────────────────────────────────────
