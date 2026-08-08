@@ -32,10 +32,27 @@ const CORE = [
   'syllabus.view', 'syllabus.plan', 'syllabus.log_progress',
 ]
 
+// Phase 2 additions: codes with no clean home in the original CORE set,
+// added when the backend modules that gated on hardcoded requireRole()
+// checks were converted to actually read role_permissions_v2. See
+// supabase/migrations/20260808000000_rbac_phase2_permissions.sql for the
+// matching live-data backfill this list alone does not cover.
+const PHASE2_MANAGEMENT = [
+  'settings.manage', 'fee.invoice_generate', 'fee.adhoc_manage', 'fee.arrear_manage',
+  'exam.result_generate', 'staff.payroll_view', 'certificate.template_manage',
+  'exam.admit_card_generate', 'tc.view', 'team.credentials_manage', 'team.edit',
+  'role.view', 'staff.homeroom_manage', 'staff.promote', 'staff.exit_manage',
+]
+
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
-  'School Admin': [...CORE, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
-  'Principal': [...CORE, 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
-  'Vice Principal': CORE.filter(c => c !== 'staff.payroll_manage').concat(['role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage']),
+  'School Admin': [...CORE, ...PHASE2_MANAGEMENT, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
+  // role.manage: Principal could already edit role_permissions_v2 (i.e.
+  // use the Permissions page itself) under the old requireRole(
+  // 'school_admin','principal') gate on PUT /rbac/roles/:id/permissions
+  // — kept so converting that route doesn't lock Principal out of the
+  // very page that grants permissions.
+  'Principal': [...CORE, ...PHASE2_MANAGEMENT, 'role.manage', 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
+  'Vice Principal': CORE.filter(c => c !== 'staff.payroll_manage').concat(PHASE2_MANAGEMENT.filter(c => c !== 'staff.payroll_view')).concat(['role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage']),
   // Two different jobs that both live under "Homework": day-to-day
   // homework/classwork is a teacher's direct communication to their own
   // students/parents ("tonight's assignment is..."), so Teacher/Class
@@ -44,14 +61,25 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   // dates (the term-level pacing target) stay a senior-management-only
   // responsibility (syllabus.plan) — teachers only log actual coverage
   // against it (syllabus.log_progress).
-  'Teacher': ['student.view', 'exam.view', 'exam.marks_entry', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress'],
-  'Class Teacher': ['student.view', 'student.edit', 'exam.view', 'exam.marks_entry', 'exam.result_publish', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'complaint.resolve', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress'],
-  'Accountant': ['student.view', 'fee.view', 'fee.collect', 'fee.discount', 'fee.export', 'fee.structure_manage', 'staff.view', 'staff.payroll_manage'],
-  'Counselor': ['student.view', 'admission.view', 'admission.create', 'admission.edit', 'admission.follow_up', 'complaint.view', 'complaint.create'],
-  'HR': ['staff.view', 'staff.edit', 'staff.attendance_mark', 'staff.leave_approve', 'staff.payroll_manage', 'staff.recruitment_manage', 'team.view', 'team.invite'],
+  'Teacher': ['student.view', 'exam.view', 'exam.marks_entry', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress'],
+  'Class Teacher': ['student.view', 'student.edit', 'exam.view', 'exam.marks_entry', 'exam.result_publish', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'complaint.resolve', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress'],
+  // tc.generate: Accountant could already initiate TC requests under
+  // the old requireRole('school_admin','principal','accountant') gate
+  // on POST /sis/:id/tc — kept so converting that route doesn't
+  // silently take it away, even though their real workload on a TC
+  // (dues-clearance) happens via the workflow-action endpoint instead.
+  'Accountant': ['student.view', 'fee.view', 'fee.collect', 'fee.discount', 'fee.export', 'fee.structure_manage', 'fee.invoice_generate', 'fee.adhoc_manage', 'fee.arrear_manage', 'staff.view', 'staff.payroll_manage', 'staff.payroll_view', 'tc.view', 'tc.generate'],
+  // fee.discount, student.create, staff.recruitment_manage: Counselor
+  // already had all three under old hardcoded requireRole(...) gates
+  // (POST /fees/discounts, POST /sis, PATCH /hrms/applications/:id
+  // respectively) — kept here so converting those routes to
+  // requirePermissionV2 doesn't silently take any away. (Some schools
+  // apparently have their Counselor double as recruitment coordinator.)
+  'Counselor': ['student.view', 'student.create', 'admission.view', 'admission.create', 'admission.edit', 'admission.follow_up', 'complaint.view', 'complaint.create', 'fee.discount', 'staff.recruitment_manage'],
+  'HR': ['staff.view', 'staff.edit', 'staff.attendance_mark', 'staff.leave_approve', 'staff.payroll_manage', 'staff.recruitment_manage', 'staff.promote', 'staff.exit_manage', 'team.view', 'team.invite'],
   'Receptionist': ['student.view', 'admission.view', 'admission.create', 'admission.follow_up', 'complaint.view', 'complaint.create'],
   'Librarian': ['student.view', 'resource.view', 'resource.upload', 'resource.delete'],
-  'Exam Controller': ['student.view', 'exam.view', 'exam.create', 'exam.publish', 'exam.schedule', 'exam.marks_entry', 'exam.result_publish', 'exam.freeze', 'certificate.view', 'certificate.generate', 'tc.generate', 'syllabus.view'],
+  'Exam Controller': ['student.view', 'exam.view', 'exam.create', 'exam.publish', 'exam.schedule', 'exam.marks_entry', 'exam.result_publish', 'exam.freeze', 'exam.admit_card_generate', 'certificate.view', 'certificate.generate', 'tc.generate', 'syllabus.view'],
   'Parent': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
   'Student': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
   'Transport Manager': ['student.view'],
@@ -175,4 +203,92 @@ export async function setPrimaryUserRole(userId: string, schoolId: string, newLe
 
   await assignDefaultUserRole(userId, schoolId, newLegacyRole)
   invalidatePermissionsForUser(userId, schoolId)
+}
+
+/**
+ * Ensures a school has a given single-step workflow definition before
+ * some route calls startWorkflow() against it by name. No migration/
+ * seed anywhere in this codebase creates workflow_definitions rows for
+ * a school automatically (confirmed: even 'Leave Approval Workflow',
+ * referenced by name in hrms/routes.ts, has no seed — it silently
+ * fails on any school where nobody manually inserted one). This
+ * mirrors seedDefaultRoles()'s idiom instead: check by (school_id,
+ * name), insert if missing, safe to call every time.
+ *
+ * The single approval step targets the school's HR role if it exists,
+ * falling back to Principal — both hold staff.exit_manage and
+ * staff.attendance_mark by default, the two permissions this is used
+ * for so far.
+ */
+async function ensureSingleStepWorkflow(schoolId: string, opts: { name: string; module: string; entityType: string; actionName: string }): Promise<void> {
+  const { data: existing } = await supabase
+    .from('workflow_definitions')
+    .select('id')
+    .eq('school_id', schoolId)
+    .eq('name', opts.name)
+    .maybeSingle()
+
+  if (existing) return
+
+  const { data: roles } = await supabase
+    .from('roles')
+    .select('id, name')
+    .eq('school_id', schoolId)
+    .in('name', ['HR', 'Principal'])
+
+  const approverRoleId = (roles ?? []).find(r => r.name === 'HR')?.id
+    ?? (roles ?? []).find(r => r.name === 'Principal')?.id
+
+  if (!approverRoleId) return // roles not seeded yet — nothing to point the step at
+
+  const { data: definition, error: defErr } = await supabase
+    .from('workflow_definitions')
+    .insert({ school_id: schoolId, name: opts.name, module: opts.module, entity_type: opts.entityType })
+    .select('id')
+    .single()
+
+  if (defErr || !definition) {
+    console.error(`Failed to create ${opts.name} definition:`, defErr?.message)
+    return
+  }
+
+  const { error: stepErr } = await supabase.from('workflow_steps').insert({
+    workflow_id: definition.id,
+    step_order: 1,
+    role_id: approverRoleId,
+    action_name: opts.actionName,
+    is_required: true,
+  })
+
+  if (stepErr) console.error(`Failed to create ${opts.name} step:`, stepErr.message)
+}
+
+export async function ensureExitWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureSingleStepWorkflow(schoolId, {
+    name: 'Staff Exit Settlement Workflow', module: 'hrms', entityType: 'staff_exit', actionName: 'settlement_approval',
+  })
+}
+
+export async function ensureRegularizationWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureSingleStepWorkflow(schoolId, {
+    name: 'Attendance Regularization Workflow', module: 'hrms', entityType: 'staff_attendance_regularization', actionName: 'regularization_approval',
+  })
+}
+
+// The original gap this helper was built to close (see the doc comment
+// above) — 'Leave Approval Workflow' is referenced by name in
+// POST /hrms/leave-requests but was never actually wired to call this
+// before startWorkflow(), so every leave request created before this
+// fix has no workflow_instances row at all, surfacing as "No workflow
+// found for this leave request" the moment anyone tries to approve it.
+export async function ensureLeaveApprovalWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureSingleStepWorkflow(schoolId, {
+    name: 'Leave Approval Workflow', module: 'hrms', entityType: 'leave_request', actionName: 'leave_approval',
+  })
+}
+
+export async function ensureCompOffWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureSingleStepWorkflow(schoolId, {
+    name: 'Comp-Off Approval Workflow', module: 'hrms', entityType: 'staff_comp_off_request', actionName: 'comp_off_approval',
+  })
 }

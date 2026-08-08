@@ -238,6 +238,7 @@ export default function TeamPage() {
 
 function RoleManagerModal({ user, extraRoles, onClose }: { user: any, extraRoles: string[], onClose: () => void }) {
   const qc = useQueryClient()
+  const [departmentScope, setDepartmentScope] = useState('')
 
   const { data: allRoles, isLoading } = useQuery({
     queryKey: ['rbac-roles'],
@@ -245,10 +246,10 @@ function RoleManagerModal({ user, extraRoles, onClose }: { user: any, extraRoles
   })
 
   const assignMutation = useMutation({
-    mutationFn: (roleId: string) => teamApi.assignRole(user.id, roleId),
+    mutationFn: (roleId: string) => teamApi.assignRole(user.id, roleId, departmentScope || undefined),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['team-extra-roles'] })
-      toast.success('Role assigned')
+      toast.success(departmentScope ? `Role assigned, restricted to ${departmentScope}` : 'Role assigned')
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
   })
@@ -275,6 +276,12 @@ function RoleManagerModal({ user, extraRoles, onClose }: { user: any, extraRoles
             Grant additional roles for workflow approvals (e.g. Exam Controller, Class Teacher) without changing their primary role.
           </DialogDescription>
         </DialogHeader>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Restrict next assignment to a department (optional)</Label>
+          <Input value={departmentScope} onChange={e => setDepartmentScope(e.target.value)}
+            placeholder="e.g. Academics — leave blank for school-wide" />
+          <p className="text-xs text-muted-foreground">Only meaningful for roles carrying Staff View/Edit — applies to whichever role you click "Assign" for below.</p>
+        </div>
         {isLoading ? (
           <Skeleton className="h-32 w-full rounded-xl" />
         ) : (

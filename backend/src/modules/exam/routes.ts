@@ -1,7 +1,8 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
-import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
+import { authenticate, AuthRequest } from '../../shared/middleware/auth'
+import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { toLocalDateStr } from '../../shared/utils/academicCalendar'
@@ -85,7 +86,7 @@ router.get('/subjects/add', asyncHandler(async (req: AuthRequest, res: Response)
     res.json({ success: true, message: 'use POST' })
 }))
 
-router.post('/subjects/add', requireRole('school_admin', 'principal', 'teacher'),
+router.post('/subjects/add', requirePermissionV2('exam.schedule'),
     asyncHandler(async (req: AuthRequest, res: Response) => {
         const body = CreateExamSubjectSchema.parse(req.body)
         const { data, error } = await supabase
@@ -115,7 +116,7 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.json({ success: true, data })
 }))
 
-router.post('/', requireRole('school_admin', 'principal', 'teacher'),
+router.post('/', requirePermissionV2('exam.create'),
     asyncHandler(async (req: AuthRequest, res: Response) => {
         const body = CreateExamSchema.parse(req.body)
         const { data, error } = await supabase
@@ -127,7 +128,7 @@ router.post('/', requireRole('school_admin', 'principal', 'teacher'),
     })
 )
 
-router.patch('/:id/status', requireRole('school_admin', 'principal'),
+router.patch('/:id/status', requirePermissionV2('exam.create'),
     asyncHandler(async (req: AuthRequest, res: Response) => {
         const { id } = req.params
         const { status } = req.body
@@ -151,7 +152,7 @@ router.get('/:id/marks/:class_id', asyncHandler(async (req: AuthRequest, res: Re
     res.json({ success: true, data: { subjects, students, marks } })
 }))
 
-router.post('/:id/marks', requireRole('school_admin', 'principal', 'teacher'),
+router.post('/:id/marks', requirePermissionV2('exam.marks_entry'),
     asyncHandler(async (req: AuthRequest, res: Response) => {
         const { id } = req.params
         const { exam_subject_id, marks: marksData } = req.body
@@ -196,7 +197,7 @@ router.post('/:id/marks', requireRole('school_admin', 'principal', 'teacher'),
 // exams.status = 'result_published'. Staff (teacher/admin/principal/
 // exam controller) can always see them for review purposes.
 
-router.post('/:id/generate-results', requireRole('school_admin', 'principal'),
+router.post('/:id/generate-results', requirePermissionV2('exam.result_generate'),
     asyncHandler(async (req: AuthRequest, res: Response) => {
         const { id } = req.params
         const school_id = req.user!.school_id
@@ -231,7 +232,12 @@ router.post('/:id/generate-results', requireRole('school_admin', 'principal'),
 // already has results generated (status='result_declared').
 // Typically called by the Exam Controller right after
 // generate-results, or by an admin to (re)start it.
-router.post('/:id/start-freeze-workflow', requireRole('school_admin', 'principal', 'teacher'),
+// Narrowed from the old requireRole('school_admin','principal','teacher')
+// to exam.freeze — that let ANY teacher (not just Exam Controller/admin)
+// start the result-freeze workflow, which this route's own comment
+// already describes as Exam Controller/admin territory. Exam Controller
+// holds exam.freeze by default; a plain Teacher no longer does.
+router.post('/:id/start-freeze-workflow', requirePermissionV2('exam.freeze'),
     asyncHandler(async (req: AuthRequest, res: Response) => {
         const { id } = req.params
         const school_id = req.user!.school_id
@@ -274,7 +280,24 @@ router.post('/:id/start-freeze-workflow', requireRole('school_admin', 'principal
 //                                                  (report cards become visible)
 //   any step rejected                          -> exams.status='result_declared'
 //                                                  (sent back for correction)
+// This drives the actual freeze/verify/publish decisions and, until now,
+// had NO gate at all — any authenticated user (including a student or
+// parent) could call it. Previously "fixed" with a manual step-aware
+// permission check (currentStepOrder === 3 ? exam.result_publish :
+// exam.freeze) run BEFORE actOnWorkflow — but actOnWorkflow already
+// does the real per-step check via workflow_steps.role_id, so that was
+// two independent, driftable sources of truth for the same decision,
+// and the hardcoded step-number mapping would silently break if this
+// workflow's steps were ever reconfigured. Consolidated to the same
+// NON_STAFF_ROLES-only exclusion already used by sis.ts's TC
+// workflow-action and admission.ts's approval routes: exclude only
+// students/parents here, and let actOnWorkflow's internal actor check
+// be the single source of truth for which staff role can act on which
+// step.
 router.post('/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: Response) => {
+    if (NON_STAFF_ROLES.includes(req.user!.role)) {
+        return res.status(403).json({ success: false, error: 'Only staff can act on this workflow' })
+    }
     const { id } = req.params
     const { status, notes } = req.body
     const school_id = req.user!.school_id
@@ -302,7 +325,9 @@ router.post('/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: R
     }
 
     // Look up the CURRENT step before acting, so we know which exams.status
-    // to apply on approval (the step that's being approved, not the next one)
+    // to apply on approval (the step that's being approved, not the next one).
+    // Still needed for STEP_STATUS_MAP below — actOnWorkflow itself is the
+    // sole authority on whether this actor may act on it.
     const beforeStatus = await getWorkflowStatus('exam', id, school_id)
     const currentStepOrder = beforeStatus?.current_step?.step_order
 

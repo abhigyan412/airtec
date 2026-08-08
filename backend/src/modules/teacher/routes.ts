@@ -4,7 +4,7 @@ import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/
 import { asyncHandler } from '../../shared/utils/helpers'
 import { toLocalDateStr } from '../../shared/utils/academicCalendar'
 import { getTeacherContext } from '../../shared/utils/teacherContext'
-import { invalidatePermissionsForUser } from '../../shared/middleware/permissions-v2'
+import { invalidatePermissionsForUser, requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { fetchPaidByInvoice } from '../../shared/utils/feePayments'
 
 const router = Router()
@@ -623,7 +623,7 @@ router.get('/subject-performance', requireRole('teacher'), asyncHandler(async (r
 // to put a teacher's own subjects/sections on their dashboard.
 // ═══════════════════════════════════════════════════════════════
 
-router.get('/class-teacher-assignments', requireRole('school_admin', 'principal'), asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/class-teacher-assignments', requirePermissionV2('staff.homeroom_manage'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const school_id = req.user!.school_id
   const { academic_year_id } = req.query
   let query = supabase.from('class_teacher_assignments')
@@ -642,7 +642,7 @@ router.get('/class-teacher-assignments', requireRole('school_admin', 'principal'
 // grants the RBAC "Class Teacher" role so the elevated permissions it
 // carries (student.edit, exam.result_publish, complaint.resolve) show up
 // immediately rather than waiting on a manual second step.
-router.post('/class-teacher-assignments', requireRole('school_admin', 'principal'), asyncHandler(async (req: AuthRequest, res: Response) => {
+router.post('/class-teacher-assignments', requirePermissionV2('staff.homeroom_manage'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const school_id = req.user!.school_id
   const { teacher_id, section_id, academic_year_id } = req.body
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -683,7 +683,7 @@ router.post('/class-teacher-assignments', requireRole('school_admin', 'principal
 // assignment. Revokes the RBAC "Class Teacher" role too, but only if the
 // teacher has no OTHER active homeroom assignment (the same person could
 // in principle be reassigned to a different section without a gap).
-router.delete('/class-teacher-assignments/:id', requireRole('school_admin', 'principal'), asyncHandler(async (req: AuthRequest, res: Response) => {
+router.delete('/class-teacher-assignments/:id', requirePermissionV2('staff.homeroom_manage'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const school_id = req.user!.school_id
   const { id } = req.params
 

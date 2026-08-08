@@ -8,6 +8,7 @@ import {
   MessageSquare, Award, Clock, Library, Briefcase, Settings as SettingsIcon,
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
+  Network,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -75,12 +76,15 @@ const NAV: NavItem[] = [
     icon: Briefcase,
     children: [
       { label: 'Staff', href: '/hr/staff', icon: Users, permission: 'staff.view' },
+      { label: 'Org Chart', href: '/hr/org-chart', icon: Network, permission: 'staff.view' },
       { label: 'Attendance', href: '/hr/attendance', icon: UserCheck, requireAny: ['staff.attendance_mark', 'staff.view'] },
       { label: 'Leave Requests', href: '/hr/leave', icon: ClipboardList, requireAny: ['staff.leave_approve', 'staff.view'] },
-      { label: 'My Leave', href: '/hr/my-leave', icon: CalendarDays },
       { label: 'Payroll', href: '/hr/payroll', icon: Wallet, requireAny: ['staff.payroll_manage', 'staff.view'] },
       { label: 'Recruitment', href: '/hr/recruitment', icon: UserPlus, requireAny: ['staff.recruitment_manage', 'staff.view'] },
       { label: 'Reports', href: '/hr/reports', icon: BarChart3, permission: 'staff.view' },
+      { label: 'My Attendance', href: '/hr/my-attendance', icon: Clock },
+      { label: 'My Leave', href: '/hr/my-leave', icon: CalendarDays },
+      { label: 'My Payslips', href: '/hr/my-payslips', icon: CreditCard },
       { label: 'Permissions', href: '/hr/permissions', icon: ShieldCheck, requireAny: ['role.manage', 'role.assign'] },
     ],
   },

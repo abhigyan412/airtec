@@ -4,7 +4,7 @@ import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/rea
 import { homeworkApi, syllabusApi, admissionApi, academicsApi, classesApi, api } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn, formatDate } from '@/lib/utils'
-import { Plus, Trash2, Loader2, ShieldOff, BookOpen, ClipboardList, NotebookPen, CheckCircle2, Clock, CalendarDays } from 'lucide-react'
+import { Plus, Trash2, Loader2, ShieldOff, BookOpen, ClipboardList, NotebookPen, CheckCircle2, Clock, CalendarDays, Circle } from 'lucide-react'
 import { toast } from 'sonner'
 import { MonthCalendar, toDateKey, type CalendarEvent } from '@/components/academics/MonthCalendar'
 import { SyllabusMeter } from '@/components/academics/SyllabusMeter'
@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -289,6 +290,8 @@ function SyllabusOverview({ scope }: {
         return allowedSubjects.get(key)?.has(s.subject_name)
       })
 
+  const [selected, setSelected] = useState<any | null>(null)
+
   if (scope !== 'all' && scope.length === 0) return null
   if (cards.length === 0) return null
 
@@ -299,17 +302,86 @@ function SyllabusOverview({ scope }: {
       </h3>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {cards.map((s: any) => (
-          <SyllabusMeter
+          <button
             key={`${s.class_id}-${s.section_id ?? 'all'}-${s.subject_name}`}
-            label={`${s.class_name}${s.section_name ? ` · ${s.section_name}` : ''} · ${s.subject_name}`}
-            percentComplete={s.percent_complete}
-            percentExpected={s.percent_expected}
-            completed={s.completed}
-            total={s.total}
-          />
+            onClick={() => setSelected(s)}
+            className="rounded-lg p-1 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <SyllabusMeter
+              label={`${s.class_name}${s.section_name ? ` · ${s.section_name}` : ''} · ${s.subject_name}`}
+              percentComplete={s.percent_complete}
+              percentExpected={s.percent_expected}
+              completed={s.completed}
+              total={s.total}
+            />
+          </button>
         ))}
       </div>
+
+      {selected && <SyllabusChapterModal card={selected} onClose={() => setSelected(null)} />}
     </div>
+  )
+}
+
+const CHAPTER_STATUS_ICON: Record<string, any> = { completed: CheckCircle2, in_progress: Clock, pending: Circle }
+const CHAPTER_STATUS_COLOR: Record<string, string> = { completed: 'text-success', in_progress: 'text-warning', pending: 'text-muted-foreground/50' }
+
+// Chapter-by-chapter drill-down behind a syllabus progress card — same
+// endpoint the "Syllabus Progress" tab below already uses for the
+// selected-class view, just parameterized by whichever card was
+// clicked instead of the page's own class/section picker.
+function SyllabusChapterModal({ card, onClose }: { card: any; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['syllabus-chapter-detail', card.class_id, card.section_id, card.subject_name],
+    queryFn: () => syllabusApi.list({ class_id: card.class_id, section_id: card.section_id ?? undefined, subject_name: card.subject_name }).then(r => r.data),
+  })
+  const chapters = data ?? []
+  const today = todayKey
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{card.class_name}{card.section_name ? ` · ${card.section_name}` : ''} · {card.subject_name}</DialogTitle>
+          <DialogDescription>{card.completed} of {card.total} chapters covered</DialogDescription>
+        </DialogHeader>
+
+        {isLoading ? (
+          <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-11 w-full rounded-lg" />)}</div>
+        ) : chapters.length === 0 ? (
+          <EmptyState icon={BookOpen} title="No chapters planned yet" className="py-8" />
+        ) : (
+          <div className="max-h-[360px] space-y-1 overflow-y-auto pr-1">
+            {chapters.map((c: any) => {
+              const Icon = CHAPTER_STATUS_ICON[c.status] ?? Circle
+              const overdue = c.status !== 'completed' && c.due_date && c.due_date < today
+              return (
+                <div key={c.id} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <Icon className={cn('h-4 w-4 shrink-0', CHAPTER_STATUS_COLOR[c.status])} />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {c.chapter_number ? `Ch ${c.chapter_number}. ` : ''}{c.chapter_name}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {c.status === 'completed' && c.actual_completion_date
+                          ? `Completed ${formatDate(c.actual_completion_date)}`
+                          : c.due_date ? `Due ${formatDate(c.due_date)}` : 'No due date'}
+                      </p>
+                    </div>
+                  </div>
+                  {overdue && <Badge variant="destructive" className="shrink-0">Overdue</Badge>}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

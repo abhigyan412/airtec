@@ -41,6 +41,7 @@ const STATUS_BAR: Record<string, string> = {
   absent: 'bg-destructive',
   late: 'bg-warning',
   leave: 'bg-blue-500',
+  unmarked: 'bg-muted-foreground/40',
 }
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -303,13 +304,19 @@ function MarkTab({ classId, sectionId, className, canManage }: {
   }, [yearReport])
 
   // useQuery dropped onSuccess in React Query v5 — seed the editable
-  // attendance state from fetched data here instead.
+  // attendance state from fetched data here instead. Only students with
+  // an existing saved record get an entry — everyone else stays absent
+  // from this map, which is what "unmarked" means throughout this page
+  // (no button selected, excluded from the save payload, counted
+  // separately in the stats below). Previously defaulted everyone to
+  // 'present', so hitting Save without touching the sheet silently
+  // marked the whole class present.
   useEffect(() => {
     if (!sheet) return
     const init: Record<string, AttendanceStatus> = {}
     for (const student of sheet.students ?? []) {
       const existing = sheet.attendance?.find((a: any) => a.student_id === student.id)
-      init[student.id] = existing?.status ?? 'present'
+      if (existing?.status) init[student.id] = existing.status
     }
     setAttendance(init)
     setSaved(false)
@@ -336,16 +343,18 @@ function MarkTab({ classId, sectionId, className, canManage }: {
   const markAll = (status: AttendanceStatus) => {
     if (!canManage) return
     const updated: Record<string, AttendanceStatus> = {}
-    for (const key of Object.keys(attendance)) updated[key] = status
+    for (const student of sheet?.students ?? []) updated[student.id] = status
     setAttendance(updated)
   }
 
+  const rosterCount = sheet?.students?.length ?? 0
   const stats = {
-    present: Object.values(attendance).filter(s => s === 'present').length,
-    absent:  Object.values(attendance).filter(s => s === 'absent').length,
-    late:    Object.values(attendance).filter(s => s === 'late').length,
-    leave:   Object.values(attendance).filter(s => s === 'leave').length,
-    total:   Object.keys(attendance).length,
+    present:  Object.values(attendance).filter(s => s === 'present').length,
+    absent:   Object.values(attendance).filter(s => s === 'absent').length,
+    late:     Object.values(attendance).filter(s => s === 'late').length,
+    leave:    Object.values(attendance).filter(s => s === 'leave').length,
+    unmarked: rosterCount - Object.keys(attendance).length,
+    total:    rosterCount,
   }
 
   const changeDate = (days: number) => {
@@ -401,12 +410,13 @@ function MarkTab({ classId, sectionId, className, canManage }: {
       )}
 
       {classId && stats.total > 0 && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           {[
-            { label: 'Present', count: stats.present, key: 'present', pct: Math.round((stats.present/stats.total)*100) },
-            { label: 'Absent',  count: stats.absent,  key: 'absent',  pct: Math.round((stats.absent/stats.total)*100) },
-            { label: 'Late',    count: stats.late,    key: 'late',    pct: Math.round((stats.late/stats.total)*100) },
-            { label: 'Leave',   count: stats.leave,   key: 'leave',   pct: Math.round((stats.leave/stats.total)*100) },
+            { label: 'Present',  count: stats.present,  key: 'present',  pct: Math.round((stats.present/stats.total)*100) },
+            { label: 'Absent',   count: stats.absent,   key: 'absent',   pct: Math.round((stats.absent/stats.total)*100) },
+            { label: 'Late',     count: stats.late,     key: 'late',     pct: Math.round((stats.late/stats.total)*100) },
+            { label: 'Leave',    count: stats.leave,    key: 'leave',    pct: Math.round((stats.leave/stats.total)*100) },
+            { label: 'Unmarked', count: stats.unmarked, key: 'unmarked', pct: Math.round((stats.unmarked/stats.total)*100) },
           ].map(s => (
             <Card key={s.label}>
               <CardContent className="p-4">
@@ -468,11 +478,11 @@ function MarkTab({ classId, sectionId, className, canManage }: {
 
           <div className="divide-y divide-border">
             {(sheet?.students ?? []).map((student: any, idx: number) => {
-              const status = attendance[student.id] ?? 'present'
+              const status = attendance[student.id]
               return (
                 <div key={student.id} className={cn(
                   'flex items-center gap-4 px-6 py-3 transition-colors',
-                  status === 'absent' ? 'bg-destructive/10' : status === 'late' ? 'bg-warning/10' : 'hover:bg-muted/50'
+                  status === 'absent' ? 'bg-destructive/10' : status === 'late' ? 'bg-warning/10' : !status ? 'bg-muted/30' : 'hover:bg-muted/50'
                 )}>
                   <span className="w-6 text-center font-mono text-xs text-muted-foreground">{idx + 1}</span>
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
@@ -634,7 +644,7 @@ function ReportTab({ classId, sectionId, className }: { classId: string; section
         </Card>
       ) : workingDays === 0 ? (
         <div className="rounded-2xl border border-warning/20 bg-warning/10 px-5 py-4 text-sm text-warning">
-          No attendance was marked for {className} in {periodLabel} yet.
+          Every day in {periodLabel} is a holiday or weekly-off, so no attendance percentage can be calculated.
         </div>
       ) : (
         <Card className="overflow-hidden">
@@ -652,6 +662,7 @@ function ReportTab({ classId, sectionId, className }: { classId: string; section
                 <TableHead className="text-center">Absent</TableHead>
                 <TableHead className="text-center">Late</TableHead>
                 <TableHead className="text-center">Leave</TableHead>
+                <TableHead className="text-center">Unmarked</TableHead>
                 <TableHead className="text-center">%</TableHead>
                 <TableHead className="px-6 text-right">Individual</TableHead>
               </TableRow>
@@ -668,6 +679,11 @@ function ReportTab({ classId, sectionId, className }: { classId: string; section
                   <TableCell className="text-center font-mono text-muted-foreground">{s.absent}</TableCell>
                   <TableCell className="text-center font-mono text-muted-foreground">{s.late}</TableCell>
                   <TableCell className="text-center font-mono text-muted-foreground">{s.leave}</TableCell>
+                  <TableCell className="text-center font-mono">
+                    {s.unmarked > 0
+                      ? <span className="text-warning">{s.unmarked}</span>
+                      : <span className="text-muted-foreground">0</span>}
+                  </TableCell>
                   <TableCell className="text-center">
                     <span className={cn('rounded-full px-2 py-0.5 text-xs font-bold', pctColor(s.percentage))}>
                       {s.percentage}%

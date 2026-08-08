@@ -3,7 +3,8 @@ import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { fetchPaidByInvoice } from '../../shared/utils/feePayments'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
-import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
+import { authenticate, AuthRequest } from '../../shared/middleware/auth'
+import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { toLocalDateStr, dateRangeStrings } from '../../shared/utils/academicCalendar'
@@ -185,7 +186,7 @@ router.get('/heads', asyncHandler(async (req: AuthRequest, res: Response) => {
 
 router.post(
   '/heads',
-  requireRole('school_admin', 'accountant'),
+  requirePermissionV2('fee.structure_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = CreateFeeHeadSchema.parse(req.body)
     const { data, error } = await supabase
@@ -215,7 +216,7 @@ router.get('/structures', asyncHandler(async (req: AuthRequest, res: Response) =
 
 router.post(
   '/structures',
-  requireRole('school_admin', 'accountant'),
+  requirePermissionV2('fee.structure_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = CreateFeeStructureSchema.parse(req.body)
     const { data, error } = await supabase
@@ -237,7 +238,7 @@ const UpdateFeeStructureSchema = z.object({
 
 router.patch(
   '/structures/:id',
-  requireRole('school_admin', 'accountant'),
+  requirePermissionV2('fee.structure_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const body = UpdateFeeStructureSchema.parse(req.body)
@@ -282,7 +283,7 @@ router.get('/invoices', asyncHandler(async (req: AuthRequest, res: Response) => 
 
 router.post(
   '/invoices',
-  requireRole('school_admin', 'accountant'),
+  requirePermissionV2('fee.invoice_generate'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = CreateInvoiceSchema.parse(req.body)
     const school_id = req.user!.school_id
@@ -380,7 +381,7 @@ router.post(
 // ── PAYMENTS ─────────────────────────────────────────────────
 router.post(
   '/payments',
-  requireRole('school_admin', 'accountant'),
+  requirePermissionV2('fee.collect'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = RecordPaymentSchema.parse(req.body)
     const school_id = req.user!.school_id
@@ -535,7 +536,7 @@ router.get('/discounts', asyncHandler(async (req: AuthRequest, res: Response) =>
 
 router.post(
   '/discounts',
-  requireRole('school_admin', 'principal', 'accountant', 'counselor'),
+  requirePermissionV2('fee.discount'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = CreateDiscountSchema.parse(req.body)
     const school_id = req.user!.school_id
@@ -638,7 +639,7 @@ router.post(
  
 // ── GET /fees/discount-limits ──────────────────────────────────
 // View configured limits per role (for an admin settings page)
-router.get('/discount-limits', requireRole('school_admin', 'principal'),
+router.get('/discount-limits', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
     const { data, error } = await supabase
@@ -653,8 +654,12 @@ router.get('/discount-limits', requireRole('school_admin', 'principal'),
 )
  
 // ── PUT /fees/discount-limits/:roleId ──────────────────────────
-// Admin/Principal can adjust a role's discount limits.
-router.put('/discount-limits/:roleId', requireRole('school_admin', 'principal'),
+// Admin/Principal can adjust a role's discount limits. Gated on
+// settings.manage rather than fee.discount deliberately — every role
+// that holds fee.discount (Accountant, Counselor) is a candidate whose
+// limit this endpoint sets, so gating on fee.discount would let a role
+// raise its own auto-approve ceiling.
+router.put('/discount-limits/:roleId', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { roleId } = req.params
     const { max_single_discount, max_monthly_total } = req.body
@@ -677,7 +682,15 @@ router.put('/discount-limits/:roleId', requireRole('school_admin', 'principal'),
 // ── POST /discounts/:id/workflow-action ───────────────────────
 // For discounts >= ₹2000 requiring real Principal approval.
 // Body: { status: 'approved' | 'rejected', notes?: string }
-router.post('/discounts/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: Response) => {
+//
+// Gated on fee.discount — the same code Accountant/Counselor hold to
+// request a discount, so it doesn't perfectly capture "Principal-only
+// approval" (the registry has no separate approve-vs-request split for
+// fee.discount the way admission.approve/admission.create do). Still a
+// large improvement over the previous state, where this had no gate at
+// all and any authenticated user could approve/reject any pending
+// discount request.
+router.post('/discounts/:id/workflow-action', requirePermissionV2('fee.discount'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
   const { status, notes } = req.body
   const school_id = req.user!.school_id
@@ -895,7 +908,7 @@ router.get('/adhoc', asyncHandler(async (req: AuthRequest, res: Response) => {
 }))
 
 // ── POST /fees/adhoc ──────────────────────────────────────────
-router.post('/adhoc', requireRole('school_admin','principal','accountant'),
+router.post('/adhoc', requirePermissionV2('fee.adhoc_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { student_id, class_id, title, description, amount, due_date } = req.body
     const school_id = req.user!.school_id
@@ -921,7 +934,7 @@ router.post('/adhoc', requireRole('school_admin','principal','accountant'),
 )
 
 // ── PATCH /fees/adhoc/:id ─────────────────────────────────────
-router.patch('/adhoc/:id', requireRole('school_admin','principal','accountant'),
+router.patch('/adhoc/:id', requirePermissionV2('fee.adhoc_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { status } = req.body
@@ -1096,7 +1109,7 @@ router.get('/defaulters', asyncHandler(async (req: AuthRequest, res: Response) =
 }))
 
 
-router.post('/arrears/carry-forward', requireRole('school_admin', 'principal', 'accountant'),
+router.post('/arrears/carry-forward', requirePermissionV2('fee.arrear_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { from_academic_year_id, to_academic_year_id } = req.body
     const school_id = req.user!.school_id
@@ -1184,7 +1197,7 @@ router.get('/arrears', asyncHandler(async (req: AuthRequest, res: Response) => {
 // ── POST /fees/arrears/:id/payment ────────────────────────────────
 // Record a payment against an arrear (separate from regular invoice
 // payments, since arrears aren't tied to a current invoice).
-router.post('/arrears/:id/payment', requireRole('school_admin', 'principal', 'accountant'),
+router.post('/arrears/:id/payment', requirePermissionV2('fee.collect'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { amount, payment_mode, notes } = req.body
@@ -1225,7 +1238,7 @@ router.post('/arrears/:id/payment', requireRole('school_admin', 'principal', 'ac
 
 // ── PATCH /fees/arrears/:id/waive ─────────────────────────────────
 // Admin/Principal can waive an arrear entirely (e.g. financial hardship).
-router.patch('/arrears/:id/waive', requireRole('school_admin', 'principal'),
+router.patch('/arrears/:id/waive', requirePermissionV2('fee.arrear_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { reason } = req.body
@@ -1243,7 +1256,7 @@ router.patch('/arrears/:id/waive', requireRole('school_admin', 'principal'),
     res.json({ success: true, data })
   })
 )
-router.post('/invoices/:id/installments', requireRole('school_admin', 'principal', 'accountant'),
+router.post('/invoices/:id/installments', requirePermissionV2('fee.invoice_generate'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { installments } = req.body
@@ -1304,7 +1317,7 @@ router.get('/invoices/:id/installments', asyncHandler(async (req: AuthRequest, r
 // fee_payments row linked via installment_id, marks the installment
 // paid, and updates the parent invoice's overall status the same way
 // a regular payment would.
-router.post('/installments/:id/pay', requireRole('school_admin', 'principal', 'accountant'),
+router.post('/installments/:id/pay', requirePermissionV2('fee.collect'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { payment_mode, transaction_reference, notes } = req.body
@@ -1353,7 +1366,7 @@ router.post('/installments/:id/pay', requireRole('school_admin', 'principal', 'a
 
 
 
-router.post('/apply-late-fines', requireRole('school_admin', 'principal', 'accountant'),
+router.post('/apply-late-fines', requirePermissionV2('fee.arrear_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
     const today = new Date()

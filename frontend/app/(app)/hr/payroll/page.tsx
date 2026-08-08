@@ -3,12 +3,13 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn, formatCurrency } from '@/lib/utils'
-import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, AlertTriangle, Wallet } from 'lucide-react'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, AlertTriangle, Wallet, Download, CalendarX2, Settings, Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -16,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -37,6 +39,8 @@ export default function PayrollPage() {
 
   const canApprove = ['school_admin', 'principal'].includes(user?.role ?? '')
   const [skipped, setSkipped] = useState<{ user_id: string; full_name: string; role: string }[] | null>(null)
+  const [selectedPayslip, setSelectedPayslip] = useState<any | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
 
   const { data: payslips, isLoading } = useQuery({
     queryKey: ['payslips', month, year],
@@ -48,8 +52,10 @@ export default function PayrollPage() {
     queryFn: () => hrmsApi.payroll.summary({ month, year }).then(r => r.data),
   })
 
+  const [coverageWarning, setCoverageWarning] = useState<{ error: string; coverage_pct: number } | null>(null)
+
   const generateMutation = useMutation({
-    mutationFn: () => hrmsApi.payslips.generate({ month, year }),
+    mutationFn: (confirm?: boolean) => hrmsApi.payslips.generate({ month, year, confirm }),
     onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['payslips'] })
       qc.invalidateQueries({ queryKey: ['payroll-summary'] })
@@ -57,8 +63,20 @@ export default function PayrollPage() {
       // not nested inside it — res.data?.count was always undefined.
       toast.success(`${res.count ?? 0} payslip(s) generated`)
       setSkipped(res.skipped ?? [])
+      setCoverageWarning(null)
     },
-    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to generate'),
+    onError: (e: any) => {
+      // Attendance-coverage guard: the backend refuses to generate
+      // (409, needs_confirmation) when most of the month's working days
+      // have no attendance marked yet, since LOP would otherwise treat
+      // that data gap as absenteeism for most of the staff. Surface it
+      // as a confirmation step instead of a plain error toast.
+      if (e?.response?.data?.needs_confirmation) {
+        setCoverageWarning({ error: e.response.data.error, coverage_pct: e.response.data.coverage_pct })
+        return
+      }
+      toast.error(e?.response?.data?.error ?? 'Failed to generate')
+    },
   })
 
   const approveMutation = useMutation({
@@ -117,7 +135,13 @@ export default function PayrollPage() {
               </SelectContent>
             </Select>
           </div>
-          <Button onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
+          <Button variant="outline" onClick={() => hrmsApi.payroll.downloadBankExport(month, year)}>
+            <Download className="h-4 w-4" /> Bank Export (CSV)
+          </Button>
+          <Button variant="outline" onClick={() => setShowSettings(true)}>
+            <Settings className="h-4 w-4" /> Payroll Settings
+          </Button>
+          <Button onClick={() => generateMutation.mutate(undefined)} disabled={generateMutation.isPending}>
             {generateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             Generate Payslips for {MONTHS[month - 1]}
           </Button>
@@ -144,23 +168,44 @@ export default function PayrollPage() {
         </div>
       )}
 
-      {skipped !== null && skipped.length > 0 && (
-        <div className="flex items-start gap-3 rounded-2xl border border-warning/30 bg-warning/10 px-5 py-4">
-          <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
-          <div className="text-sm text-foreground">
-            <p className="font-semibold">{skipped.length} staff member{skipped.length !== 1 ? 's' : ''} skipped — no salary structure on file</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {skipped.map((s, i) => (
-                <span key={s.user_id}>
-                  {i > 0 && ', '}
-                  <Link href={`/hr/staff/${s.user_id}`} className="text-primary underline hover:text-primary/80">{s.full_name}</Link>
-                </span>
-              ))}
-              {' — set their salary under Staff → Payroll tab, then generate again.'}
-            </p>
+      {skipped !== null && skipped.length > 0 && (() => {
+        const missingStructure = skipped.filter((s: any) => s.reason !== 'resigned')
+        const resigned = skipped.filter((s: any) => s.reason === 'resigned')
+        const nameList = (list: any[]) => list.map((s, i) => (
+          <span key={s.user_id}>
+            {i > 0 && ', '}
+            <Link href={`/hr/staff/${s.user_id}`} className="text-primary underline hover:text-primary/80">{s.full_name}</Link>
+          </span>
+        ))
+        return (
+          <div className="space-y-2">
+            {missingStructure.length > 0 && (
+              <div className="flex items-start gap-3 rounded-2xl border border-warning/30 bg-warning/10 px-5 py-4">
+                <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
+                <div className="text-sm text-foreground">
+                  <p className="font-semibold">{missingStructure.length} staff member{missingStructure.length !== 1 ? 's' : ''} skipped — no salary structure on file</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {nameList(missingStructure)}
+                    {' — set their salary under Staff → Payroll tab, then generate again.'}
+                  </p>
+                </div>
+              </div>
+            )}
+            {resigned.length > 0 && (
+              <div className="flex items-start gap-3 rounded-2xl border border-border bg-muted/50 px-5 py-4">
+                <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-muted-foreground" />
+                <div className="text-sm text-foreground">
+                  <p className="font-semibold">{resigned.length} staff member{resigned.length !== 1 ? 's' : ''} excluded — resigned/terminated</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {nameList(resigned)}
+                    {' — no longer part of active payroll. Their prior payslips are unaffected and still payable via Bank Export.'}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {!canApprove && (
         <div className="flex items-center gap-2 rounded-xl bg-muted px-4 py-2.5 text-xs text-muted-foreground">
@@ -190,6 +235,7 @@ export default function PayrollPage() {
                 <TableRow className="hover:bg-transparent">
                   <TableHead>Staff</TableHead>
                   <TableHead className="text-right">Gross</TableHead>
+                  <TableHead className="text-right">LOP</TableHead>
                   <TableHead className="text-right">Deductions</TableHead>
                   <TableHead className="text-right">Net Pay</TableHead>
                   <TableHead>Status</TableHead>
@@ -198,12 +244,17 @@ export default function PayrollPage() {
               </TableHeader>
               <TableBody>
                 {(payslips ?? []).map((p: any) => (
-                  <TableRow key={p.id} className="cursor-default">
+                  <TableRow key={p.id} onClick={() => setSelectedPayslip(p)} className="cursor-pointer hover:bg-muted/40">
                     <TableCell>
                       <p className="font-semibold text-foreground">{p.users?.full_name}</p>
                       <p className="text-xs capitalize text-muted-foreground">{p.users?.role?.replace('_', ' ')}</p>
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(Number(p.gross_salary))}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {Number(p.lop_days) > 0
+                        ? <span className="text-warning">{p.lop_days}d · {formatCurrency(Number(p.lop_amount))}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(Number(p.total_deductions))}</TableCell>
                     <TableCell className="text-right font-semibold tabular-nums text-foreground">{formatCurrency(Number(p.net_salary))}</TableCell>
                     <TableCell>
@@ -211,7 +262,7 @@ export default function PayrollPage() {
                         {p.payment_status.replace('_', ' ')}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right" onClick={e => e.stopPropagation()}>
                       {p.payment_status === 'pending' && canApprove && (
                         <Button size="sm" variant="secondary" onClick={() => approveMutation.mutate({ id: p.id })} disabled={approveMutation.isPending} className="ml-auto">
                           {approveMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />} Approve
@@ -233,6 +284,298 @@ export default function PayrollPage() {
           </div>
         )}
       </Card>
+
+      {selectedPayslip && <PayslipBreakdownModal payslip={selectedPayslip} onClose={() => setSelectedPayslip(null)} />}
+      {showSettings && <PayrollSettingsModal onClose={() => setShowSettings(false)} />}
+
+      {coverageWarning && (
+        <Dialog open onOpenChange={(o) => { if (!o) setCoverageWarning(null) }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-warning"><AlertTriangle className="h-5 w-5" /> Attendance mostly unmarked</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-foreground">{coverageWarning.error}</p>
+            <p className="text-xs text-muted-foreground">Only {coverageWarning.coverage_pct}% attendance coverage for {MONTHS[month - 1]} {year} so far.</p>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setCoverageWarning(null)}>Cancel — mark attendance first</Button>
+              <Button
+                variant="secondary"
+                className="bg-warning/10 text-warning hover:bg-warning/20"
+                onClick={() => generateMutation.mutate(true)}
+                disabled={generateMutation.isPending}
+              >
+                {generateMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Generate Anyway
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
+  )
+}
+
+// ── PAYROLL SETTINGS — LOP grace/formula + professional tax slabs. Both
+// were already fully built on the backend (GET/PUT /hrms/payroll/settings)
+// with no UI anywhere to reach them — this is that missing UI.
+function PayrollSettingsModal({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['payroll-settings'],
+    queryFn: () => hrmsApi.payroll.settings.get().then(r => r.data),
+  })
+
+  const [graceDays, setGraceDays] = useState('0')
+  const [formula, setFormula] = useState<'gross_30' | 'working_days'>('gross_30')
+  const [slabs, setSlabs] = useState<{ min_gross: string; max_gross: string; amount: string }[]>([])
+  const [initialized, setInitialized] = useState(false)
+
+  if (data && !initialized) {
+    setGraceDays(String(data.lop_grace_days ?? 0))
+    setFormula(data.lop_per_day_formula === 'working_days' ? 'working_days' : 'gross_30')
+    setSlabs((data.professional_tax_slabs ?? []).map((s: any) => ({
+      min_gross: String(s.min_gross ?? 0), max_gross: s.max_gross != null ? String(s.max_gross) : '', amount: String(s.amount ?? 0),
+    })))
+    setInitialized(true)
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () => hrmsApi.payroll.settings.update({
+      lop_grace_days: Number(graceDays) || 0,
+      lop_per_day_formula: formula,
+      professional_tax_slabs: slabs
+        .filter(s => s.min_gross !== '' && s.amount !== '')
+        .map(s => ({ min_gross: Number(s.min_gross), max_gross: s.max_gross === '' ? null : Number(s.max_gross), amount: Number(s.amount) })),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['payroll-settings'] })
+      toast.success('Payroll settings saved')
+      onClose()
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to save'),
+  })
+
+  const addSlab = () => setSlabs(s => [...s, { min_gross: '', max_gross: '', amount: '' }])
+  const removeSlab = (i: number) => setSlabs(s => s.filter((_, idx) => idx !== i))
+  const updateSlab = (i: number, field: 'min_gross' | 'max_gross' | 'amount', value: string) =>
+    setSlabs(s => s.map((row, idx) => idx === i ? { ...row, [field]: value } : row))
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Payroll Settings</DialogTitle>
+        </DialogHeader>
+
+        {isLoading ? (
+          <Skeleton className="h-64 w-full" />
+        ) : (
+          <div className="space-y-5">
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Loss of Pay (LOP)</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Grace Days</Label>
+                  <Input type="number" min="0" value={graceDays} onChange={e => setGraceDays(e.target.value)} />
+                  <p className="text-xs text-muted-foreground">Unmarked + absent days within this buffer aren't deducted.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Per-Day Rate</Label>
+                  <Select value={formula} onValueChange={(v: any) => setFormula(v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="gross_30">Gross ÷ 30 (flat)</SelectItem>
+                      <SelectItem value="working_days">Gross ÷ actual working days</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase text-muted-foreground">Professional Tax Slabs</p>
+                <Button size="sm" variant="ghost" onClick={addSlab}><Plus className="h-3.5 w-3.5" /> Add Slab</Button>
+              </div>
+              {slabs.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No slabs configured — professional tax falls back to each staff member's flat Salary Structure figure.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 text-xs text-muted-foreground">
+                    <span>Min Gross</span><span>Max Gross</span><span>Amount</span><span />
+                  </div>
+                  {slabs.map((s, i) => (
+                    <div key={i} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2">
+                      <Input type="number" placeholder="0" value={s.min_gross} onChange={e => updateSlab(i, 'min_gross', e.target.value)} />
+                      <Input type="number" placeholder="No limit" value={s.max_gross} onChange={e => updateSlab(i, 'max_gross', e.target.value)} />
+                      <Input type="number" placeholder="0" value={s.amount} onChange={e => updateSlab(i, 'amount', e.target.value)} />
+                      <Button variant="ghost" size="icon" onClick={() => removeSlab(i)} className="text-destructive"><Trash2 className="h-3.5 w-3.5" /></Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || isLoading}>
+            {saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save Settings
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const ATTENDANCE_STATUS_LABEL: Record<string, string> = { present: 'Present', absent: 'Absent', half_day: 'Half Day', on_leave: 'On Leave' }
+const ATTENDANCE_STATUS_COLOR: Record<string, string> = {
+  present: 'bg-success/10 text-success', absent: 'bg-destructive/10 text-destructive',
+  half_day: 'bg-warning/10 text-warning', on_leave: 'bg-info/10 text-info',
+}
+
+// Line-item breakdown of what actually built this payslip's numbers —
+// every figure below is read straight off the payslip row itself
+// (generation already computed and stored each of these; this just
+// makes them visible instead of only the collapsed Gross/Deductions/Net
+// columns in the table). The attendance and leave sections underneath
+// answer "which days" for the LOP figure, since the payslip itself only
+// stores the day COUNT, not which dates — those come from the same
+// staff_attendance/leave_requests data the LOP calculation itself reads.
+function PayslipBreakdownModal({ payslip: p, onClose }: { payslip: any; onClose: () => void }) {
+  const { data: attendance, isLoading: attendanceLoading } = useQuery({
+    queryKey: ['payslip-attendance', p.user_id, p.month, p.year],
+    queryFn: () => hrmsApi.attendance.list({ user_id: p.user_id, month: p.month, year: p.year }).then(r => r.data),
+  })
+
+  const { data: leaveRequests, isLoading: leaveLoading } = useQuery({
+    queryKey: ['payslip-leave-requests', p.user_id, p.month, p.year],
+    queryFn: () => hrmsApi.leaveRequests.list({ user_id: p.user_id, status: 'approved', limit: 50 }).then(r => r.data),
+  })
+
+  const monthStart = `${p.year}-${String(p.month).padStart(2, '0')}-01`
+  const monthEnd = `${p.year}-${String(p.month).padStart(2, '0')}-31`
+  const leavesThisMonth = (leaveRequests ?? []).filter((lr: any) => lr.from_date <= monthEnd && lr.to_date >= monthStart)
+
+  // Only the days that actually explain the deductions/pace — present
+  // days aren't interesting here, so they're excluded from the list
+  // (still counted in the "Present" tally above it).
+  const nonPresentDays = (attendance ?? []).filter((a: any) => a.status !== 'present').sort((a: any, b: any) => a.date.localeCompare(b.date))
+  const presentCount = (attendance ?? []).filter((a: any) => a.status === 'present').length
+
+  const earnings = [
+    ['Basic Salary', p.basic_salary], ['HRA', p.hra], ['DA', p.da],
+    ['Conveyance', p.conveyance_allowance], ['Medical Allowance', p.medical_allowance],
+    ['Other Allowances', p.other_allowances], ['Leave Encashment', p.leave_encashment],
+  ].filter(([, v]) => Number(v) > 0) as [string, number][]
+
+  const deductions = [
+    ['PF (Employee)', p.pf_deduction],
+    ['Professional Tax', p.professional_tax],
+    ['TDS', p.tds],
+    ['Loan Recovery', p.loan_deduction],
+    ['Other Deductions', p.other_deductions],
+  ].filter(([, v]) => Number(v) > 0) as [string, number][]
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{p.users?.full_name} — {MONTHS[p.month - 1]} {p.year}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-xl bg-muted/50 p-3">
+              <p className="mb-1.5 text-xs font-semibold uppercase text-muted-foreground">Earnings</p>
+              <div className="space-y-1 text-sm">
+                {earnings.map(([label, value]) => (
+                  <div key={label} className="flex justify-between text-foreground">
+                    <span className="text-muted-foreground">{label}</span>
+                    <span className="tabular-nums">{formatCurrency(Number(value))}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex justify-between border-t border-border pt-1.5 text-sm font-semibold text-foreground">
+                <span>Gross</span>
+                <span className="tabular-nums">{formatCurrency(Number(p.gross_salary))}</span>
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-muted/50 p-3">
+              <p className="mb-1.5 text-xs font-semibold uppercase text-muted-foreground">Deductions</p>
+              <div className="space-y-1 text-sm">
+                {Number(p.lop_days) > 0 && (
+                  <div className="flex justify-between text-foreground">
+                    <span className="text-muted-foreground">LOP ({p.lop_days} day{Number(p.lop_days) === 1 ? '' : 's'})</span>
+                    <span className="tabular-nums text-destructive">{formatCurrency(Number(p.lop_amount))}</span>
+                  </div>
+                )}
+                {deductions.map(([label, value]) => (
+                  <div key={label} className="flex justify-between text-foreground">
+                    <span className="text-muted-foreground">{label}</span>
+                    <span className="tabular-nums">{formatCurrency(Number(value))}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex justify-between border-t border-border pt-1.5 text-sm font-semibold text-foreground">
+                <span>Total</span>
+                <span className="tabular-nums">{formatCurrency(Number(p.total_deductions))}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+            <span className="text-sm font-semibold text-foreground">Net Pay</span>
+            <span className="text-lg font-bold tabular-nums text-primary">{formatCurrency(Number(p.net_salary))}</span>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+              Attendance this month {!attendanceLoading && <span className="font-normal normal-case">· {presentCount} present</span>}
+            </p>
+            {attendanceLoading ? (
+              <Skeleton className="h-16 w-full" />
+            ) : nonPresentDays.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No absences, half-days, or leave marked this month.</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {nonPresentDays.map((a: any) => (
+                  <span key={a.id} className={cn('rounded-full px-2 py-1 text-xs font-medium', ATTENDANCE_STATUS_COLOR[a.status] ?? 'bg-muted text-muted-foreground')}>
+                    {formatDate(a.date)} · {ATTENDANCE_STATUS_LABEL[a.status] ?? a.status}
+                  </span>
+                ))}
+              </div>
+            )}
+            {Number(p.lop_days) > (attendance ?? []).filter((a: any) => a.status === 'absent').length && (
+              <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+                <CalendarX2 className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                The LOP count also includes days with no attendance record marked at all (unmarked) — those don't show as a badge above since there's no record to display, only a gap in the calendar.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Leave taken this month</p>
+            {leaveLoading ? (
+              <Skeleton className="h-10 w-full" />
+            ) : leavesThisMonth.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No approved leave overlapping this month.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {leavesThisMonth.map((lr: any) => (
+                  <div key={lr.id} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-1.5 text-xs">
+                    <span className="text-foreground">{lr.leave_types?.name ?? 'Leave'} · {formatDate(lr.from_date)}–{formatDate(lr.to_date)} · {lr.total_days}d</span>
+                    <Badge variant={lr.leave_types?.is_paid ? 'success' : 'destructive'}>{lr.leave_types?.is_paid ? 'Paid' : 'Unpaid'}</Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }

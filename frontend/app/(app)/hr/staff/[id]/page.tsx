@@ -2,14 +2,16 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { hrmsApi } from '@/lib/api'
+import { hrmsApi, documentsApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, User, Users, Calendar, IndianRupee, Loader2, Check, X, Edit3 } from 'lucide-react'
+import { ArrowLeft, User, Users, Calendar, IndianRupee, Loader2, Check, X, Edit3, History, LogOut, ShieldAlert, FileText, ArrowRight, Trash2, Eye, Plus } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
@@ -32,7 +34,7 @@ import {
 } from '@/components/ui/table'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 
-const TABS = ['Profile', 'Leave', 'Payroll'] as const
+const TABS = ['Profile', 'Position History', 'Leave', 'Payroll', 'Documents', 'Exit'] as const
 
 // Radix SelectItem can't hold an empty string, so an option meaning "unset"
 // (e.g. Gender's blank "Select") is carried through this sentinel and mapped
@@ -44,6 +46,7 @@ export default function StaffDetailPage() {
   const qc = useQueryClient()
   const [tab, setTab] = useState<typeof TABS[number]>('Profile')
   const [editMode, setEditMode] = useState(false)
+  const [showPromoteModal, setShowPromoteModal] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['hr-staff-detail', id],
@@ -91,6 +94,9 @@ export default function StaffDetailPage() {
   }
 
   const profile = data.profile
+  const probationDaysLeft = profile?.probation_end_date
+    ? Math.ceil((new Date(`${profile.probation_end_date}T00:00:00`).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    : null
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -121,6 +127,12 @@ export default function StaffDetailPage() {
                   {profile.employment_status.replace('_', ' ')}
                 </span>
               )}
+              {probationDaysLeft !== null && (
+                <ProbationBadge staffId={id} daysLeft={probationDaysLeft} />
+              )}
+              <Button size="sm" variant="outline" onClick={() => setShowPromoteModal(true)}>
+                <ArrowRight className="h-3.5 w-3.5" /> Promote / Transfer
+              </Button>
             </>
           }
         />
@@ -134,7 +146,11 @@ export default function StaffDetailPage() {
       </Tabs>
 
       {tab === 'Profile' && (
-        <ProfileTab data={data} profile={profile} staffId={id} editMode={editMode} setEditMode={setEditMode} />
+        <ProfileTab data={data} profile={profile} staffId={id} editMode={editMode} setEditMode={setEditMode} onPromote={() => setShowPromoteModal(true)} />
+      )}
+
+      {tab === 'Position History' && (
+        <PositionHistoryTab staffId={id} />
       )}
 
       {tab === 'Leave' && (
@@ -151,17 +167,87 @@ export default function StaffDetailPage() {
       {tab === 'Payroll' && (
         <PayrollTab data={data} staffId={id} userName={data.full_name} />
       )}
+
+      {tab === 'Documents' && (
+        <DocumentsTab staffId={id} />
+      )}
+
+      {tab === 'Exit' && (
+        <ExitTab staffId={id} userName={data.full_name} />
+      )}
+
+      {showPromoteModal && (
+        <PromoteTransferModal staffId={id} userName={data.full_name} profile={profile} onClose={() => {
+          setShowPromoteModal(false)
+          qc.invalidateQueries({ queryKey: ['hr-staff-detail', id] })
+          qc.invalidateQueries({ queryKey: ['position-history', id] })
+        }} />
+      )}
     </div>
   )
 }
 
+// ── PROBATION BADGE + Confirm/Extend ────────────────────────────
+function ProbationBadge({ staffId, daysLeft }: { staffId: string; daysLeft: number }) {
+  const qc = useQueryClient()
+  const [showExtend, setShowExtend] = useState(false)
+  const [newDate, setNewDate] = useState('')
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['hr-staff-detail', staffId] })
+    qc.invalidateQueries({ queryKey: ['position-history', staffId] })
+  }
+
+  const confirmMutation = useMutation({
+    mutationFn: () => hrmsApi.staff.probationConfirm(staffId),
+    onSuccess: () => { invalidate(); toast.success('Probation confirmed') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
+  })
+
+  const extendMutation = useMutation({
+    mutationFn: () => hrmsApi.staff.probationExtend(staffId, newDate),
+    onSuccess: () => { invalidate(); setShowExtend(false); toast.success('Probation extended') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
+  })
+
+  return (
+    <>
+      <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset',
+        daysLeft <= 30 ? 'bg-warning/10 text-warning ring-warning/20' : 'bg-muted text-muted-foreground ring-border')}>
+        <ShieldAlert className="h-3 w-3" />
+        {daysLeft < 0 ? 'Probation overdue' : `Probation ends in ${daysLeft}d`}
+      </span>
+      <Button size="sm" variant="ghost" onClick={() => confirmMutation.mutate()} disabled={confirmMutation.isPending} className="text-success hover:text-success">
+        {confirmMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Confirm
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setShowExtend(true)}>Extend</Button>
+
+      {showExtend && (
+        <Dialog open onOpenChange={(o) => { if (!o) setShowExtend(false) }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>Extend Probation</DialogTitle></DialogHeader>
+            <div className="space-y-1.5">
+              <Label>New Probation End Date</Label>
+              <Input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} />
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setShowExtend(false)}>Cancel</Button>
+              <Button onClick={() => extendMutation.mutate()} disabled={!newDate || extendMutation.isPending}>
+                {extendMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  )
+}
+
 // ── PROFILE TAB ────────────────────────────────────────────────
-function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
+function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }: any) {
   const qc = useQueryClient()
   const [form, setForm] = useState({
     employee_id: profile?.employee_id ?? '',
-    designation: profile?.designation ?? '',
-    department: profile?.department ?? '',
     date_of_joining: profile?.date_of_joining ?? '',
     date_of_birth: profile?.date_of_birth ?? '',
     gender: profile?.gender ?? '',
@@ -180,16 +266,36 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
     employment_status: profile?.employment_status ?? 'active',
     emergency_contact_name: profile?.emergency_contact_name ?? '',
     emergency_contact_phone: profile?.emergency_contact_phone ?? '',
+    shift_id: profile?.shift_id ?? '',
+    leave_delegate_id: profile?.leave_delegate_id ?? '',
+    reporting_to: profile?.reporting_to ?? '',
+  })
+
+  const { data: shifts } = useQuery({
+    queryKey: ['staff-shifts'],
+    queryFn: () => hrmsApi.shifts.list().then(r => r.data),
+  })
+
+  const { data: allStaff } = useQuery({
+    queryKey: ['hr-staff', 'delegate-options'],
+    queryFn: () => hrmsApi.staff.list({ limit: 200 }).then(r => r.data),
   })
 
   const saveMutation = useMutation({
     mutationFn: () => hrmsApi.staff.updateProfile(staffId, {
       ...form,
+      shift_id: form.shift_id || null,
+      leave_delegate_id: form.leave_delegate_id || null,
+      reporting_to: form.reporting_to || null,
       experience_years: form.experience_years ? Number(form.experience_years) : undefined,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['hr-staff-detail', staffId] })
       qc.invalidateQueries({ queryKey: ['hr-staff'] })
+      // reporting_to changed here is exactly what the Org Chart page reads —
+      // without this it keeps showing the pre-edit hierarchy for up to the
+      // query client's 30s default staleTime after a save.
+      qc.invalidateQueries({ queryKey: ['staff-org-chart'] })
       toast.success('Profile updated')
       setEditMode(false)
     },
@@ -235,8 +341,14 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <Field label="Employee ID" name="employee_id" />
-            <Field label="Designation" name="designation" />
-            <Field label="Department" name="department" />
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Designation</Label>
+              <p className="flex h-9 items-center rounded-md border border-border bg-muted px-3 text-sm text-foreground">{profile?.designation || '—'}</p>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Department</Label>
+              <p className="flex h-9 items-center rounded-md border border-border bg-muted px-3 text-sm text-foreground">{profile?.department || '—'}</p>
+            </div>
             <Field label="Date of Joining" name="date_of_joining" type="date" />
             <Field label="Date of Birth" name="date_of_birth" type="date" />
             <Field label="Gender" name="gender" options={[{value:'',label:'Select'},{value:'male',label:'Male'},{value:'female',label:'Female'},{value:'other',label:'Other'}]} />
@@ -246,11 +358,28 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode }: any) {
               {value:'full_time',label:'Full Time'},{value:'part_time',label:'Part Time'},{value:'contract',label:'Contract'},{value:'probation',label:'Probation'}
             ]} />
             <Field label="Employment Status" name="employment_status" options={[
-              {value:'active',label:'Active'},{value:'on_leave',label:'On Leave'},{value:'suspended',label:'Suspended'},{value:'resigned',label:'Resigned'},{value:'terminated',label:'Terminated'}
+              {value:'active',label:'Active'},{value:'suspended',label:'Suspended'},{value:'resigned',label:'Resigned'},{value:'terminated',label:'Terminated'}
+            ]} />
+            <Field label="Shift" name="shift_id" options={[
+              { value: '', label: 'School default schedule' },
+              ...(shifts ?? []).map((s: any) => ({ value: s.id, label: s.name })),
+            ]} />
+            <Field label="Leave Delegate" name="leave_delegate_id" options={[
+              { value: '', label: 'None' },
+              ...(allStaff ?? []).filter((s: any) => s.id !== staffId && !['resigned', 'terminated'].includes(s.staff_profile?.employment_status)).map((s: any) => ({ value: s.id, label: s.full_name })),
+            ]} />
+            <Field label="Reports To" name="reporting_to" options={[
+              { value: '', label: 'None' },
+              ...(allStaff ?? []).filter((s: any) => s.id !== staffId && !['resigned', 'terminated'].includes(s.staff_profile?.employment_status)).map((s: any) => ({ value: s.id, label: s.full_name })),
             ]} />
             <Field label="Phone" name="phone" />
             <Field label="Personal Email" name="personal_email" type="email" />
           </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Designation and department are read-only here — use{' '}
+            <button type="button" onClick={onPromote} className="font-medium text-primary hover:underline">Promote / Transfer</button>{' '}
+            to change them, so the change is recorded in Position History.
+          </p>
         </CardContent>
       </Card>
 
@@ -471,6 +600,9 @@ function PayrollTab({ data, staffId, userName }: any) {
         </CardContent>
       </Card>
 
+      {/* Loans / advances */}
+      <LoansSection staffId={staffId} userName={userName} />
+
       {showSalaryModal && (
         <SalaryModal staffId={staffId} userName={userName} existing={salary} onClose={() => {
           setShowSalaryModal(false)
@@ -478,6 +610,133 @@ function PayrollTab({ data, staffId, userName }: any) {
         }} />
       )}
     </div>
+  )
+}
+
+function LoansSection({ staffId, userName }: { staffId: string; userName: string }) {
+  const qc = useQueryClient()
+  const [showIssueModal, setShowIssueModal] = useState(false)
+
+  const { data: loans, isLoading } = useQuery({
+    queryKey: ['staff-loans', staffId],
+    queryFn: () => hrmsApi.loans.list(staffId).then(r => r.data),
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: (loanId: string) => hrmsApi.loans.update(loanId, 'cancelled'),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['staff-loans', staffId] }); toast.success('Loan cancelled') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
+  })
+
+  const LOAN_STATUS_COLORS: Record<string, string> = {
+    active: 'bg-info/10 text-info ring-1 ring-inset ring-info/20',
+    settled: 'bg-success/10 text-success ring-1 ring-inset ring-success/20',
+    cancelled: 'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="flex items-center gap-2 font-semibold text-foreground"><IndianRupee className="h-4 w-4 text-muted-foreground" /> Loans &amp; Advances</h3>
+          <Button variant="ghost" size="sm" onClick={() => setShowIssueModal(true)} className="text-primary hover:text-primary/80">
+            <IndianRupee className="h-3.5 w-3.5" /> Issue Loan
+          </Button>
+        </div>
+
+        {isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : (loans ?? []).length === 0 ? (
+          <p className="text-sm text-muted-foreground">No loans or advances on record. Recovery installments are automatically deducted from future payslips once one is issued.</p>
+        ) : (
+          <div className="space-y-2">
+            {(loans ?? []).map((l: any) => (
+              <div key={l.id} className="flex items-center justify-between rounded-xl border border-border p-3 text-sm">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-foreground">₹{Number(l.principal_amount).toLocaleString('en-IN')}</span>
+                    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium capitalize', LOAN_STATUS_COLORS[l.status])}>{l.status}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    ₹{Number(l.installment_amount).toLocaleString('en-IN')}/month · {l.installments_paid}/{l.installments_total} installments paid
+                    {l.reason && ` · ${l.reason}`}
+                  </p>
+                </div>
+                {l.status === 'active' && (
+                  <Button variant="ghost" size="sm" onClick={() => cancelMutation.mutate(l.id)} disabled={cancelMutation.isPending} className="text-muted-foreground hover:text-destructive">
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      {showIssueModal && (
+        <IssueLoanModal staffId={staffId} userName={userName} onClose={() => {
+          setShowIssueModal(false)
+          qc.invalidateQueries({ queryKey: ['staff-loans', staffId] })
+        }} />
+      )}
+    </Card>
+  )
+}
+
+function IssueLoanModal({ staffId, userName, onClose }: { staffId: string; userName: string; onClose: () => void }) {
+  const [form, setForm] = useState({ principal_amount: '', installment_amount: '', installments_total: '', reason: '' })
+  const [loading, setLoading] = useState(false)
+
+  const handleSave = async () => {
+    if (!form.principal_amount || !form.installment_amount || !form.installments_total) return toast.error('Amount and installment plan are required')
+    setLoading(true)
+    try {
+      await hrmsApi.loans.create({
+        user_id: staffId,
+        principal_amount: Number(form.principal_amount),
+        installment_amount: Number(form.installment_amount),
+        installments_total: Number(form.installments_total),
+        reason: form.reason || undefined,
+      })
+      toast.success('Loan issued')
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Failed')
+    } finally { setLoading(false) }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle>Issue Loan — {userName}</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Principal Amount *</Label>
+            <Input type="number" value={form.principal_amount} onChange={e => setForm(f => ({ ...f, principal_amount: e.target.value }))} placeholder="0" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Monthly Installment *</Label>
+              <Input type="number" value={form.installment_amount} onChange={e => setForm(f => ({ ...f, installment_amount: e.target.value }))} placeholder="0" />
+            </div>
+            <div className="space-y-1.5">
+              <Label># Installments *</Label>
+              <Input type="number" value={form.installments_total} onChange={e => setForm(f => ({ ...f, installments_total: e.target.value }))} placeholder="0" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Reason</Label>
+            <Textarea rows={2} className="resize-none" value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Issue Loan
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -551,6 +810,530 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button onClick={handleSave} disabled={loading}>
             {loading && <Loader2 className="h-4 w-4 animate-spin" />} Save Salary Structure
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── POSITION HISTORY TAB ──────────────────────────────────────
+function PositionHistoryTab({ staffId }: { staffId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['position-history', staffId],
+    queryFn: () => hrmsApi.staff.positionHistory(staffId).then(r => r.data),
+  })
+
+  return (
+    <Card>
+      <CardHeader className="border-b border-border">
+        <CardTitle className="flex items-center gap-2"><History className="h-4 w-4 text-muted-foreground" /> Position History</CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        {isLoading ? (
+          <div className="space-y-3 p-6">
+            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
+          </div>
+        ) : (data ?? []).length === 0 ? (
+          <EmptyState
+            icon={History}
+            title="No position changes recorded yet"
+            description="Every promotion, transfer, or probation decision made via the Promote / Transfer action will show up here."
+          />
+        ) : (
+          <div className="divide-y divide-border">
+            {(data ?? []).map((h: any) => {
+              const isCurrent = !h.effective_to
+              return (
+                <div key={h.id} className="px-6 py-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {(h.designation || h.department) ? (
+                      <span className="text-sm font-semibold text-foreground">
+                        {[h.designation, h.department, h.branch].filter(Boolean).join(' · ')}
+                      </span>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">No position change</span>
+                    )}
+                    {isCurrent && (
+                      <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success ring-1 ring-inset ring-success/20">Current</span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {formatDate(h.effective_from)} {isCurrent ? '→ present' : `→ ${formatDate(h.effective_to)}`}
+                    {h.changed_by_user?.full_name && ` · by ${h.changed_by_user.full_name}`}
+                  </p>
+                  {h.reason && <p className="mt-1 text-xs text-muted-foreground">{h.reason}</p>}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ── PROMOTE / TRANSFER MODAL ───────────────────────────────────
+function PromoteTransferModal({ staffId, userName, profile, onClose }: any) {
+  const [form, setForm] = useState({
+    designation: profile?.designation ?? '',
+    department: profile?.department ?? '',
+    branch: '',
+    effective_from: new Date().toISOString().split('T')[0],
+    reason: '',
+  })
+  const [alsoUpdateSalary, setAlsoUpdateSalary] = useState(false)
+  const [salary, setSalary] = useState({
+    basic_salary: '', hra: '', da: '', conveyance_allowance: '', medical_allowance: '', other_allowances: '',
+    pf_deduction: '', professional_tax: '', other_deductions: '',
+  })
+  const [loading, setLoading] = useState(false)
+
+  const handleSave = async () => {
+    if (!form.effective_from) return toast.error('Effective date is required')
+    if (alsoUpdateSalary && !salary.basic_salary) return toast.error('Basic salary is required to update salary')
+    setLoading(true)
+    try {
+      await hrmsApi.staff.promote(staffId, {
+        ...form,
+        salary: alsoUpdateSalary
+          ? Object.fromEntries(Object.entries(salary).map(([k, v]) => [k, v === '' ? 0 : Number(v)]))
+          : undefined,
+      })
+      toast.success('Position updated')
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Failed')
+    } finally { setLoading(false) }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Promote / Transfer — {userName}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Designation</Label>
+              <Input value={form.designation} onChange={e => setForm(f => ({ ...f, designation: e.target.value }))} placeholder="e.g. Senior PGT" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Department</Label>
+              <Input value={form.department} onChange={e => setForm(f => ({ ...f, department: e.target.value }))} placeholder="e.g. Science" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Branch</Label>
+              <Input value={form.branch} onChange={e => setForm(f => ({ ...f, branch: e.target.value }))} placeholder="Optional" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Effective From *</Label>
+              <Input type="date" value={form.effective_from} onChange={e => setForm(f => ({ ...f, effective_from: e.target.value }))} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Reason</Label>
+            <Textarea rows={2} className="resize-none" value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Annual promotion cycle, department restructuring..." />
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input type="checkbox" checked={alsoUpdateSalary} onChange={e => setAlsoUpdateSalary(e.target.checked)} className="h-4 w-4 rounded border-border" />
+            Also update salary structure effective the same date
+          </label>
+
+          {alsoUpdateSalary && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 rounded-xl border border-border bg-muted/40 p-3">
+              {[
+                ['basic_salary', 'Basic Salary *'], ['hra', 'HRA'], ['da', 'DA'],
+                ['conveyance_allowance', 'Conveyance'], ['medical_allowance', 'Medical Allowance'], ['other_allowances', 'Other Allowances'],
+                ['pf_deduction', 'PF'], ['professional_tax', 'Professional Tax'], ['other_deductions', 'Other Deductions'],
+              ].map(([name, label]) => (
+                <div key={name} className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{label}</Label>
+                  <Input type="number" value={(salary as any)[name]} onChange={e => setSalary(s => ({ ...s, [name]: e.target.value }))} placeholder="0" />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── DOCUMENTS TAB ────────────────────────────────────────────────
+const DOC_TYPE_LABELS: Record<string, string> = {
+  contract: 'Contract', id_proof: 'ID Proof', certification: 'Certification',
+  police_verification: 'Police Verification', offer_letter: 'Offer Letter', policy: 'Policy', other: 'Other',
+}
+
+function DocumentsTab({ staffId }: { staffId: string }) {
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  const [showUpload, setShowUpload] = useState(false)
+  const isSelf = user?.id === staffId
+  const today = new Date().toISOString().slice(0, 10)
+  const thirtyDaysOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+  const { data: docs, isLoading } = useQuery({
+    queryKey: ['staff-documents', staffId],
+    queryFn: () => hrmsApi.staff.documents.list(staffId).then(r => r.data),
+  })
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['staff-documents', staffId] })
+
+  const deleteMutation = useMutation({
+    mutationFn: (docId: string) => hrmsApi.staff.documents.delete(staffId, docId),
+    onSuccess: () => { toast.success('Document deleted'); invalidate() },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to delete'),
+  })
+
+  const acknowledgeMutation = useMutation({
+    mutationFn: (docId: string) => hrmsApi.staff.documents.acknowledge(staffId, docId),
+    onSuccess: () => { toast.success('Acknowledged'); invalidate() },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to acknowledge'),
+  })
+
+  const expiryBadge = (expiryDate: string | null) => {
+    if (!expiryDate) return null
+    const cls = expiryDate < today
+      ? 'bg-destructive/10 text-destructive ring-destructive/20'
+      : expiryDate <= thirtyDaysOut
+        ? 'bg-warning/10 text-warning ring-warning/20'
+        : 'bg-muted text-muted-foreground ring-border'
+    return (
+      <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset', cls)}>
+        {expiryDate < today ? 'Expired ' : 'Expires '}{formatDate(expiryDate)}
+      </span>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border">
+        <CardTitle className="flex items-center gap-2"><FileText className="h-4 w-4 text-muted-foreground" /> Documents</CardTitle>
+        <Button size="sm" onClick={() => setShowUpload(true)}><Plus className="h-3.5 w-3.5" /> Upload</Button>
+      </CardHeader>
+      <CardContent className="p-0">
+        {isLoading ? (
+          <div className="space-y-3 p-6">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
+        ) : (docs ?? []).length === 0 ? (
+          <EmptyState icon={FileText} title="No documents yet" description="Upload contracts, ID proofs, certifications and more."
+            action={<Button size="sm" onClick={() => setShowUpload(true)}>Upload First Document</Button>} />
+        ) : (
+          <div className="divide-y divide-border">
+            {(docs ?? []).map((doc: any) => (
+              <div key={doc.id} className="flex items-center justify-between gap-4 px-6 py-4">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-foreground">{doc.document_name}</span>
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{DOC_TYPE_LABELS[doc.document_type] ?? doc.document_type}</span>
+                    {expiryBadge(doc.expiry_date)}
+                    {doc.requires_acknowledgment && (
+                      doc.acknowledged_at
+                        ? <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">Acknowledged {formatDate(doc.acknowledged_at)}</span>
+                        : <span className="rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning">Awaiting acknowledgment</span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {doc.file_size} · uploaded {formatDate(doc.created_at)}{doc.uploaded_by_user?.full_name ? ` by ${doc.uploaded_by_user.full_name}` : ''}
+                  </p>
+                  {doc.notes && <p className="mt-1 text-xs text-muted-foreground">{doc.notes}</p>}
+                </div>
+                <div className="flex flex-shrink-0 items-center gap-1">
+                  {doc.requires_acknowledgment && !doc.acknowledged_at && isSelf && (
+                    <Button size="sm" variant="outline" onClick={() => acknowledgeMutation.mutate(doc.id)} disabled={acknowledgeMutation.isPending}>
+                      <Check className="h-3.5 w-3.5" /> I've read this
+                    </Button>
+                  )}
+                  <Button asChild variant="ghost" size="icon" title="View">
+                    <a href={doc.file_url} target="_blank" rel="noreferrer"><Eye className="h-4 w-4" /></a>
+                  </Button>
+                  <Button variant="ghost" size="icon" className="text-destructive" title="Delete"
+                    onClick={() => { if (confirm('Delete this document?')) deleteMutation.mutate(doc.id) }}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      {showUpload && (
+        <UploadDocumentModal staffId={staffId} onClose={() => { setShowUpload(false); invalidate() }} />
+      )}
+    </Card>
+  )
+}
+
+function UploadDocumentModal({ staffId, onClose }: { staffId: string; onClose: () => void }) {
+  const [form, setForm] = useState({ document_type: 'other', document_name: '', notes: '', expiry_date: '', requires_acknowledgment: false })
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+
+  const handleUpload = () => {
+    if (!file) return toast.error('Please select a file')
+    if (!form.document_name) return toast.error('Please enter a document name')
+    setUploading(true)
+    const reader = new FileReader()
+    reader.onload = async () => {
+      try {
+        await hrmsApi.staff.documents.upload(staffId, {
+          file_base64: reader.result, file_name: file.name, mime_type: file.type,
+          ...form, expiry_date: form.expiry_date || undefined,
+        })
+        toast.success('Document uploaded')
+        onClose()
+      } catch (e: any) {
+        toast.error(e?.response?.data?.error ?? 'Upload failed')
+      } finally { setUploading(false) }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle>Upload Document</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Document Type</Label>
+            <Select value={form.document_type} onValueChange={v => setForm(f => ({ ...f, document_type: v }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {Object.entries(DOC_TYPE_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Document Name *</Label>
+            <Input value={form.document_name} onChange={e => setForm(f => ({ ...f, document_name: e.target.value }))} placeholder="e.g. Employment Contract 2026" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>File *</Label>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" onChange={e => setFile(e.target.files?.[0] ?? null)}
+              className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-primary/10 file:px-3 file:py-1.5 file:text-primary" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Expiry Date (optional)</Label>
+            <Input type="date" value={form.expiry_date} onChange={e => setForm(f => ({ ...f, expiry_date: e.target.value }))} />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input type="checkbox" className="accent-primary" checked={form.requires_acknowledgment}
+              onChange={e => setForm(f => ({ ...f, requires_acknowledgment: e.target.checked }))} />
+            Require the staff member to acknowledge this document
+          </label>
+          <div className="space-y-1.5">
+            <Label>Notes (optional)</Label>
+            <Textarea rows={2} className="resize-none" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleUpload} disabled={uploading || !file}>
+            {uploading && <Loader2 className="h-4 w-4 animate-spin" />} Upload
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── EXIT TAB ───────────────────────────────────────────────────
+const EXIT_STATUS_COLORS: Record<string, string> = {
+  initiated: 'bg-muted text-muted-foreground ring-border',
+  notice_period: 'bg-warning/10 text-warning ring-warning/20',
+  cleared: 'bg-info/10 text-info ring-info/20',
+  settled: 'bg-success/10 text-success ring-success/20',
+}
+
+function ExitTab({ staffId, userName }: { staffId: string; userName: string }) {
+  const qc = useQueryClient()
+  const [showInitiate, setShowInitiate] = useState(false)
+
+  const { data: exit, isLoading } = useQuery({
+    queryKey: ['staff-exit', staffId],
+    queryFn: () => hrmsApi.exit.get(staffId).then(r => r.data),
+  })
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['staff-exit', staffId] })
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ itemId, is_completed }: any) => hrmsApi.exit.toggleChecklistItem(exit.id, itemId, { is_completed }),
+    onSuccess: invalidate,
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
+  })
+
+  const submitSettlementMutation = useMutation({
+    mutationFn: () => hrmsApi.exit.submitSettlement(exit.id),
+    onSuccess: () => { invalidate(); toast.success('Submitted for settlement approval') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to submit'),
+  })
+
+  const workflowActionMutation = useMutation({
+    mutationFn: (status: 'approved' | 'rejected') => hrmsApi.exit.workflowAction(exit.id, { status }),
+    onSuccess: (_: any, status) => { invalidate(); toast.success(status === 'approved' ? 'Settlement approved — account deactivated' : 'Settlement rejected') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to record decision'),
+  })
+
+  if (isLoading) return <Card className="space-y-3 p-6">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</Card>
+
+  if (!exit) {
+    return (
+      <Card>
+        <EmptyState
+          icon={LogOut}
+          title="No exit in progress"
+          description="If this staff member has resigned, initiate the exit process to start clearance and full & final settlement."
+          action={<Button onClick={() => setShowInitiate(true)}><LogOut className="h-4 w-4" /> Initiate Exit</Button>}
+        />
+        {showInitiate && <InitiateExitModal staffId={staffId} userName={userName} onClose={(saved) => { setShowInitiate(false); if (saved) invalidate() }} />}
+      </Card>
+    )
+  }
+
+  const workflowInProgress = exit.workflow?.status === 'in_progress'
+
+  return (
+    <div className="space-y-5">
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-foreground">Resignation</span>
+              <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium capitalize ring-1 ring-inset', EXIT_STATUS_COLORS[exit.status])}>{exit.status.replace('_', ' ')}</span>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Resigned {formatDate(exit.resignation_date)} · Last working day {formatDate(exit.last_working_day)}
+              {exit.notice_period_days ? ` · ${exit.notice_period_days} day notice` : ''}
+            </p>
+            {exit.reason && <p className="mt-1 text-xs text-muted-foreground">{exit.reason}</p>}
+          </div>
+          {exit.status === 'settled' && (
+            <Button variant="outline" size="sm" asChild>
+              <a href={documentsApi.relievingLetter(exit.id)} target="_blank" rel="noreferrer"><FileText className="h-3.5 w-3.5" /> Relieving Letter</a>
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="border-b border-border">
+          <CardTitle className="text-base">Clearance Checklist</CardTitle>
+        </CardHeader>
+        <CardContent className="divide-y divide-border p-0">
+          {(exit.checklist ?? []).map((item: any) => (
+            <label key={item.id} className="flex cursor-pointer items-center gap-3 px-6 py-3 hover:bg-muted/40">
+              <input type="checkbox" checked={item.is_completed} disabled={exit.status === 'settled'}
+                onChange={e => toggleMutation.mutate({ itemId: item.id, is_completed: e.target.checked })}
+                className="h-4 w-4 rounded border-border" />
+              <span className={cn('text-sm', item.is_completed ? 'text-muted-foreground line-through' : 'text-foreground')}>{item.item_name}</span>
+              {item.completed_at && <span className="ml-auto text-xs text-muted-foreground">{formatDate(item.completed_at)}</span>}
+            </label>
+          ))}
+        </CardContent>
+      </Card>
+
+      {(exit.status === 'cleared' || exit.status === 'settled' || exit.net_settlement != null) && (
+        <Card>
+          <CardHeader className="border-b border-border">
+            <CardTitle className="text-base">Full &amp; Final Settlement</CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            {exit.net_settlement == null ? (
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Clearance is complete — submit to compute the payout and start approval.</p>
+                <Button size="sm" onClick={() => submitSettlementMutation.mutate()} disabled={submitSettlementMutation.isPending}>
+                  {submitSettlementMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Submit for Settlement Approval
+                </Button>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                  <div><p className="text-xs text-muted-foreground">Pending Leave</p><p className="font-semibold text-foreground">{exit.pending_leave_days} days</p></div>
+                  <div><p className="text-xs text-muted-foreground">Leave Payout</p><p className="font-semibold text-success">₹{Number(exit.leave_payout).toLocaleString('en-IN')}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Deductions</p><p className="font-semibold text-destructive">₹{(Number(exit.lop_deduction) + Number(exit.advances_deduction)).toLocaleString('en-IN')}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Net Settlement</p><p className="text-lg font-bold text-primary">₹{Number(exit.net_settlement).toLocaleString('en-IN')}</p></div>
+                </div>
+                {workflowInProgress && (
+                  <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
+                    <p className="text-xs text-muted-foreground">Awaiting settlement approval.</p>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => workflowActionMutation.mutate('approved')} disabled={workflowActionMutation.isPending}
+                        className="bg-success/10 text-success shadow-none hover:bg-success/20">
+                        <Check className="h-3.5 w-3.5" /> Approve
+                      </Button>
+                      <Button size="sm" onClick={() => workflowActionMutation.mutate('rejected')} disabled={workflowActionMutation.isPending}
+                        className="bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20">
+                        <X className="h-3.5 w-3.5" /> Reject
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+function InitiateExitModal({ staffId, userName, onClose }: { staffId: string; userName: string; onClose: (saved: boolean) => void }) {
+  const [form, setForm] = useState({ resignation_date: new Date().toISOString().split('T')[0], last_working_day: '', notice_period_days: '', reason: '' })
+  const [loading, setLoading] = useState(false)
+
+  const handleSave = async () => {
+    if (!form.last_working_day) return toast.error('Last working day is required')
+    setLoading(true)
+    try {
+      await hrmsApi.exit.initiate(staffId, {
+        ...form,
+        notice_period_days: form.notice_period_days ? Number(form.notice_period_days) : undefined,
+      })
+      toast.success('Exit initiated')
+      onClose(true)
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Failed')
+    } finally { setLoading(false) }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(false) }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Initiate Exit — {userName}</DialogTitle>
+        </DialogHeader>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>Resignation Date *</Label>
+            <Input type="date" value={form.resignation_date} onChange={e => setForm(f => ({ ...f, resignation_date: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Last Working Day *</Label>
+            <Input type="date" value={form.last_working_day} onChange={e => setForm(f => ({ ...f, last_working_day: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Notice Period (days)</Label>
+            <Input type="number" value={form.notice_period_days} onChange={e => setForm(f => ({ ...f, notice_period_days: e.target.value }))} />
+          </div>
+          <div className="col-span-2 space-y-1.5">
+            <Label>Reason</Label>
+            <Textarea rows={3} className="resize-none" value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onClose(false)}>Cancel</Button>
+          <Button onClick={handleSave} disabled={loading}>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} Initiate Exit
           </Button>
         </DialogFooter>
       </DialogContent>
