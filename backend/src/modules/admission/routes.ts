@@ -3,7 +3,8 @@ import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
-import { asyncHandler, getPagination } from '../../shared/utils/helpers'
+import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
+import { asyncHandler, getPagination, NON_STAFF_ROLES } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
 
@@ -141,7 +142,7 @@ router.get('/inquiry-sources', asyncHandler(async (req: AuthRequest, res: Respon
   res.json({ success: true, data })
 }))
 
-router.post('/inquiry-sources', requireRole('school_admin', 'principal'),
+router.post('/inquiry-sources', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { name } = req.body
     if (!name?.trim()) return res.status(400).json({ success: false, error: 'name is required' })
@@ -180,7 +181,7 @@ router.get('/inquiries/:id', asyncHandler(async (req: AuthRequest, res: Response
   res.json({ success: true, data: { ...data, linked_application: linkedApplication ?? null } })
 }))
 
-router.post('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.post('/inquiries', requirePermissionV2('admission.create'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const body = CreateInquirySchema.parse(req.body)
   const school_id = req.user!.school_id
  
@@ -210,7 +211,7 @@ router.post('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) =
 
 
 
-router.post('/inquiries/:id/convert-to-application', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.post('/inquiries/:id/convert-to-application', requirePermissionV2('admission.create'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
   const school_id = req.user!.school_id
  
@@ -294,7 +295,7 @@ router.post('/inquiries/:id/convert-to-application', asyncHandler(async (req: Au
   res.status(201).json({ success: true, data: application })
 }))
  
-router.patch('/inquiries/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.patch('/inquiries/:id', requirePermissionV2('admission.edit'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
   const body = UpdateInquirySchema.parse(req.body)
   const school_id = req.user!.school_id
@@ -327,7 +328,7 @@ router.patch('/inquiries/:id', asyncHandler(async (req: AuthRequest, res: Respon
 
 // ── FOLLOW-UPS ──────────────────────────────────────────────
 
-router.post('/inquiries/:id/follow-ups', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.post('/inquiries/:id/follow-ups', requirePermissionV2('admission.follow_up'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
   const body = CreateFollowUpSchema.parse(req.body)
   const school_id = req.user!.school_id
@@ -404,7 +405,7 @@ router.get('/applications/:id', asyncHandler(async (req: AuthRequest, res: Respo
   res.json({ success: true, data })
 }))
 
-router.post('/applications', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.post('/applications', requirePermissionV2('admission.create'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const body = CreateApplicationSchema.parse(req.body)
   const school_id = req.user!.school_id
 
@@ -459,6 +460,20 @@ router.post(
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const school_id = req.user!.school_id
+
+    // This had no gate at all before — any authenticated user could hit
+    // it. Only excluding NON_STAFF_ROLES here rather than gating on
+    // admission.approve specifically: actOnWorkflow() below already does
+    // the real, authoritative per-step check (it verifies the caller
+    // holds whatever RBAC role the current workflow step's role_id names
+    // — Counselor/Accountant/Principal per the pipeline this workflow is
+    // documented as using). Accountant, a legitimate step actor here,
+    // isn't granted admission.approve by default, so gating on that code
+    // would have blocked their real approval step before actOnWorkflow
+    // ever got a chance to correctly authorize them.
+    if (NON_STAFF_ROLES.includes(req.user!.role)) {
+      return res.status(403).json({ success: false, error: 'Not authorized to act on admission applications' })
+    }
 
     // Normalize legacy { action: 'approve' | 'reject' } -> { status }
     const rawStatus = req.body.status ?? (req.body.action === 'approve' ? 'approved' : req.body.action === 'reject' ? 'rejected' : undefined)
@@ -566,10 +581,16 @@ router.post(
 )
 
 // ── WORKFLOW: generic action endpoint (approve/reject/escalate/comment) ──
+// Same reasoning as POST /applications/:id/approve above — excludes
+// non-staff only, defers to actOnWorkflow's own per-step role check.
 router.post('/applications/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
   const { status, notes } = req.body
   const school_id = req.user!.school_id
+
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    return res.status(403).json({ success: false, error: 'Not authorized to act on admission applications' })
+  }
 
   if (!['approved', 'rejected', 'escalated', 'commented'].includes(status)) {
     return res.status(400).json({ success: false, error: 'Invalid status. Must be approved, rejected, escalated, or commented.' })
@@ -674,7 +695,7 @@ router.get('/applications/:id/workflow-status', asyncHandler(async (req: AuthReq
 }))
 
 // ── WORKFLOW: manually (re)start (admin/principal only) ────────────
-router.post('/applications/:id/start-workflow', requireRole('school_admin', 'principal'),
+router.post('/applications/:id/start-workflow', requirePermissionV2('admission.approve'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const school_id = req.user!.school_id
@@ -784,7 +805,7 @@ router.get('/classes/strength', asyncHandler(async (req: AuthRequest, res: Respo
 }))
 
 // POST /classes — create a class (e.g. "Class 11")
-router.post('/classes', requireRole('school_admin', 'principal'),
+router.post('/classes', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { name, numeric_level, stream } = req.body
     const school_id = req.user!.school_id
@@ -801,7 +822,7 @@ router.post('/classes', requireRole('school_admin', 'principal'),
 )
 
 // PATCH /classes/:id — rename a class / edit its level or stream label
-router.patch('/classes/:id', requireRole('school_admin', 'principal'),
+router.patch('/classes/:id', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { name, numeric_level, stream } = req.body
@@ -821,7 +842,7 @@ router.patch('/classes/:id', requireRole('school_admin', 'principal'),
 )
 
 // DELETE /classes/:id — refuses if any student is still assigned to it
-router.delete('/classes/:id', requireRole('school_admin', 'principal'),
+router.delete('/classes/:id', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const school_id = req.user!.school_id
@@ -840,7 +861,7 @@ router.delete('/classes/:id', requireRole('school_admin', 'principal'),
 )
 
 // POST /classes/:id/sections — add a section (or stream, e.g. "PCM") to a class
-router.post('/classes/:id/sections', requireRole('school_admin', 'principal'),
+router.post('/classes/:id/sections', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { name, max_strength } = req.body
@@ -860,7 +881,7 @@ router.post('/classes/:id/sections', requireRole('school_admin', 'principal'),
 )
 
 // PATCH /sections/:id — rename a section/stream
-router.patch('/sections/:id', requireRole('school_admin', 'principal'),
+router.patch('/sections/:id', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { name, max_strength } = req.body
@@ -879,7 +900,7 @@ router.patch('/sections/:id', requireRole('school_admin', 'principal'),
 )
 
 // DELETE /sections/:id — refuses if any student is still assigned to it
-router.delete('/sections/:id', requireRole('school_admin', 'principal'),
+router.delete('/sections/:id', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const school_id = req.user!.school_id
@@ -914,7 +935,7 @@ router.get('/subjects', asyncHandler(async (req: AuthRequest, res: Response) => 
   res.json({ success: true, data })
 }))
 
-router.post('/subjects', requireRole('school_admin', 'principal'),
+router.post('/subjects', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { name, class_id, is_elective } = req.body
     const school_id = req.user!.school_id
@@ -929,7 +950,7 @@ router.post('/subjects', requireRole('school_admin', 'principal'),
   })
 )
 
-router.delete('/subjects/:id', requireRole('school_admin', 'principal'),
+router.delete('/subjects/:id', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { error } = await supabase.from('subjects').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
     if (error) return res.status(400).json({ success: false, error: error.message })
@@ -961,7 +982,7 @@ router.get('/holidays', asyncHandler(async (req: AuthRequest, res: Response) => 
   res.json({ success: true, data })
 }))
 
-router.post('/holidays', requireRole('school_admin', 'principal'),
+router.post('/holidays', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { date, name } = req.body
     const school_id = req.user!.school_id
@@ -976,7 +997,7 @@ router.post('/holidays', requireRole('school_admin', 'principal'),
   })
 )
 
-router.delete('/holidays/:id', requireRole('school_admin', 'principal'),
+router.delete('/holidays/:id', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { error } = await supabase.from('holidays').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
     if (error) return res.status(400).json({ success: false, error: error.message })
@@ -992,7 +1013,7 @@ router.get('/weekly-off', asyncHandler(async (req: AuthRequest, res: Response) =
   res.json({ success: true, data: { weekly_off_days: data?.weekly_off_days ?? [0] } })
 }))
 
-router.patch('/weekly-off', requireRole('school_admin', 'principal'),
+router.patch('/weekly-off', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { weekly_off_days } = req.body
     if (!Array.isArray(weekly_off_days) || weekly_off_days.some((d: any) => !Number.isInteger(d) || d < 0 || d > 6)) {
@@ -1019,6 +1040,13 @@ router.get('/low-attendance-threshold', asyncHandler(async (req: AuthRequest, re
   res.json({ success: true, data: { low_attendance_threshold_pct: data?.low_attendance_threshold_pct ?? 60 } })
 }))
 
+// Deliberately kept on requireRole (not settings.manage, which Principal
+// also holds) — the comment above this route explicitly documents that
+// Principal should stay read-only here, unlike the other settings.manage
+// routes in this file. No existing/new permission code captures "School
+// Admin only, explicitly excluding Principal" without adding a
+// single-purpose code for one route, so the original hardcoded check
+// stays as the more faithful source of truth for this one setting.
 router.patch('/low-attendance-threshold', requireRole('school_admin'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { low_attendance_threshold_pct } = req.body

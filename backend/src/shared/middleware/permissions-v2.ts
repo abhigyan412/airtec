@@ -20,6 +20,14 @@ export interface UserPermissions {
   roleNames: string[]
   roleIds: string[]
   isSuperRole: boolean
+  // Optional per-role-assignment restriction (user_roles.department_scope).
+  // null means unrestricted — either no assignment set a scope, or at
+  // least one did and was unrestricted ("most permissive wins" across a
+  // user's multiple role assignments). Only enforced by the specific
+  // staff.view/staff.edit routes that opt into checking it; unrelated
+  // routes that happen to reuse those codes for a different resource
+  // (shifts, documents, leave types, ...) ignore it entirely.
+  departmentScope: string | null
 }
 
 /**
@@ -84,17 +92,19 @@ async function resolvePermissionsForUser(userId: string, schoolId: string): Prom
   // 1. Get the user's roles
   const { data: userRoles, error: urErr } = await supabase
     .from('user_roles')
-    .select('role_id, roles ( id, name )')
+    .select('role_id, department_scope, roles ( id, name )')
     .eq('user_id', userId)
     .eq('school_id', schoolId)
 
   if (urErr || !userRoles || userRoles.length === 0) {
-    return { permissionCodes: new Set(), roleNames: [], roleIds: [], isSuperRole: false }
+    return { permissionCodes: new Set(), roleNames: [], roleIds: [], isSuperRole: false, departmentScope: null }
   }
 
   const roleIds: string[] = []
   const roleNames: string[] = []
   let isSuperRole = false
+  const scopes = new Set<string>()
+  let hasUnrestrictedAssignment = false
 
   for (const row of userRoles as any[]) {
     const role = row.roles
@@ -102,10 +112,20 @@ async function resolvePermissionsForUser(userId: string, schoolId: string): Prom
     roleIds.push(role.id)
     roleNames.push(role.name)
     if (SUPER_ROLES.includes(role.name)) isSuperRole = true
+    if (row.department_scope) scopes.add(row.department_scope)
+    else hasUnrestrictedAssignment = true
   }
 
+  // Most-permissive-wins: any unrestricted assignment (or none set at
+  // all) means unrestricted overall. If every assignment is scoped but
+  // to DIFFERENT departments, that's a genuine multi-department grant
+  // this single-string model can't represent precisely — fail open
+  // (unrestricted) rather than silently blocking one of the granted
+  // departments.
+  const departmentScope = hasUnrestrictedAssignment || scopes.size !== 1 ? null : [...scopes][0]
+
   if (roleIds.length === 0) {
-    return { permissionCodes: new Set(), roleNames, roleIds, isSuperRole }
+    return { permissionCodes: new Set(), roleNames, roleIds, isSuperRole, departmentScope }
   }
 
   // 2. Resolve those roles straight to permission codes.
@@ -121,7 +141,7 @@ async function resolvePermissionsForUser(userId: string, schoolId: string): Prom
     .in('role_id', roleIds)
 
   if (rpErr || !rolePerms) {
-    return { permissionCodes: new Set(), roleNames, roleIds, isSuperRole }
+    return { permissionCodes: new Set(), roleNames, roleIds, isSuperRole, departmentScope }
   }
 
   const permissionCodes = new Set(
@@ -130,7 +150,32 @@ async function resolvePermissionsForUser(userId: string, schoolId: string): Prom
       .filter((c: unknown): c is string => typeof c === 'string'),
   )
 
-  return { permissionCodes, roleNames, roleIds, isSuperRole }
+  return { permissionCodes, roleNames, roleIds, isSuperRole, departmentScope }
+}
+
+/**
+ * Reverse-resolves which users hold a given permission code in a school
+ * — the inverse of getPermissionsForUser. Used by background jobs that
+ * need "notify whoever can manage X" rather than checking one user's
+ * access. Includes School Admin holders (SUPER_ROLES bypass everything).
+ */
+export async function getUserIdsWithPermission(schoolId: string, permissionCode: string): Promise<string[]> {
+  const { data: rolesInSchool } = await supabase.from('roles').select('id, name').eq('school_id', schoolId)
+  const roleIds = (rolesInSchool ?? []).map(r => r.id)
+  if (!roleIds.length) return []
+  const superRoleIds = (rolesInSchool ?? []).filter(r => SUPER_ROLES.includes(r.name)).map(r => r.id)
+
+  const { data: rolePerms } = await supabase
+    .from('role_permissions_v2')
+    .select('role_id, permissions!inner(permission_code)')
+    .in('role_id', roleIds)
+    .eq('permissions.permission_code', permissionCode)
+
+  const grantedRoleIds = new Set([...(rolePerms ?? []).map((rp: any) => rp.role_id), ...superRoleIds])
+  if (!grantedRoleIds.size) return []
+
+  const { data: userRoles } = await supabase.from('user_roles').select('user_id').eq('school_id', schoolId).in('role_id', [...grantedRoleIds])
+  return [...new Set((userRoles ?? []).map(u => u.user_id))]
 }
 
 /**

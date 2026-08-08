@@ -43,8 +43,11 @@ const MODULE_LABELS: Record<string, string> = {
   timetable: 'Timetable',
   resource: 'Resource Centre',
   staff: 'Staff & HR',
+  homework: 'Homework',
+  syllabus: 'Syllabus',
   role: 'Roles & Permissions',
   team: 'Team Management',
+  settings: 'School Settings',
   website: 'Website',
   gallery: 'Gallery',
   popup: 'Popups',
@@ -60,6 +63,11 @@ const ACTION_LABELS: Record<string, string> = {
   generate: 'Generate', verify: 'Verify', revoke: 'Revoke', manage: 'Manage',
   attendance_mark: 'Mark Attendance', leave_approve: 'Approve Leave', payroll_manage: 'Manage Payroll', recruitment_manage: 'Manage Recruitment',
   invite: 'Invite', deactivate: 'Deactivate',
+  plan: 'Plan Chapters', log_progress: 'Log Progress',
+  invoice_generate: 'Generate Invoice', adhoc_manage: 'Manage Ad-hoc Charges', arrear_manage: 'Manage Arrears',
+  result_generate: 'Generate Results', payroll_view: 'View Payroll', template_manage: 'Manage Templates',
+  admit_card_generate: 'Generate Admit Cards', credentials_manage: 'Reset Login',
+  homeroom_manage: 'Manage Homeroom Assignments',
 }
 
 export default function RolePermissionsPage() {

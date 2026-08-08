@@ -2,7 +2,8 @@ import { Router, Response } from 'express'
 import { z } from 'zod'
 import { createClient } from '@supabase/supabase-js'
 import { supabase } from '../../shared/db/client'
-import { authenticate, requireRole, AuthRequest, invalidateUserProfile } from '../../shared/middleware/auth'
+import { authenticate, AuthRequest, invalidateUserProfile } from '../../shared/middleware/auth'
+import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { assignDefaultUserRole, setPrimaryUserRole, LEGACY_ROLE_TO_RBAC_ROLE } from '../rbac/seed'
 
@@ -36,7 +37,7 @@ const InviteSchema = z.object({
 })
 
 // ── GET /team - list all staff with auth status ─────────────
-router.get('/', requireRole('school_admin', 'principal'),
+router.get('/', requirePermissionV2('team.view'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
 
@@ -67,7 +68,7 @@ router.get('/', requireRole('school_admin', 'principal'),
 )
 
 // ── POST /team/invite - create staff member with login ──────
-router.post('/invite', requireRole('school_admin', 'principal'),
+router.post('/invite', requirePermissionV2('team.invite'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = InviteSchema.parse(req.body)
     const school_id = req.user!.school_id
@@ -142,7 +143,7 @@ router.post('/invite', requireRole('school_admin', 'principal'),
 
 // ── POST /team/:id/reset-login - create/reset auth for existing users-row ──
 // Useful for the 5 seeded staff that have no auth account yet.
-router.post('/:id/reset-login', requireRole('school_admin', 'principal'),
+router.post('/:id/reset-login', requirePermissionV2('team.credentials_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { password } = req.body
@@ -210,11 +211,27 @@ router.post('/:id/reset-login', requireRole('school_admin', 'principal'),
 )
 
 // ── PATCH /team/:id - update role / active status ────────────
-router.patch('/:id', requireRole('school_admin', 'principal'),
-  asyncHandler(async (req: AuthRequest, res: Response) => {
+// Field-level split (same pattern as academics/routes.ts PATCH
+// /syllabus/:id): changing role needs role.assign, activating/
+// deactivating needs team.deactivate, plain profile-field edits need
+// team.edit. A request touching only one must not require the others.
+router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { role, is_active, full_name, phone } = req.body
     const school_id = req.user!.school_id
+
+    const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+    const has = (code: string) => isSuperRole || permissionCodes.has(code)
+
+    if (role !== undefined && !has('role.assign')) {
+      return res.status(403).json({ success: false, error: 'Missing permission: role.assign' })
+    }
+    if (is_active !== undefined && !has('team.deactivate')) {
+      return res.status(403).json({ success: false, error: 'Missing permission: team.deactivate' })
+    }
+    if ((full_name !== undefined || phone !== undefined) && !has('team.edit')) {
+      return res.status(403).json({ success: false, error: 'Missing permission: team.edit' })
+    }
 
     if (role && !VALID_ROLES.includes(role)) {
       return res.status(400).json({ success: false, error: 'Invalid role' })
@@ -247,7 +264,7 @@ router.patch('/:id', requireRole('school_admin', 'principal'),
 )
 
 // ── DELETE /team/:id - deactivate (soft delete) ──────────────
-router.delete('/:id', requireRole('school_admin', 'principal'),
+router.delete('/:id', requirePermissionV2('team.deactivate'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const school_id = req.user!.school_id
@@ -282,7 +299,7 @@ router.delete('/:id', requireRole('school_admin', 'principal'),
 const LEGACY_ROLE_TO_NEW_NAME = LEGACY_ROLE_TO_RBAC_ROLE
 
 // ── GET /team/extra-roles - map of user_id -> additional role names ──
-router.get('/extra-roles', requireRole('school_admin', 'principal'),
+router.get('/extra-roles', requirePermissionV2('role.view'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
 
@@ -316,10 +333,14 @@ router.get('/extra-roles', requireRole('school_admin', 'principal'),
 )
 
 // ── POST /team/:id/roles - assign an additional role ──────────
-router.post('/:id/roles', requireRole('school_admin', 'principal'),
+router.post('/:id/roles', requirePermissionV2('role.assign'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
-    const { role_id } = req.body
+    // department_scope: optional restriction (user_roles.department_scope)
+    // — unset means this assignment grants the role school-wide, today's
+    // existing behavior. Only meaningful for roles carrying staff.view/
+    // staff.edit, but harmless to store against any role.
+    const { role_id, department_scope } = req.body
     const school_id = req.user!.school_id
 
     if (!role_id) return res.status(400).json({ success: false, error: 'role_id required' })
@@ -332,7 +353,7 @@ router.post('/:id/roles', requireRole('school_admin', 'principal'),
 
     const { data, error } = await supabase
       .from('user_roles')
-      .insert({ user_id: id, role_id, school_id, assigned_at: new Date().toISOString() })
+      .insert({ user_id: id, role_id, school_id, department_scope: department_scope || null, assigned_at: new Date().toISOString() })
       .select('id, role_id, roles(name)')
       .single()
 
@@ -348,7 +369,7 @@ router.post('/:id/roles', requireRole('school_admin', 'principal'),
 )
 
 // ── DELETE /team/:id/roles/:roleId - remove an additional role ────
-router.delete('/:id/roles/:roleId', requireRole('school_admin', 'principal'),
+router.delete('/:id/roles/:roleId', requirePermissionV2('role.assign'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id, roleId } = req.params
     const school_id = req.user!.school_id

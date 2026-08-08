@@ -1,8 +1,8 @@
 import { Router, Response } from 'express'
 import { supabase } from '../../shared/db/client'
-import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
+import { authenticate, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler } from '../../shared/utils/helpers'
-import { getPermissionsForUser, invalidateAllPermissions } from '../../shared/middleware/permissions-v2'
+import { getPermissionsForUser, invalidateAllPermissions, requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 
 const router = Router()
 router.use(authenticate)
@@ -71,7 +71,7 @@ router.get('/roles/:id/permissions', asyncHandler(async (req: AuthRequest, res: 
 // Replaces ALL role_permissions_v2 rows for this role with the
 // given permission codes. Admin/Principal only.
 // ═══════════════════════════════════════════════════════════════
-router.put('/roles/:id/permissions', requireRole('school_admin', 'principal'),
+router.put('/roles/:id/permissions', requirePermissionV2('role.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { permission_codes } = req.body
@@ -132,7 +132,7 @@ router.get('/permissions', asyncHandler(async (req: AuthRequest, res: Response) 
 // ═══════════════════════════════════════════════════════════════
 // USER ROLES — view a user's assigned roles (multi-role)
 // ═══════════════════════════════════════════════════════════════
-router.get('/users/:user_id/roles', requireRole('school_admin', 'principal'),
+router.get('/users/:user_id/roles', requirePermissionV2('role.view'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { user_id } = req.params
     const school_id = req.user!.school_id

@@ -19,6 +19,8 @@ export type NotificationType =
   | 'homework_assigned'
   | 'exam_result_published'
   | 'fee_due_soon' | 'fee_overdue'
+  | 'payslip_generated'
+  | 'probation_ending' | 'document_expiring' | 'contract_review_due' | 'work_anniversary'
 
 interface CreateNotificationParams {
   schoolId: string

@@ -1,10 +1,10 @@
 'use client'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { hrmsApi, teamApi } from '@/lib/api'
+import { hrmsApi, teamApi, documentsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowLeft, Plus, Phone, Star, Briefcase, Loader2, ShieldCheck, UserPlus, Users } from 'lucide-react'
+import { ArrowLeft, Plus, Phone, Star, Briefcase, Loader2, ShieldCheck, UserPlus, Users, FileText, ShieldAlert } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -220,10 +220,11 @@ export default function RecruitmentPage() {
                             <p className="truncate text-sm font-semibold text-foreground">{cand.candidate_name}</p>
                             <p className="font-mono text-xs text-muted-foreground">{cand.application_number}</p>
                           </div>
-                          {cand.rating && (
+                          {(cand.avg_rating ?? cand.rating) && (
                             <div className="flex flex-shrink-0 items-center gap-0.5 text-amber-500 dark:text-amber-400">
                               <Star className="h-3 w-3 fill-current" />
-                              <span className="text-xs font-semibold">{cand.rating}</span>
+                              <span className="text-xs font-semibold">{cand.avg_rating ?? cand.rating}</span>
+                              {cand.interview_count > 0 && <span className="text-[10px] text-muted-foreground">({cand.interview_count})</span>}
                             </div>
                           )}
                         </div>
@@ -231,6 +232,11 @@ export default function RecruitmentPage() {
                         <div className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
                           <Phone className="h-3 w-3" /> {cand.phone}
                         </div>
+                        {cand.background_check_status === 'flagged' && (
+                          <div className="mt-1.5 flex items-center gap-1 text-xs font-medium text-destructive">
+                            <ShieldAlert className="h-3 w-3" /> Background check flagged
+                          </div>
+                        )}
                         {cand.experience_years != null && (
                           <p className="mt-1 text-xs text-muted-foreground">{cand.experience_years} yrs exp</p>
                         )}
@@ -479,13 +485,35 @@ function CandidateModal({ jobs, onClose }: { jobs: any[], onClose: () => void })
   )
 }
 
-function CandidateDetailModal({ candidate, onClose }: { candidate: any, onClose: () => void }) {
+const BACKGROUND_CHECK_LABELS: Record<string, string> = {
+  not_started: 'Not Started', in_progress: 'In Progress', cleared: 'Cleared', flagged: 'Flagged',
+}
+
+function CandidateDetailModal({ candidate: initialCandidate, onClose }: { candidate: any, onClose: () => void }) {
+  const { user } = useAuth()
   const qc = useQueryClient()
-  const [notes, setNotes] = useState(candidate.notes ?? '')
-  const [email, setEmail] = useState(candidate.email ?? '')
-  const [rating, setRating] = useState(candidate.rating ?? '')
-  const [interviewDate, setInterviewDate] = useState(candidate.interview_date ? candidate.interview_date.slice(0,16) : '')
+
+  // The kanban list only carries avg_rating/interview_count — the full
+  // per-interviewer scorecard list (with names/notes) and application
+  // history only come from the detail fetch.
+  const { data: detail } = useQuery({
+    queryKey: ['application-detail', initialCandidate.id],
+    queryFn: () => hrmsApi.applications.get(initialCandidate.id).then(r => r.data),
+  })
+  const candidate = detail ?? initialCandidate
+
+  const [notes, setNotes] = useState(initialCandidate.notes ?? '')
+  const [email, setEmail] = useState(initialCandidate.email ?? '')
+  const [rating, setRating] = useState(initialCandidate.rating ?? '')
+  const [interviewDate, setInterviewDate] = useState(initialCandidate.interview_date ? initialCandidate.interview_date.slice(0,16) : '')
+  const [bgStatus, setBgStatus] = useState(initialCandidate.background_check_status ?? 'not_started')
+  const [bgNotes, setBgNotes] = useState(initialCandidate.background_check_notes ?? '')
   const [loading, setLoading] = useState(false)
+
+  const myScorecard = (candidate.job_application_interviewers ?? []).find((s: any) => s.interviewer_id === user?.id)
+  const [myRating, setMyRating] = useState(myScorecard?.rating ?? 0)
+  const [myNotes, setMyNotes] = useState(myScorecard?.notes ?? '')
+  const [scorecardLoading, setScorecardLoading] = useState(false)
 
   const handleSave = async () => {
     setLoading(true)
@@ -494,11 +522,23 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: any, onClose:
         notes, rating: rating ? Number(rating) : undefined,
         interview_date: interviewDate || undefined,
         email: email || undefined,
+        background_check_status: bgStatus, background_check_notes: bgNotes || undefined,
       })
       toast.success('Updated')
       qc.invalidateQueries({ queryKey: ['applications'] })
       onClose()
     } catch (e: any) { toast.error(e?.response?.data?.error ?? 'Failed') } finally { setLoading(false) }
+  }
+
+  const handleSubmitScorecard = async () => {
+    if (!myRating) return toast.error('Pick a rating first')
+    setScorecardLoading(true)
+    try {
+      await hrmsApi.applications.submitScorecard(candidate.id, { rating: myRating, notes: myNotes || undefined })
+      toast.success('Scorecard submitted')
+      qc.invalidateQueries({ queryKey: ['application-detail', candidate.id] })
+      qc.invalidateQueries({ queryKey: ['applications'] })
+    } catch (e: any) { toast.error(e?.response?.data?.error ?? 'Failed') } finally { setScorecardLoading(false) }
   }
 
   return (
@@ -517,6 +557,12 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: any, onClose:
             {candidate.expected_salary && <div className="text-foreground"><span className="text-xs text-muted-foreground">Expected Salary: </span>{formatCurrency(Number(candidate.expected_salary))}</div>}
             {candidate.notice_period && <div className="text-foreground"><span className="text-xs text-muted-foreground">Notice Period: </span>{candidate.notice_period}</div>}
           </div>
+
+          {['offer_sent', 'joined'].includes(candidate.status) && (
+            <Button variant="outline" size="sm" asChild className="w-full">
+              <a href={documentsApi.offerLetter(candidate.id)} target="_blank" rel="noreferrer"><FileText className="h-3.5 w-3.5" /> Offer Letter</a>
+            </Button>
+          )}
 
           <div className="space-y-1.5">
             <Label>
@@ -547,6 +593,57 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: any, onClose:
           <div className="space-y-1.5">
             <Label>Notes / Interview Feedback</Label>
             <Textarea rows={4} className="resize-none" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Add notes about this candidate..." />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Background Check</Label>
+            <Select value={bgStatus} onValueChange={setBgStatus}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {Object.entries(BACKGROUND_CHECK_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Textarea rows={2} className="resize-none" value={bgNotes} onChange={e => setBgNotes(e.target.value)}
+              placeholder="Verification notes..." />
+          </div>
+
+          <div className="space-y-2 rounded-xl border border-border p-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs uppercase text-muted-foreground">Interview Scorecards</Label>
+              {candidate.avg_rating && (
+                <span className="flex items-center gap-1 text-xs font-semibold text-amber-500 dark:text-amber-400">
+                  <Star className="h-3 w-3 fill-current" /> {candidate.avg_rating} avg · {candidate.job_application_interviewers?.length ?? 0} interviewer{(candidate.job_application_interviewers?.length ?? 0) === 1 ? '' : 's'}
+                </span>
+              )}
+            </div>
+            {(candidate.job_application_interviewers ?? []).length > 0 && (
+              <div className="space-y-1.5">
+                {candidate.job_application_interviewers.map((s: any) => (
+                  <div key={s.id} className="flex items-start justify-between gap-2 text-xs">
+                    <div>
+                      <span className="font-medium text-foreground">{s.interviewer?.full_name}</span>
+                      {s.notes && <p className="text-muted-foreground">{s.notes}</p>}
+                    </div>
+                    <span className="flex flex-shrink-0 items-center gap-0.5 font-semibold text-amber-500 dark:text-amber-400"><Star className="h-3 w-3 fill-current" /> {s.rating}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="border-t border-border pt-2">
+              <p className="mb-1.5 text-xs text-muted-foreground">{myScorecard ? 'Update your scorecard' : 'Add your scorecard'}</p>
+              <div className="flex gap-1.5">
+                {[1,2,3,4,5].map(r => (
+                  <button key={r} onClick={() => setMyRating(r)} aria-label={`Rate ${r} out of 5`} aria-pressed={myRating === r}
+                    className={cn('flex h-8 w-8 items-center justify-center rounded-lg border-2 transition-all', myRating === r ? 'border-amber-500/60 bg-amber-500/10' : 'border-border hover:border-amber-500/40')}>
+                    <Star className={cn('h-3.5 w-3.5', myRating >= r ? 'fill-current text-amber-500 dark:text-amber-400' : 'text-muted-foreground')} />
+                  </button>
+                ))}
+                <Button size="sm" variant="secondary" className="ml-auto" onClick={handleSubmitScorecard} disabled={scorecardLoading}>
+                  {scorecardLoading && <Loader2 className="h-3 w-3 animate-spin" />} Submit
+                </Button>
+              </div>
+              <Textarea rows={2} className="mt-1.5 resize-none text-xs" value={myNotes} onChange={e => setMyNotes(e.target.value)} placeholder="Your feedback..." />
+            </div>
           </div>
 
           {candidate.application_status_history?.length > 0 && (
