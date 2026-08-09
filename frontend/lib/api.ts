@@ -534,6 +534,12 @@ export const hrmsApi = {
     create: (data: any) => api.post('/hrms/loans', data).then(r => r.data),
     update: (id: string, status: string) => api.patch(`/hrms/loans/${id}`, { status }).then(r => r.data),
   },
+  bonuses: {
+    list: (month: number, year: number) => api.get('/hrms/bonuses', { params: { month, year } }).then(r => r.data),
+    create: (data: { user_ids: string[]; month: number; year: number; amount: number; reason: string }) =>
+      api.post('/hrms/bonuses', data).then(r => r.data),
+    delete: (id: string) => api.delete(`/hrms/bonuses/${id}`).then(r => r.data),
+  },
   attendance: {
     list: (params?: any) => api.get('/hrms/attendance', { params }).then(r => r.data),
     save: (data: any) => api.post('/hrms/attendance', data).then(r => r.data),
