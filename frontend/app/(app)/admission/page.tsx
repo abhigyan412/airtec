@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Phone, Search, ChevronRight, FileCheck, UserPlus } from 'lucide-react'
 import { admissionApi } from '@/lib/api'
-import { cn, STATUS_COLORS, formatDate } from '@/lib/utils'
+import { cn, STATUS_COLORS, formatDate, admissionApplicationStatusBadge } from '@/lib/utils'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { PipelineCharts } from '@/components/admission/PipelineCharts'
@@ -36,11 +36,11 @@ const PIPELINE_STAGES = [
 
 const INQUIRY_STATUSES = ['new','follow_up','interested','documents_submitted','entrance_exam','approved','fee_pending','admitted','rejected','lost']
 
-const APP_STATUS_VARIANTS: Record<string, 'warning' | 'success' | 'destructive' | 'secondary'> = {
-  pending: 'warning',
-  admitted: 'success',
-  rejected: 'destructive',
-}
+// The four "_approved"/"_verified"/"_paid" values are legacy — no live
+// code writes them anymore (see admissionApplicationStatusBadge in
+// lib/utils.ts) — kept as filter options only so old seed rows in those
+// states stay findable.
+const APPLICATION_STATUSES = ['pending', 'counselor_approved', 'documents_verified', 'fee_paid', 'principal_approved', 'admitted', 'rejected']
 
 export default function AdmissionPage() {
   const [tab, setTab] = useState<'inquiries' | 'applications'>('inquiries')
@@ -49,12 +49,19 @@ export default function AdmissionPage() {
   const [showNewForm, setShowNew]   = useState(false)
   const [showNewApp, setShowNewApp] = useState(false)
   const [page, setPage]             = useState(1)
+  const [sourceFilter, setSourceFilter] = useState('')
+  const [appSearch, setAppSearch]   = useState('')
+  const [appStatus, setAppStatus]   = useState('')
+  const [appClassId, setAppClassId] = useState('')
+  const [appDateFrom, setAppDateFrom] = useState('')
+  const [appDateTo, setAppDateTo]   = useState('')
 
   const { data: inquiries, isLoading } = useQuery({
-    queryKey: ['inquiries', search, statusFilter, page],
+    queryKey: ['inquiries', search, statusFilter, sourceFilter, page],
     queryFn: () => admissionApi.inquiries.list({
       search: search || undefined,
       status: statusFilter || undefined,
+      source_id: sourceFilter || undefined,
       page, limit: 25,
     }).then(r => r),
     placeholderData: (prev: any) => prev,
@@ -66,16 +73,26 @@ export default function AdmissionPage() {
     queryFn: () => admissionApi.inquiries.stats().then(r => r.data),
   })
 
+  const { data: sourcesData } = useQuery({
+    queryKey: ['inquiry-sources'],
+    queryFn: () => admissionApi.inquiries.sources.list().then(r => r.data),
+  })
+
   const { data: classesData } = useQuery({
     queryKey: ['classes'],
     queryFn: () => admissionApi.classes().then(r => r.data),
   })
 
   const { data: applications, isLoading: appsLoading } = useQuery({
-    queryKey: ['admission-applications'],
-    queryFn: () => admissionApi.applications.list().then(r => r.data),
+    queryKey: ['admission-applications', appSearch, appStatus, appClassId, appDateFrom, appDateTo],
+    queryFn: () => admissionApi.applications.list({
+      search: appSearch || undefined, status: appStatus || undefined, class_id: appClassId || undefined,
+      date_from: appDateFrom || undefined, date_to: appDateTo || undefined,
+    }).then(r => r.data),
     enabled: tab === 'applications',
   })
+  const appHasFilters = !!(appSearch || appStatus || appClassId || appDateFrom || appDateTo)
+  const clearAppFilters = () => { setAppSearch(''); setAppStatus(''); setAppClassId(''); setAppDateFrom(''); setAppDateTo('') }
 
   const meta = inquiries?.meta ?? { total: 0, page: 1, limit: 25 }
 
@@ -148,8 +165,20 @@ export default function AdmissionPage() {
               ))}
             </SelectContent>
           </Select>
-          {statusFilter && (
-            <Button variant="outline" onClick={() => setStatus('')}>Clear filter</Button>
+          <Select value={sourceFilter || '__all__'}
+            onValueChange={v => { setSourceFilter(v === '__all__' ? '' : v); setPage(1) }}>
+            <SelectTrigger className="w-auto min-w-[160px]">
+              <SelectValue placeholder="All Sources" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All Sources</SelectItem>
+              {(sourcesData ?? []).map((s: any) => (
+                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {(statusFilter || sourceFilter) && (
+            <Button variant="outline" onClick={() => { setStatus(''); setSourceFilter(''); setPage(1) }}>Clear filter</Button>
           )}
         </Card>
 
@@ -242,7 +271,42 @@ export default function AdmissionPage() {
 
       {/* Applications tab — formal applications going through the
           Admission Approval Workflow (Counselor -> Accountant -> Principal) */}
-      <TabsContent value="applications" className="mt-0">
+      <TabsContent value="applications" className="mt-0 space-y-6">
+        {/* Filters */}
+        <Card className="p-4 flex gap-3 flex-wrap">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input type="text" placeholder="Student name, parent phone, or application #..."
+              value={appSearch} onChange={e => setAppSearch(e.target.value)}
+              className="pl-9" />
+          </div>
+          <Select value={appStatus || '__all__'} onValueChange={v => setAppStatus(v === '__all__' ? '' : v)}>
+            <SelectTrigger className="w-auto min-w-[160px]">
+              <SelectValue placeholder="All statuses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All statuses</SelectItem>
+              {APPLICATION_STATUSES.map(s => (
+                <SelectItem key={s} value={s}>{s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={appClassId || '__all__'} onValueChange={v => setAppClassId(v === '__all__' ? '' : v)}>
+            <SelectTrigger className="w-auto min-w-[160px]">
+              <SelectValue placeholder="All classes" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All classes</SelectItem>
+              {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Input type="date" value={appDateFrom} onChange={e => setAppDateFrom(e.target.value)} className="w-auto" aria-label="From date" />
+          <Input type="date" value={appDateTo} onChange={e => setAppDateTo(e.target.value)} className="w-auto" aria-label="To date" />
+          {appHasFilters && (
+            <Button variant="outline" onClick={clearAppFilters}>Clear filter</Button>
+          )}
+        </Card>
+
         <Card className="overflow-hidden">
           {appsLoading ? (
             <div className="p-6 space-y-3">
@@ -251,13 +315,17 @@ export default function AdmissionPage() {
           ) : (applications ?? []).length === 0 ? (
             <EmptyState
               icon={FileCheck}
-              title="No applications yet"
-              description="Applications go through Counselor → Accountant → Principal approval. Create one, or convert an existing inquiry."
-              action={
+              title={appHasFilters ? 'No applications match your filters' : 'No applications yet'}
+              description={appHasFilters
+                ? 'Nothing matches this search or filter. Widen the filters to see more.'
+                : 'Applications go through Counselor → Principal → School Admin approval. Create one, or convert an existing inquiry.'}
+              action={appHasFilters ? (
+                <Button variant="outline" onClick={clearAppFilters}>Clear filters</Button>
+              ) : (
                 <Button onClick={() => setShowNewApp(true)}>
                   <Plus className="w-4 h-4" /> New Application
                 </Button>
-              }
+              )}
               className="py-16"
             />
           ) : (
@@ -266,6 +334,7 @@ export default function AdmissionPage() {
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="uppercase text-xs tracking-wide">Application #</TableHead>
                   <TableHead className="uppercase text-xs tracking-wide">Student</TableHead>
+                  <TableHead className="uppercase text-xs tracking-wide">Class Applying For</TableHead>
                   <TableHead className="uppercase text-xs tracking-wide">Parent Phone</TableHead>
                   <TableHead className="uppercase text-xs tracking-wide">Status</TableHead>
                   <TableHead className="uppercase text-xs tracking-wide">Created</TableHead>
@@ -273,23 +342,27 @@ export default function AdmissionPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(applications ?? []).map((app: any) => (
-                  <TableRow key={app.id} className="group"
-                    onClick={() => window.location.href = `/admission/applications/${app.id}`}>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{app.application_number}</TableCell>
-                    <TableCell className="font-semibold text-foreground">{app.student_first_name} {app.student_last_name}</TableCell>
-                    <TableCell className="text-muted-foreground">{app.father_phone}</TableCell>
-                    <TableCell>
-                      <Badge variant={APP_STATUS_VARIANTS[app.status] ?? 'secondary'} className="capitalize">{app.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">{formatDate(app.created_at)}</TableCell>
-                    <TableCell>
-                      <span className="flex items-center gap-1 text-xs text-primary font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
-                        View <ChevronRight className="w-3 h-3" />
-                      </span>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {(applications ?? []).map((app: any) => {
+                  const badge = admissionApplicationStatusBadge(app)
+                  return (
+                    <TableRow key={app.id} className="group"
+                      onClick={() => window.location.href = `/admission/applications/${app.id}`}>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{app.application_number}</TableCell>
+                      <TableCell className="font-semibold text-foreground">{app.student_first_name} {app.student_last_name}</TableCell>
+                      <TableCell className="text-muted-foreground">{app.classes?.name ?? '—'}</TableCell>
+                      <TableCell className="text-muted-foreground">{app.father_phone}</TableCell>
+                      <TableCell>
+                        <Badge variant={badge.variant}>{badge.label}</Badge>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-xs">{formatDate(app.created_at)}</TableCell>
+                      <TableCell>
+                        <span className="flex items-center gap-1 text-xs text-primary font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
+                          View <ChevronRight className="w-3 h-3" />
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           )}

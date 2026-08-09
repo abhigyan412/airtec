@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/shared/PageHeader'
 import { StatCard } from '@/components/shared/StatCard'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { HrQuickNav } from '@/components/hr/HrQuickNav'
+import { StaffAvatar } from '@/components/hr/StaffAvatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
@@ -160,9 +161,12 @@ export default function StaffDirectoryPage() {
               {(staffData?.data ?? []).map((s: any) => (
                 <TableRow key={s.id} onClick={() => window.location.href = `/hr/staff/${s.id}`} className="group">
                   <TableCell>
-                    <div className="max-w-[9rem] sm:max-w-none">
-                      <p className="truncate font-semibold text-foreground">{s.full_name}</p>
-                      <p className="truncate text-xs text-muted-foreground">{s.email}</p>
+                    <div className="flex items-center gap-3">
+                      <StaffAvatar photoUrl={s.staff_profile?.photo_url} fullName={s.full_name} />
+                      <div className="max-w-[9rem] sm:max-w-none">
+                        <p className="truncate font-semibold text-foreground">{s.full_name}</p>
+                        <p className="truncate text-xs text-muted-foreground">{s.email}</p>
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">{ROLE_LABELS[s.role] ?? s.role}</TableCell>

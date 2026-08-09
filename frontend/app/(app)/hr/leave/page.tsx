@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { HrQuickNav } from '@/components/hr/HrQuickNav'
+import { StaffAvatar, staffPhotoUrl } from '@/components/hr/StaffAvatar'
 import { Skeleton } from '@/components/ui/skeleton'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -175,20 +176,23 @@ export default function LeavePage() {
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedId(isExpanded ? null : lr.id) } }}
                       className="flex cursor-pointer items-center justify-between px-6 py-4 hover:bg-muted/40"
                     >
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <ChevronDown className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', isExpanded && 'rotate-180')} />
-                          <span className="text-sm font-semibold text-foreground">{lr.users?.full_name}</span>
-                          <span className="text-xs text-muted-foreground">·</span>
-                          <span className="text-sm text-muted-foreground">{lr.leave_types?.name}</span>
-                          {lr.exceeds_balance && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-xs font-semibold text-warning ring-1 ring-inset ring-warning/20">
-                              <AlertTriangle className="h-3 w-3" /> Exceeds balance
-                            </span>
-                          )}
+                      <div className="flex items-start gap-3">
+                        <StaffAvatar photoUrl={staffPhotoUrl(lr.users?.staff_profiles)} fullName={lr.users?.full_name} className="mt-0.5 h-8 w-8 text-xs" />
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <ChevronDown className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', isExpanded && 'rotate-180')} />
+                            <span className="text-sm font-semibold text-foreground">{lr.users?.full_name}</span>
+                            <span className="text-xs text-muted-foreground">·</span>
+                            <span className="text-sm text-muted-foreground">{lr.leave_types?.name}</span>
+                            {lr.exceeds_balance && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-xs font-semibold text-warning ring-1 ring-inset ring-warning/20">
+                                <AlertTriangle className="h-3 w-3" /> Exceeds balance
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 pl-[22px] text-xs text-muted-foreground">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
+                          {lr.reason && <p className="mt-1 pl-[22px] text-xs text-muted-foreground">{lr.reason}</p>}
                         </div>
-                        <p className="mt-1 pl-[22px] text-xs text-muted-foreground">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
-                        {lr.reason && <p className="mt-1 pl-[22px] text-xs text-muted-foreground">{lr.reason}</p>}
                       </div>
                       <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" onClick={() => approveMutation.mutate({ id: lr.id, status: 'approved' })} disabled={approveMutation.isPending}
@@ -240,13 +244,16 @@ export default function LeavePage() {
             <div className="divide-y divide-border">
               {pendingCompOff.map((r: any) => (
                 <div key={r.id} className="flex items-center justify-between px-6 py-4">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">{r.users?.full_name}</span>
-                      <span className="text-xs text-muted-foreground">·</span>
-                      <span className="text-sm text-muted-foreground">worked {formatDate(r.worked_date)}</span>
+                  <div className="flex items-start gap-3">
+                    <StaffAvatar photoUrl={staffPhotoUrl(r.users?.staff_profiles)} fullName={r.users?.full_name} className="mt-0.5 h-8 w-8 text-xs" />
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-foreground">{r.users?.full_name}</span>
+                        <span className="text-xs text-muted-foreground">·</span>
+                        <span className="text-sm text-muted-foreground">worked {formatDate(r.worked_date)}</span>
+                      </div>
+                      {r.reason && <p className="mt-1 text-xs text-muted-foreground">{r.reason}</p>}
                     </div>
-                    {r.reason && <p className="mt-1 text-xs text-muted-foreground">{r.reason}</p>}
                   </div>
                   <div className="flex gap-2">
                     <Button size="sm" onClick={() => compOffActionMutation.mutate({ id: r.id, status: 'approved' })} disabled={compOffActionMutation.isPending}

@@ -292,3 +292,66 @@ export async function ensureCompOffWorkflowDefinition(schoolId: string): Promise
     name: 'Comp-Off Approval Workflow', module: 'hrms', entityType: 'staff_comp_off_request', actionName: 'comp_off_approval',
   })
 }
+
+/**
+ * Same idiom as ensureSingleStepWorkflow above, generalized to N steps —
+ * 'Admission Approval Workflow' needs three (Counselor -> Principal ->
+ * School Admin), not one. Found via a live "not found or inactive for
+ * this school" error: the definition existed for this school but had
+ * been hand-created as "Admission Approval" (no migration/seed ever
+ * created it — same gap the doc comment above already describes), one
+ * word short of the name every startWorkflow() call site actually
+ * looks up. Renaming that row fixed this school; this closes the gap
+ * for every other one.
+ */
+async function ensureMultiStepWorkflow(schoolId: string, opts: { name: string; module: string; entityType: string; steps: { roleName: string; actionName: string }[] }): Promise<void> {
+  const { data: existing } = await supabase
+    .from('workflow_definitions')
+    .select('id')
+    .eq('school_id', schoolId)
+    .eq('name', opts.name)
+    .maybeSingle()
+
+  if (existing) return
+
+  const { data: roles } = await supabase
+    .from('roles')
+    .select('id, name')
+    .eq('school_id', schoolId)
+    .in('name', opts.steps.map(s => s.roleName))
+
+  const roleIdByName = new Map((roles ?? []).map(r => [r.name, r.id]))
+  if (opts.steps.some(s => !roleIdByName.has(s.roleName))) return // roles not seeded yet — nothing to point every step at
+
+  const { data: definition, error: defErr } = await supabase
+    .from('workflow_definitions')
+    .insert({ school_id: schoolId, name: opts.name, module: opts.module, entity_type: opts.entityType })
+    .select('id')
+    .single()
+
+  if (defErr || !definition) {
+    console.error(`Failed to create ${opts.name} definition:`, defErr?.message)
+    return
+  }
+
+  const stepRows = opts.steps.map((s, i) => ({
+    workflow_id: definition.id,
+    step_order: i + 1,
+    role_id: roleIdByName.get(s.roleName)!,
+    action_name: s.actionName,
+    is_required: true,
+  }))
+  const { error: stepErr } = await supabase.from('workflow_steps').insert(stepRows)
+  if (stepErr) console.error(`Failed to create ${opts.name} steps:`, stepErr.message)
+}
+
+export async function ensureAdmissionApprovalWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Admission Approval Workflow', module: 'admission', entityType: 'admission_application',
+    steps: [
+      { roleName: 'Counselor', actionName: 'Counselor Review' },
+      { roleName: 'Principal', actionName: 'Principal Approval' },
+      { roleName: 'School Admin', actionName: 'Admission Confirmation' },
+    ],
+  })
+}

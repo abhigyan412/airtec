@@ -635,6 +635,7 @@ export const hrmsApi = {
     stats: () => api.get('/hrms/staff/stats').then(r => r.data),
     get: (id: string) => api.get(`/hrms/staff/${id}`).then(r => r.data),
     updateProfile: (id: string, data: any) => api.put(`/hrms/staff/${id}/profile`, data).then(r => r.data),
+    uploadPhoto: (id: string, data: any) => api.post(`/hrms/staff/${id}/photo`, data).then(r => r.data),
     positionHistory: (id: string) => api.get(`/hrms/staff/${id}/position-history`).then(r => r.data),
     promote: (id: string, data: any) => api.post(`/hrms/staff/${id}/promote`, data).then(r => r.data),
     probationConfirm: (id: string) => api.post(`/hrms/staff/${id}/probation/confirm`).then(r => r.data),

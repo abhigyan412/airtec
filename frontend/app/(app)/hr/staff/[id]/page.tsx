@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation'
 import { hrmsApi, documentsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, User, Users, Calendar, IndianRupee, Loader2, Check, X, Edit3, History, LogOut, ShieldAlert, FileText, ArrowRight, Trash2, Eye, Plus } from 'lucide-react'
+import { ArrowLeft, User, Users, Calendar, IndianRupee, Loader2, Check, X, Edit3, History, LogOut, ShieldAlert, FileText, ArrowRight, Trash2, Eye, Plus, Camera } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -105,15 +105,16 @@ export default function StaffDetailPage() {
         <Button variant="ghost" size="sm" asChild className="-ml-2 mb-3 text-muted-foreground">
           <Link href="/hr/staff"><ArrowLeft className="h-4 w-4" /> Staff Directory</Link>
         </Button>
+        <div className="flex items-start gap-3">
+        <StaffPhotoUpload staffId={id} currentUrl={profile?.photo_url} fullName={data.full_name} />
         <PageHeader
-          className="mb-0"
+          className="mb-0 flex-1"
           title={data.full_name}
           description={[
             profile?.designation ?? 'No designation set',
             profile?.department,
             profile?.employee_id,
           ].filter(Boolean).join(' · ')}
-          icon={Users}
           actions={
             <>
               <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold capitalize text-primary ring-1 ring-inset ring-primary/20">
@@ -136,6 +137,7 @@ export default function StaffDetailPage() {
             </>
           }
         />
+        </div>
       </div>
 
       {/* Tabs */}
@@ -240,6 +242,61 @@ function ProbationBadge({ staffId, daysLeft }: { staffId: string; daysLeft: numb
         </Dialog>
       )}
     </>
+  )
+}
+
+// ── PHOTO UPLOAD ───────────────────────────────────────────────
+// Same base64-upload-then-preview shape as students' PhotoUpload
+// (app/(app)/students/[id]/page.tsx) — kept as its own small component
+// here rather than shared, since the two write to different tables
+// (staff_profiles vs students) through different endpoints.
+function StaffPhotoUpload({ staffId, currentUrl, fullName }: { staffId: string; currentUrl?: string; fullName: string }) {
+  const [preview, setPreview] = useState(currentUrl)
+  const [uploading, setUploading] = useState(false)
+  const qc = useQueryClient()
+  const initials = fullName.split(' ').filter(Boolean).slice(0, 2).map(n => n[0]).join('').toUpperCase()
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    const reader = new FileReader()
+    reader.onload = async () => {
+      try {
+        const base64 = reader.result as string
+        const res = await hrmsApi.staff.uploadPhoto(staffId, {
+          photo_base64: base64,
+          file_name: file.name,
+          mime_type: file.type,
+        })
+        setPreview(res.data.photo_url)
+        qc.invalidateQueries({ queryKey: ['hr-staff-detail', staffId] })
+        toast.success('Photo updated!')
+      } catch {
+        toast.error('Upload failed')
+      } finally {
+        setUploading(false)
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  return (
+    <label className="relative mt-1 flex-shrink-0 cursor-pointer group">
+      <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center overflow-hidden">
+        {preview
+          ? <img src={preview} alt="" className="w-16 h-16 object-cover rounded-2xl" />
+          : <span className="text-2xl font-bold text-primary">{initials}</span>
+        }
+        <div className="absolute inset-0 bg-black/50 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+          {uploading
+            ? <Loader2 className="w-5 h-5 text-white animate-spin" />
+            : <Camera className="w-5 h-5 text-white" />
+          }
+        </div>
+      </div>
+      <input type="file" accept="image/*" className="hidden" onChange={handleFile} disabled={uploading} />
+    </label>
   )
 }
 

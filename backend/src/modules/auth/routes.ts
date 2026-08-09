@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express'
 import { z } from 'zod'
-import { supabase } from '../../shared/db/client'
+import { supabase, createAuthClient } from '../../shared/db/client'
 import { authenticate, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, defaultSectionNamesForClass } from '../../shared/utils/helpers'
 import { assignDefaultUserRole } from '../rbac/seed'
@@ -93,7 +93,11 @@ router.post('/register-school', asyncHandler(async (req: Request, res: Response)
 router.post('/login', asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = LoginSchema.parse(req.body)
 
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  // A fresh, throwaway client — not the shared service-role `supabase`
+  // singleton, which every other route on this server also uses. See the
+  // comment on createAuthClient() for why sharing it here corrupted
+  // requests in flight for other schools.
+  const { data, error } = await createAuthClient().auth.signInWithPassword({ email, password })
   if (error) {
     // supabase-js collapses a real "wrong password" rejection and a
     // network/DNS failure reaching its own auth service into the same
@@ -139,7 +143,7 @@ router.post('/refresh', asyncHandler(async (req: Request, res: Response) => {
   const { refresh_token } = req.body
   if (!refresh_token) return res.status(400).json({ success: false, error: 'refresh_token required' })
 
-  const { data, error } = await supabase.auth.refreshSession({ refresh_token })
+  const { data, error } = await createAuthClient().auth.refreshSession({ refresh_token })
   if (error) return res.status(401).json({ success: false, error: 'Invalid refresh token' })
 
   res.json({

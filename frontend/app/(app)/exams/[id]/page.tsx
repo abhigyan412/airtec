@@ -298,7 +298,7 @@ export default function ExamDetailPage() {
       </Tabs>
 
       {showAddSubject && (
-        <AddSubjectModal examId={id} classes={classes ?? []} onClose={() => {
+        <AddSubjectModal examId={id} classes={classes ?? []} defaultTimeSlot={exam.default_time_slot} onClose={() => {
           setShowAddSubject(false)
           qc.invalidateQueries({ queryKey: ['exam', id] })
         }} />
@@ -889,10 +889,13 @@ function ResultsView({ examId }: { examId: string }) {
   )
 }
 
-function AddSubjectModal({ examId, classes, onClose }: any) {
+function AddSubjectModal({ examId, classes, defaultTimeSlot, onClose }: any) {
+  // Pre-filled from the exam's own default time slot (set at Create
+  // Exam time) if it has one — still just a starting point, the Time
+  // Slot select below can always override it per subject.
   const [form, setForm] = useState({
     class_id: '', subject_name: '', exam_date: '',
-    start_time: '', end_time: '', max_marks: 100, pass_marks: 33,
+    start_time: defaultTimeSlot?.start_time ?? '', end_time: defaultTimeSlot?.end_time ?? '', max_marks: 100, pass_marks: 33,
   })
 
   // Subjects come from the class's master list (Settings -> Classes &
