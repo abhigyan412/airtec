@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -45,6 +46,7 @@ export default function JoinedCandidatesPage() {
           title="Joined Candidates"
           description="Everyone who's completed the pipeline and joined — filter by position to find their offer letter"
           icon={UserCheck2}
+          actions={<HrQuickNav current="recruitment" />}
         />
       </div>
 

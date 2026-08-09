@@ -69,7 +69,14 @@ const NAV: NavItem[] = [
       { label: 'Arrears', href: '/fees/arrears', icon: BarChart3, permission: 'fee.view' },
     ],
   },
-  { label: 'Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
+  {
+    label: 'Examinations',
+    icon: BookOpen,
+    children: [
+      { label: 'All Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
+      { label: 'Results', href: '/exams/results', icon: BarChart3, permission: 'exam.view', indent: true },
+    ],
+  },
   { label: 'Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true },
   {
     label: 'Timetable',

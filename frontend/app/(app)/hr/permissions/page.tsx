@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 
 // ═══════════════════════════════════════════════════════════════
 // UNIFIED ROLE PERMISSIONS PAGE (v2)
@@ -155,9 +156,12 @@ export default function RolePermissionsPage() {
           description="Control what each role can do, by fine-grained permission"
           icon={ShieldCheck}
           actions={
+            <>
+            <HrQuickNav current="permissions" />
             <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !activeRoleId}>
               {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Permissions
             </Button>
+            </>
           }
         />
       </div>

@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -44,6 +45,7 @@ export default function OfferSentCandidatesPage() {
           title="Offer Sent"
           description="Candidates awaiting joining after an offer went out — filter by position to find their offer letter"
           icon={Send}
+          actions={<HrQuickNav current="recruitment" />}
         />
       </div>
 

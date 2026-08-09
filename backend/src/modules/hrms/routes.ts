@@ -1515,13 +1515,14 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
     const fromDate = `${year}-${mStr}-01`
     const toDate = `${year}-${mStr}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`
 
-    const [{ rollupByUser }, { data: school }, { data: ptSlabs }, { data: activeLoans }, { data: encashProfiles }, { data: bonuses }] = await Promise.all([
+    const [{ rollupByUser }, { data: school }, { data: ptSlabs }, { data: activeLoans }, { data: encashProfiles }, { data: bonuses }, { data: existingPayslips }] = await Promise.all([
       computeStaffAttendanceRollup(school_id, targetUserIds, fromDate, toDate),
       supabase.from('schools').select('lop_grace_days, lop_per_day_formula').eq('id', school_id).single(),
       supabase.from('professional_tax_slabs').select('min_gross, max_gross, amount').eq('school_id', school_id),
       supabase.from('staff_loans').select('*').eq('school_id', school_id).eq('status', 'active').in('user_id', targetUserIds),
       supabase.from('staff_profiles').select('user_id, pending_leave_encashment_days').in('user_id', targetUserIds).gt('pending_leave_encashment_days', 0),
       supabase.from('staff_bonuses').select('user_id, amount, reason').eq('school_id', school_id).eq('month', month).eq('year', year).in('user_id', targetUserIds),
+      supabase.from('payslips').select('user_id, payment_status, loan_deduction, leave_encashment').eq('school_id', school_id).eq('month', month).eq('year', year).in('user_id', targetUserIds),
     ])
 
     const graceDays = school?.lop_grace_days ?? 0
@@ -1529,6 +1530,15 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
     const loanByUser = new Map((activeLoans ?? []).map(l => [l.user_id, l]))
     const encashDaysByUser = new Map((encashProfiles ?? []).map(p => [p.user_id, p.pending_leave_encashment_days]))
     const bonusByUser = new Map((bonuses ?? []).map(b => [b.user_id, b]))
+    // Once a payslip is approved or paid it's a finalized, real-world
+    // record — someone may already have been paid against it. Silently
+    // re-running Generate must not recompute (and overwrite) that row,
+    // or it reverts payment_status back to 'pending' out from under an
+    // already-paid payslip. Only 'pending' or missing payslips are
+    // (re)computed; approved/paid ones are left untouched and reported
+    // back as skipped, same transparency as the other skip reasons below.
+    const existingPayslipByUser = new Map((existingPayslips ?? []).map(p => [p.user_id, p]))
+    const finalizedStatusByUser = new Map((existingPayslips ?? []).map(p => [p.user_id, p.payment_status]))
 
     // Safety check: LOP treats an unmarked working day the same as an
     // absence, so generating payroll before a month's attendance has
@@ -1552,7 +1562,14 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
     }
 
     const generated = []
+    const alreadyFinalized: { user_id: string; full_name: any; reason: 'already_finalized'; payment_status: string }[] = []
     for (const s of salaries) {
+      const existingStatus = finalizedStatusByUser.get(s.user_id)
+      if (existingStatus === 'approved' || existingStatus === 'paid') {
+        alreadyFinalized.push({ user_id: s.user_id, full_name: (s as any).users?.full_name, reason: 'already_finalized', payment_status: existingStatus })
+        continue
+      }
+
       const gross = s.basic_salary + (s.hra ?? 0) + (s.da ?? 0) + (s.conveyance_allowance ?? 0) + (s.medical_allowance ?? 0) + (s.other_allowances ?? 0)
 
       // LOP — the actual point of this rewrite. Previously hardcoded to
@@ -1566,20 +1583,37 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
       const tds = computeMonthlyTDS(gross)
       const professionalTax = computeProfessionalTax(gross, ptSlabs ?? [], s.professional_tax ?? 0)
 
+      // A pending payslip already existing for this exact month means
+      // this is a RE-generate (e.g. attendance got corrected, Generate
+      // was run again before anyone approved it) — not a first-time
+      // creation. Loan installments and leave-encashment days are each
+      // consumed exactly once, at first-generation time; re-deriving
+      // them here would either advance the loan an extra installment it
+      // never actually collected, or — since the source days get zeroed
+      // the first time — silently compute 0 the second time and drop
+      // the encashment amount the employee already earned. Both are
+      // carried forward unchanged from the existing pending row instead.
+      const existingSlip = existingPayslipByUser.get(s.user_id)
+      const isRegenerate = !!existingSlip
+
       // Loan recovery — deduct the installment (or whatever remains, if
       // less), advance the loan's own progress, and settle it once paid off.
-      const loan = loanByUser.get(s.user_id)
       let loanDeduction = 0
-      if (loan) {
-        const remainingInstallments = loan.installments_total - loan.installments_paid
-        const remainingPrincipal = loan.principal_amount - (loan.installment_amount * loan.installments_paid)
-        loanDeduction = remainingInstallments <= 1 ? Math.min(loan.installment_amount, remainingPrincipal) : loan.installment_amount
-        const newPaidCount = loan.installments_paid + 1
-        await supabase.from('staff_loans').update({
-          installments_paid: newPaidCount,
-          status: newPaidCount >= loan.installments_total ? 'settled' : 'active',
-          updated_at: new Date().toISOString(),
-        }).eq('id', loan.id)
+      if (isRegenerate) {
+        loanDeduction = Number(existingSlip!.loan_deduction ?? 0)
+      } else {
+        const loan = loanByUser.get(s.user_id)
+        if (loan) {
+          const remainingInstallments = loan.installments_total - loan.installments_paid
+          const remainingPrincipal = loan.principal_amount - (loan.installment_amount * loan.installments_paid)
+          loanDeduction = remainingInstallments <= 1 ? Math.min(loan.installment_amount, remainingPrincipal) : loan.installment_amount
+          const newPaidCount = loan.installments_paid + 1
+          await supabase.from('staff_loans').update({
+            installments_paid: newPaidCount,
+            status: newPaidCount >= loan.installments_total ? 'settled' : 'active',
+            updated_at: new Date().toISOString(),
+          }).eq('id', loan.id)
+        }
       }
 
       const totalDeductions = (s.pf_deduction ?? 0) + professionalTax + (s.other_deductions ?? 0) + lopAmount + tds + loanDeduction
@@ -1589,8 +1623,8 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
       // rather than paid out at year-end itself, so the payout uses
       // THIS month's gross rather than a stale January figure (same
       // reasoning as LOP/loan recovery being computed fresh here).
-      const encashDays = encashDaysByUser.get(s.user_id) ?? 0
-      const leaveEncashment = encashDays > 0 ? Math.round(encashDays * (gross / 30)) : 0
+      const encashDays = isRegenerate ? 0 : (encashDaysByUser.get(s.user_id) ?? 0)
+      const leaveEncashment = isRegenerate ? Number(existingSlip!.leave_encashment ?? 0) : (encashDays > 0 ? Math.round(encashDays * (gross / 30)) : 0)
 
       // Bonus — a one-off award staged in staff_bonuses for this exact
       // month (see that table's migration), snapshotted onto the
@@ -1634,7 +1668,7 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
     const missingStructure = (allStaff ?? [])
       .filter(u => !coveredIds.has(u.id) && !excludedIds.has(u.id))
       .map(u => ({ user_id: u.id, full_name: u.full_name, role: u.role, reason: 'no_salary_structure' as const }))
-    const skipped = [...missingStructure, ...excludedForStatus]
+    const skipped = [...missingStructure, ...excludedForStatus, ...alreadyFinalized]
 
     // Best-effort — a notification failure shouldn't turn an already-
     // generated payroll run into an error for the caller.

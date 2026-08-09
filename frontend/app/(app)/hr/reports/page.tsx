@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton as UiSkeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 
 // Theme-aware chart palette (reads well in light + dark).
 const CHART_COLORS = [
@@ -193,6 +194,7 @@ export default function HRReportsPage() {
           icon={BarChart3}
           actions={
             <>
+              <HrQuickNav current="reports" />
               <Select value={department || 'all'} onValueChange={v => setDepartment(v === 'all' ? '' : v)}>
                 <SelectTrigger className="w-[170px]" aria-label="Department filter"><SelectValue placeholder="All Departments" /></SelectTrigger>
                 <SelectContent>
