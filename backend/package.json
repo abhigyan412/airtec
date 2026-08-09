@@ -10,7 +10,9 @@
     "start": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "seed:fees": "tsx src/seedFees.ts",
+    "backfill:families": "tsx src/backfillFamilies.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

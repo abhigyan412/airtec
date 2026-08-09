@@ -21,7 +21,7 @@ interface FeeDue {
 // The full list behind "+N more students" on the dashboard's Homeroom
 // Follow-ups card, which only ever shows the top 5. Class-teacher only —
 // GET /teacher/homeroom-fee-dues 403s for a subject-only teacher rather
-// than falling back to the school-wide /fees/arrears page, which needs
+// than falling back to the school-wide /fees/recovery page, which needs
 // fee.view (a class teacher doesn't hold it) and isn't section-scoped.
 export default function HomeroomFeeDuesPage() {
   const { data, isLoading } = useQuery({
