@@ -8,9 +8,7 @@ import {
   MessageSquare, Award, Clock, Library, Briefcase, Settings as SettingsIcon,
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
-
-  Network, UserCheck2, Send, Grid3X3, User,
-
+  Network, UserCheck2, Send, Grid3X3, User, Layers, Receipt, Tag,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
