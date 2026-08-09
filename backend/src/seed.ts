@@ -18,7 +18,9 @@ import type { NotificationType } from './shared/utils/notifications'
 // picking two or three convenient values.
 //
 // Assumes a fresh database: it always INSERTs a new school and never
-// upserts, so running it twice gives you two schools.
+// upserts, so running it twice would give you two schools — it now refuses
+// unless --force. To rebuild fee data on an EXISTING school, use seedFees.ts
+// (`npm run seed:fees`), which works in place.
 // ═══════════════════════════════════════════════════════════════
 
 // ── Tunables ─────────────────────────────────────────────────
@@ -190,6 +192,31 @@ async function seed() {
   console.log('   ✅ Buckets ready (resources, student-photos, student-documents)\n')
 
   // ── 1. School (+ logo) ───────────────────────────────────
+  //
+  // Guard, because this script's whole failure mode is silent duplication: it
+  // INSERTs a school unconditionally, so a second run leaves you with two Delhi
+  // Public Schools, 2,240 students and every fee figure doubled — with nothing on
+  // screen saying which school you are looking at.
+  //
+  // For regenerating fee data on a school that already exists, use
+  // `npm run seed:fees`, which works in place.
+  const { data: existing } = await supabase.from('schools').select('id, name')
+  const realSchools = (existing ?? []).filter(x => !x.name.startsWith('__vitest'))
+
+  if (realSchools.length && !process.argv.includes('--force')) {
+    console.error('\n✖ This database already has a school:\n')
+    realSchools.forEach(x => console.error(`   ${x.id}  ${x.name}`))
+    console.error(`
+  Seeding again would ADD another one, not replace it — every student, invoice
+  and payment would be duplicated under a second school.
+
+  What you probably want:
+     npm run seed:fees          regenerate fee data on the existing school
+     npm run seed -- --force    really do add a second school
+`)
+    process.exit(1)
+  }
+
   console.log('1️⃣  Creating school...')
   const { data: school, error: schoolErr } = await supabase
     .from('schools')

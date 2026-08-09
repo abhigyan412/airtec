@@ -5,12 +5,18 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-export function formatCurrency(amount: number) {
+export function formatCurrency(amount: number | string | null | undefined) {
+  // A missing or unparseable figure renders as ₹0, never "₹NaN". Intl formats
+  // NaN happily, so a single stale field name — a renamed column, a typo'd key —
+  // used to surface as ₹NaN on a fees screen in front of a parent. ₹0 is wrong
+  // in the same way but does not look like the software is broken; the real
+  // defect still has to be fixed at the source.
+  const n = typeof amount === 'number' ? amount : Number(amount ?? 0)
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
     maximumFractionDigits: 0,
-  }).format(amount)
+  }).format(Number.isFinite(n) ? n : 0)
 }
 
 /** Alias for the same INR formatter, matching the reference design system. */

@@ -120,8 +120,31 @@ export const academicYearsApi = {
 }
 
 export const feeApi = {
-  studentSummary: (studentId: string) =>
-    api.get(`/fees/student-summary/${studentId}`).then(r => r.data),
+  /**
+   * The family's whole fee position. Was pointed at /fees/student-summary, which
+   * the fee rewrite removed — the route is /fees/students/:id and it is the same
+   * read the school's own Collect screen uses, so the two can never disagree
+   * about what is owed.
+   */
+  student: (studentId: string) =>
+    api.get(`/fees/students/${studentId}`).then(r => r.data),
+
+  /**
+   * Paying online.
+   *
+   * The amount is a suggestion — the server re-derives it from what is actually
+   * outstanding and caps it — and the student is taken from the caller's own
+   * scope, never from anything this client sends.
+   */
+  gateway: {
+    createOrder: (data?: { amount?: number; invoice_ids?: string[] }) =>
+      api.post('/fees/gateway/orders', data ?? {}).then(r => r.data),
+    get: (orderId: string) =>
+      api.get(`/fees/gateway/orders/${orderId}`).then(r => r.data),
+    /** Stands in for a checkout page while no provider is configured. */
+    simulate: (orderId: string, outcome: 'paid' | 'failed' = 'paid') =>
+      api.post(`/fees/gateway/orders/${orderId}/simulate`, { outcome }).then(r => r.data),
+  },
 }
 
 export const homeworkApi = {

@@ -299,78 +299,259 @@ export const calendarApi = {
 
 export const feeApi = {
   heads: {
-    list: () => api.get('/fees/heads').then(r => r.data),
+    list: (params?: Record<string, any>) => api.get('/fees/heads', { params }).then(r => r.data),
     create: (data: any) => api.post('/fees/heads', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/fees/heads/${id}`, data).then(r => r.data),
+    /** Retired rather than deleted when structure lines reference it. */
+    remove: (id: string) => api.delete(`/fees/heads/${id}`).then(r => r.data),
   },
+  // A structure is a NAMED, VERSIONED plan — lines + classes + cadence — not a
+  // (class, head, amount) cell. There is deliberately no update(): a live plan is
+  // superseded by a new version, so an invoice raised last term can still be
+  // explained by the figures it was raised from.
   structures: {
     list: (params?: Record<string, any>) =>
       api.get('/fees/structures', { params }).then(r => r.data),
-    create: (data: any) =>
-      api.post('/fees/structures', data).then(r => r.data),
-    update: (id: string, data: any) =>
-      api.patch(`/fees/structures/${id}`, data).then(r => r.data),
+    get: (id: string) => api.get(`/fees/structures/${id}`).then(r => r.data),
+    create: (data: any) => api.post('/fees/structures', data).then(r => r.data),
+    newVersion: (id: string, data: any) =>
+      api.post(`/fees/structures/${id}/versions`, data).then(r => r.data),
+    setStatus: (id: string, status: 'draft' | 'active' | 'archived') =>
+      api.patch(`/fees/structures/${id}/status`, { status }).then(r => r.data),
+  },
+  // Who is on which plan. The step between "here is what Class 5 pays" and "here
+  // is Aarav's bill", which had no API and no screen.
+  assignments: {
+    list: (params?: Record<string, any>) => api.get('/fees/assignments', { params }).then(r => r.data),
+    /** Writes nothing. Says exactly who gets billed and for how much. */
+    preview: (data: any) => api.post('/fees/assignments/preview', data).then(r => r.data),
+    create: (data: any) => api.post('/fees/assignments', data).then(r => r.data),
+    /** The optional lines on a student's plan, and whether they have opted in. */
+    optionals: (studentId: string) =>
+      api.get(`/fees/assignments/${studentId}/optionals`).then(r => r.data),
+    optIn: (studentId: string, structureLineId: string, note?: string) =>
+      api.post(`/fees/assignments/${studentId}/optionals`, { structure_line_id: structureLineId, note })
+        .then(r => r.data),
+    optOut: (studentId: string, structureLineId: string) =>
+      api.delete(`/fees/assignments/${studentId}/optionals/${structureLineId}`).then(r => r.data),
+    /**
+     * Re-categorise students already on a plan — RTE, staff ward, sibling.
+     * Was only settable at assignment time, which made it useless for seats
+     * identified partway through a year. `preview: true` writes nothing.
+     */
+    setCategory: (data: {
+      fee_category: string; class_ids?: string[]; section_ids?: string[]
+      student_ids?: string[]; academic_year_id?: string; preview?: boolean
+    }) => api.patch('/fees/assignments/category', data).then(r => r.data),
+  },
+  // Bulk billing — the step that did not exist. preview writes nothing and
+  // returns exactly what generate will do.
+  billing: {
+    periods: (academicYearId: string, frequency?: string) =>
+      api.get('/fees/billing/periods', { params: { academic_year_id: academicYearId, frequency } }).then(r => r.data),
+    preview: (data: any) => api.post('/fees/billing/preview', data).then(r => r.data),
+    generate: (data: any) => api.post('/fees/billing/generate', data).then(r => r.data),
   },
   invoices: {
-    list: (params?: Record<string, any>) =>
-      api.get('/fees/invoices', { params }).then(r => r.data),
-    create: (data: any) =>
-      api.post('/fees/invoices', data).then(r => r.data),
+    list: (params?: Record<string, any>) => api.get('/fees/invoices', { params }).then(r => r.data),
+    get: (id: string) => api.get(`/fees/invoices/${id}`).then(r => r.data),
+    cancel: (id: string, reason?: string) =>
+      api.patch(`/fees/invoices/${id}/cancel`, { reason }).then(r => r.data),
   },
   payments: {
-    record: (data: any) =>
-      api.post('/fees/payments', data).then(r => r.data),
+    list: (params?: Record<string, any>) => api.get('/fees/payments', { params }).then(r => r.data),
+    /**
+     * The bank returned it. NOT a cancellation — cancelling says the money never
+     * came, bouncing says it came, was credited, and was taken back. Reverses the
+     * allocations so the dues reappear, and posts the mirror ledger entries.
+     */
+    bounce: (id: string, data: { reason?: string; bounce_fee?: number; bounced_on?: string }) =>
+      api.post(`/fees/payments/${id}/bounce`, data).then(r => r.data),
+    /**
+     * ONE transaction, split across open invoices oldest-first by the server.
+     * There is no per-invoice variant: a parent handing over ₹5,000 against three
+     * invoices is one payment with three allocations and ONE receipt number.
+     */
+    collect: (data: any) => api.post('/fees/payments', data).then(r => r.data),
   },
-  dues: (params?: Record<string, any>) =>
-    api.get('/fees/dues', { params }).then(r => r.data),
+  dues: (params?: Record<string, any>) => api.get('/fees/dues', { params }).then(r => r.data),
   collectionTrend: (months?: number) =>
     api.get('/fees/collection-trend', { params: { months } }).then(r => r.data),
   collectionTrendRange: (from: string, to: string) =>
     api.get('/fees/collection-trend', { params: { from, to } }).then(r => r.data),
   arrears: {
-    list: (params?: Record<string, any>) =>
-      api.get('/fees/arrears', { params }).then(r => r.data),
+    list: (params?: Record<string, any>) => api.get('/fees/arrears', { params }).then(r => r.data),
     carryForward: (fromAcademicYearId: string, toAcademicYearId: string) =>
       api.post('/fees/arrears/carry-forward', {
         from_academic_year_id: fromAcademicYearId,
         to_academic_year_id: toAcademicYearId,
       }).then(r => r.data),
-    recordPayment: (id: string, data: any) =>
-      api.post(`/fees/arrears/${id}/payment`, data).then(r => r.data),
-    waive: (id: string, reason: string) =>
-      api.patch(`/fees/arrears/${id}/waive`, { reason }).then(r => r.data),
+    recordPayment: (id: string, data: any) => api.post(`/fees/arrears/${id}/payment`, data).then(r => r.data),
+    waive: (id: string, reason: string) => api.patch(`/fees/arrears/${id}/waive`, { reason }).then(r => r.data),
   },
-   discounts: {
-    list: (params?: Record<string, any>) =>
-      api.get('/fees/discounts', { params }).then(r => r.data),
-    create: (data: any) =>
-      api.post('/fees/discounts', data).then(r => r.data),
-    workflowStatus: (id: string) =>
-      api.get(`/fees/discounts/${id}/workflow-status`).then(r => r.data),
-    workflowAction: (id: string, status: 'approved' | 'rejected', notes?: string) =>
-      api.post(`/fees/discounts/${id}/workflow-action`, { status, notes }).then(r => r.data),
-  
-  },
-  stats: (params?: Record<string, any>) =>
-    api.get('/fees/stats', { params }).then(r => r.data),
-  studentSummary: (studentId: string) =>
-    api.get(`/fees/student-summary/${studentId}`).then(r => r.data),
+  discounts: {
+    list: (params?: Record<string, any>) => api.get('/fees/discounts', { params }).then(r => r.data),
+    create: (data: any) => api.post('/fees/discounts', data).then(r => r.data),
+    decide: (id: string, decision: 'approved' | 'rejected', note?: string) =>
+      api.post(`/fees/discounts/${id}/decide`, { decision, note }).then(r => r.data),
+    scholarships: {
+      list: (params?: Record<string, any>) =>
+        api.get('/fees/discounts/scholarships', { params }).then(r => r.data),
+      create: (data: any) => api.post('/fees/discounts/scholarships', data).then(r => r.data),
+    },
+    // Moved under /discounts with the module split. These drive auto-approval;
+    // an unconfigured role has a ceiling of 0, which is why the Setup screen now
+    // surfaces them instead of the UI asserting a flat "under ₹2,000" rule that
+    // was never what the backend did.
+    limits: () => api.get('/fees/discounts/limits').then(r => r.data),
+    updateLimit: (roleId: string, data: any) =>
+      api.put(`/fees/discounts/limits/${roleId}`, data).then(r => r.data),
 
-  agingReport: () => api.get('/fees/aging-report').then(r => r.data),
-  defaulters: (minDaysOverdue?: number) =>
-    api.get('/fees/defaulters', { params: { min_days_overdue: minDaysOverdue } }).then(r => r.data),
-  discountLimits: {
-    list: () => api.get('/fees/discount-limits').then(r => r.data),
-    update: (roleId: string, data: any) => api.put(`/fees/discount-limits/${roleId}`, data).then(r => r.data),
+    /**
+     * Standing policy per fee category — what "RTE" or "Sibling" actually does
+     * to a bill. The rule is applied by the billing run when an invoice is
+     * built; a hand-granted concession under `create` above remains the way to
+     * handle one family's exception.
+     */
+    rules: {
+      list: (academicYearId?: string) =>
+        api.get('/fees/discounts/rules', { params: { academic_year_id: academicYearId } })
+          .then(r => r.data),
+      save: (data: any) => api.put('/fees/discounts/rules', data).then(r => r.data),
+      remove: (id: string) => api.delete(`/fees/discounts/rules/${id}`).then(r => r.data),
+    },
   },
-  applyLateFines: () => api.post('/fees/apply-late-fines').then(r => r.data),
-  installments: {
-    list: (invoiceId: string) => api.get(`/fees/invoices/${invoiceId}/installments`).then(r => r.data),
-    create: (invoiceId: string, installments: any[]) =>
-      api.post(`/fees/invoices/${invoiceId}/installments`, { installments }).then(r => r.data),
-    pay: (installmentId: string, data: any) =>
-      api.post(`/fees/installments/${installmentId}/pay`, data).then(r => r.data),
+  // Browse by class rather than searching by name — a school chasing dues asks
+  // "where is 5-B", and there was no way to ask that.
+  classes: {
+    summary: (params?: Record<string, any>) => api.get('/fees/classes', { params }).then(r => r.data),
+    students: (params: Record<string, any>) => api.get('/fees/classes/students', { params }).then(r => r.data),
   },
- 
+  receipts: {
+    // There is no list route: the list of receipts is the list of payments.
+    // `payments.list` accepts `search` on receipt_number and returns the
+    // allocation count per receipt.
+    get: (paymentId: string) => api.get(`/fees/receipts/${paymentId}`).then(r => r.data),
+  },
+  // Waivers, cancellations and refunds: raised by whoever collects, decided by
+  // whoever manages the structure. Approval performs the action.
+  requests: {
+    list: (params?: Record<string, any>) => api.get('/fees/requests', { params }).then(r => r.data),
+    create: (data: any) => api.post('/fees/requests', data).then(r => r.data),
+    decide: (id: string, decision: 'approved' | 'rejected', note?: string) =>
+      api.post(`/fees/requests/${id}/decide`, { decision, note }).then(r => r.data),
+  },
+  approvals: () => api.get('/fees/approvals').then(r => r.data),
+  stats: (params?: Record<string, any>) => api.get('/fees/stats', { params }).then(r => r.data),
+  /** One student's complete position: invoices, payments, arrears, ad-hoc, plan. */
+  student: (studentId: string) => api.get(`/fees/students/${studentId}`).then(r => r.data),
+  agingReport: (params?: Record<string, any>) => api.get('/fees/aging-report', { params }).then(r => r.data),
+  // Paged over FAMILIES, not invoices: the server groups first and cuts the page
+  // afterwards, so meta.total_outstanding stays the whole school's position while
+  // data is one screenful.
+  // RTE seats are excluded by default: whatever is outstanding on them is owed
+  // by the state, not the family, and this list exists to decide who to phone.
+  // Pass a category to look at one deliberately, or includeAll for an audit.
+  defaulters: (
+    minDaysOverdue?: number, page?: number, limit?: number,
+    opts?: { category?: string; includeAll?: boolean },
+  ) =>
+    api.get('/fees/defaulters', {
+      params: {
+        min_days_overdue: minDaysOverdue, page, limit,
+        category: opts?.category || undefined,
+        include_all_categories: opts?.includeAll ? 'true' : undefined,
+      },
+    }).then(r => r.data),
+  applyLateFees: () => api.post('/fees/apply-late-fees').then(r => r.data),
+
+  /** What this counter took today, for tallying the drawer against the cash box. */
+  daybook: (date?: string) =>
+    api.get('/fees/daybook', { params: { date } }).then(r => r.data),
+  /** Seats by kind — RTE, staff ward, sibling — and what is carried on each. */
+  /**
+   * The one ledger in this module that is not a family's debt: what the state
+   * owes for RTE seats, at the state's rate rather than the school's fee.
+   */
+  rte: {
+    rates: (academicYearId?: string) =>
+      api.get('/fees/rte/rates', { params: { academic_year_id: academicYearId } }).then(r => r.data),
+    saveRate: (data: any) => api.put('/fees/rte/rates', data).then(r => r.data),
+    removeRate: (id: string) => api.delete(`/fees/rte/rates/${id}`).then(r => r.data),
+
+    claims: (params?: Record<string, any>) =>
+      api.get('/fees/rte/claims', { params }).then(r => r.data),
+    generate: (data: any) => api.post('/fees/rte/claims/generate', data).then(r => r.data),
+    updateClaim: (id: string, data: any) =>
+      api.patch(`/fees/rte/claims/${id}`, data).then(r => r.data),
+    summary: (academicYearId?: string) =>
+      api.get('/fees/rte/summary', { params: { academic_year_id: academicYearId } }).then(r => r.data),
+  },
+
+  byCategory: (academicYearId?: string) =>
+    api.get('/fees/by-category', { params: { academic_year_id: academicYearId } }).then(r => r.data),
+  /** Expected income by month, read forward off the plans' schedules. */
+  forecast: (months?: number) =>
+    api.get('/fees/forecast', { params: { months } }).then(r => r.data),
+
+  /**
+   * Paying online. Staff use it to send a family a link or take a card payment;
+   * the parent portal uses the same endpoints for self-service.
+   */
+  gateway: {
+    /** Money in flight — so a desk does not collect a fee a parent is mid-way through paying. */
+    list: (params?: { student_id?: string; status?: string }) =>
+      api.get('/fees/gateway/orders', { params }).then(r => r.data),
+    createOrder: (data: { student_id?: string; amount?: number; invoice_ids?: string[] }) =>
+      api.post('/fees/gateway/orders', data).then(r => r.data),
+    get: (orderId: string) => api.get(`/fees/gateway/orders/${orderId}`).then(r => r.data),
+  },
+}
+
+/**
+ * A CSV download goes through the browser, not axios — the response is a file,
+ * and the auth header has to ride along, so the blob is fetched and handed to a
+ * synthetic link rather than opening a URL the server would 401.
+ */
+export async function downloadFeeCsv(path: string, params: Record<string, any>, filename: string) {
+  const res = await api.get(path, { params: { ...params, format: 'csv' }, responseType: 'blob' })
+  const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  // Revoked on the next tick: revoking synchronously can cancel the download in
+  // Safari before it has started reading the blob.
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+/**
+ * Every query key the fee module uses. Recording a payment moves numbers on the
+ * overview, the invoice list, the aging buckets, the defaulter list and the
+ * dashboard trend — previously each mutation invalidated whichever subset its
+ * author had in mind, so the payment modal refreshed dues while leaving Recovery
+ * showing the old balance, and the late-fine sweep did the reverse.
+ *
+ * Fee data is small and read on demand; invalidating the family wholesale is
+ * cheaper than being wrong about which screen a number appears on.
+ */
+export const FEE_QUERY_KEYS = [
+  'fee-stats', 'fee-heads', 'fee-structures', 'fee-invoices', 'fee-invoice',
+  'fee-dues', 'fee-payments', 'fee-discounts', 'fee-discount-limits',
+  'fee-arrears', 'fee-aging', 'fee-defaulters', 'fee-student-summary',
+  'fee-billing-preview', 'fee-billing-periods',
+  'fee-classes', 'fee-class-students', 'fee-receipts', 'fee-receipt',
+  'fee-requests', 'fee-approvals', 'fee-optional', 'fee-adhoc',
+  'fee-structure', 'fee-assignments', 'fee-daybook', 'fee-forecast', 'fee-orders', 'fee-by-category',
+  // Dashboard cards that read fee data. They live outside the module but go
+  // stale for exactly the same reasons.
+  'dashboard-fee-trend', 'dashboard-fee-followups',
+] as const
+
+export function invalidateFeeQueries(queryClient: { invalidateQueries: (f: any) => void }) {
+  for (const key of FEE_QUERY_KEYS) queryClient.invalidateQueries({ queryKey: [key] })
 }
 
 
@@ -379,8 +560,10 @@ export const adhocFeeApi = {
     api.get('/fees/adhoc', { params }).then(r => r.data),
   create: (data: any) =>
     api.post('/fees/adhoc', data).then(r => r.data),
-  updateStatus: (id: string, status: string) =>
-    api.patch(`/fees/adhoc/${id}`, { status }).then(r => r.data),
+  /** Raise an invoice for a charge that was never billed. */
+  bill: (id: string) => api.post(`/fees/adhoc/${id}/bill`).then(r => r.data),
+  /** Cancels the charge AND its invoice — a withdrawn trip must stop being owed. */
+  cancel: (id: string) => api.patch(`/fees/adhoc/${id}/cancel`).then(r => r.data),
 }
 export const timetableApi = {
   get: (params?: any) => api.get('/students/timetable', { params }).then(r => r.data),
