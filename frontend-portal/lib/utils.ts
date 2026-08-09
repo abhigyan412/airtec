@@ -5,12 +5,15 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-export function formatCurrency(amount: number) {
+export function formatCurrency(amount: number | string | null | undefined) {
+  // Never "₹NaN" — see the note on the school app's copy of this. A parent is
+  // the last person who should be shown a broken number where their fee goes.
+  const n = typeof amount === 'number' ? amount : Number(amount ?? 0)
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
     maximumFractionDigits: 0,
-  }).format(amount)
+  }).format(Number.isFinite(n) ? n : 0)
 }
 
 export function formatDate(date: string | Date) {
