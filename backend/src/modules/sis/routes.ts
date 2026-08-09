@@ -2,10 +2,11 @@ import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
-import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
+import { authenticate, AuthRequest } from '../../shared/middleware/auth'
+import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
-import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
+import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr, countWorkingDays } from '../../shared/utils/academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 import { buildStudentSearchFilter } from '../../shared/utils/studentSearch'
 import { getTeacherContext } from '../../shared/utils/teacherContext'
@@ -207,7 +208,7 @@ router.get('/attendance/today', asyncHandler(async (req: AuthRequest, res: Respo
 // by section for the dashboard's "unmarked sections" list) — this
 // accepts any date and rolls sections up to class level, since the
 // chart's job is "how is each class doing today," not per-section detail.
-router.get('/attendance/class-summary', requireRole('school_admin', 'principal'), asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/attendance/class-summary', requirePermissionV2('attendance.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const school_id = req.user!.school_id
   const date = (req.query.date as string) || toLocalDateStr(new Date())
 
@@ -326,7 +327,7 @@ router.get('/timetable', asyncHandler(async (req: AuthRequest, res: Response) =>
   res.json({ success: true, data })
 }))
 
-router.post('/timetable', requireRole('school_admin', 'principal'),
+router.post('/timetable', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { periods } = req.body
     const school_id = req.user!.school_id
@@ -339,7 +340,7 @@ router.post('/timetable', requireRole('school_admin', 'principal'),
   })
 )
 
-router.delete('/timetable/:period_id', requireRole('school_admin', 'principal'),
+router.delete('/timetable/:period_id', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { period_id } = req.params
     const { error } = await supabase.from('timetable_periods').delete().eq('id', period_id).eq('school_id', req.user!.school_id)
@@ -369,7 +370,7 @@ router.get('/resources', asyncHandler(async (req: AuthRequest, res: Response) =>
   res.json({ success: true, data })
 }))
 
-router.post('/resources', requireRole('school_admin', 'principal', 'teacher'),
+router.post('/resources', requirePermissionV2('resource.upload'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { title, description, resource_type, class_id, subject_name, file_base64, file_name, mime_type, external_url } = req.body
     const school_id = req.user!.school_id
@@ -397,7 +398,7 @@ router.post('/resources', requireRole('school_admin', 'principal', 'teacher'),
   })
 )
 
-router.delete('/resources/:resource_id', requireRole('school_admin', 'principal', 'teacher'),
+router.delete('/resources/:resource_id', requirePermissionV2('resource.delete'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { resource_id } = req.params
     const { error } = await supabase.from('resources').delete().eq('id', resource_id).eq('school_id', req.user!.school_id)
@@ -425,7 +426,7 @@ router.get('/attendance/class', asyncHandler(async (req: AuthRequest, res: Respo
   res.json({ success: true, data: { students, attendance: existing ?? [] } })
 }))
 
-router.post('/attendance', requireRole('school_admin', 'principal', 'teacher'),
+router.post('/attendance', requirePermissionV2('attendance.mark'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { class_id, section_id, date, records } = req.body
     const school_id = req.user!.school_id
@@ -484,14 +485,17 @@ router.post('/attendance', requireRole('school_admin', 'principal', 'teacher'),
 // roll up an arbitrary range — e.g. the current academic year's
 // start_date through today — instead of a single calendar month.
 //
-// "Working days" = distinct dates that have an attendance record for
-// this class/section AND aren't a declared holiday AND aren't a
-// weekly-off weekday (schools.weekly_off_days). A date attendance was
-// (mistakenly) marked on a holiday/weekly-off day doesn't count either
-// way — it's dropped from both the numerator and denominator. Days
-// nobody marked attendance on are excluded from the denominator too,
-// not assumed as absences, since there's no way to tell "closed" from
-// "forgot to mark".
+// "Working days" = the true calendar count for the range (total days
+// minus declared holidays minus weekly-off weekdays), capped at today
+// so a mid-month report doesn't count days that haven't happened yet.
+// A day nobody marked attendance for still counts against the
+// denominator and shows up in `unmarked` below — that's the whole
+// point of surfacing it, rather than silently dropping it from both
+// sides the way this used to work (which made "haven't marked
+// anything yet this month" indistinguishable from "great attendance,
+// nothing to report"). A date attendance was (mistakenly) marked on a
+// holiday/weekly-off day is still dropped from the numerator (filtered
+// out via isWorkingDate below) since it was never a real working day.
 router.get('/attendance/report', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { class_id, section_id, month, year, from, to } = req.query
   const school_id = req.user!.school_id
@@ -529,6 +533,18 @@ router.get('/attendance/report', asyncHandler(async (req: AuthRequest, res: Resp
 
   const nonWorkingSets = await getNonWorkingDaySets(school_id, fromDate, toDate)
 
+  // Working days is the TRUE calendar count (total days in range minus
+  // holidays/weekly-off), capped at today so a mid-month report doesn't
+  // count days that haven't happened yet as "unmarked". This used to be
+  // derived from whichever dates happened to have at least one marked
+  // record — which meant a class nobody had marked attendance for yet
+  // this month reported "1 working day" (today) instead of the real
+  // number, and there was no way to see how many days were missing data
+  // versus how many days simply hadn't occurred yet.
+  const today = toLocalDateStr(new Date())
+  const effectiveToDate = toDate > today ? today : toDate
+  const workingDays = countWorkingDays(fromDate, effectiveToDate, nonWorkingSets)
+
   const studentIds = (students ?? []).map(s => s.id)
   const { data: rawRecords, error: attErr } = studentIds.length
     ? await supabase.from('attendance').select('student_id, date, status')
@@ -538,7 +554,6 @@ router.get('/attendance/report', asyncHandler(async (req: AuthRequest, res: Resp
   if (attErr) return res.status(500).json({ success: false, error: attErr.message })
 
   const records = (rawRecords ?? []).filter(r => isWorkingDate(r.date, nonWorkingSets))
-  const workingDays = new Set(records.map(r => r.date)).size
 
   const byStudent = new Map<string, { present: number; absent: number; late: number; leave: number }>()
   for (const r of records) {
@@ -552,6 +567,7 @@ router.get('/attendance/report', asyncHandler(async (req: AuthRequest, res: Resp
 
   const data = (students ?? []).map(s => {
     const counts = byStudent.get(s.id) ?? { present: 0, absent: 0, late: 0, leave: 0 }
+    const unmarked = Math.max(0, workingDays - (counts.present + counts.absent + counts.late + counts.leave))
     const percentage = workingDays > 0 ? Math.round((counts.present / workingDays) * 100) : 0
     return {
       student_id: s.id,
@@ -562,6 +578,7 @@ router.get('/attendance/report', asyncHandler(async (req: AuthRequest, res: Resp
       section_id: s.section_id,
       section_name: (s as any).sections?.name ?? null,
       ...counts,
+      unmarked,
       percentage,
     }
   })
@@ -612,10 +629,27 @@ router.post('/complaints', asyncHandler(async (req: AuthRequest, res: Response) 
   res.status(201).json({ success: true, data })
 }))
 
+// Field-level split, same pattern as academics/routes.ts PATCH /syllabus/:id:
+// reassigning a complaint needs complaint.assign; changing its status/
+// resolution/priority needs complaint.resolve. A request touching only
+// one must not require the other. Previously had no gate at all — any
+// authenticated user could resolve/reassign/reprioritize any complaint.
 router.patch('/complaints/:complaint_id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { complaint_id } = req.params
   const { status, assigned_to, resolution, priority } = req.body
   const school_id = req.user!.school_id
+
+  const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+  const hasAssign = isSuperRole || permissionCodes.has('complaint.assign')
+  const hasResolve = isSuperRole || permissionCodes.has('complaint.resolve')
+
+  if (assigned_to !== undefined && !hasAssign) {
+    return res.status(403).json({ success: false, error: 'Missing permission: complaint.assign' })
+  }
+  if ((status !== undefined || resolution !== undefined || priority !== undefined) && !hasResolve) {
+    return res.status(403).json({ success: false, error: 'Missing permission: complaint.resolve' })
+  }
+
   const update: any = {}
   if (status) update.status = status
   if (assigned_to) update.assigned_to = assigned_to
@@ -643,7 +677,7 @@ router.post('/complaints/:complaint_id/comments', asyncHandler(async (req: AuthR
 }))
 
 // ── BULK PROMOTE ─────────────────────────────────────────────
-router.post('/bulk/promote', requireRole('school_admin', 'principal'),
+router.post('/bulk/promote', requirePermissionV2('student.promote'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = BulkPromoteSchema.parse(req.body)
     const school_id = req.user!.school_id
@@ -729,7 +763,12 @@ router.get('/timetable/teachers', asyncHandler(async (req: AuthRequest, res: Res
 // they're already scheduled to teach) — the same single source of
 // truth the rest of the timetable page already uses, not a new list
 // that could drift out of sync with reality.
-router.get('/timetable/free-faculty', requireRole('school_admin', 'principal'),
+// timetable.manage rather than timetable.view — the latter is held by
+// Teacher/Parent/Student too (basic browsing), and this is a specialized
+// staff-scheduling report (which teachers are free/busy right now) that
+// shouldn't be that widely visible. timetable.manage matches the old
+// requireRole('school_admin','principal') scope exactly.
+router.get('/timetable/free-faculty', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
     const day_of_week = Number(req.query.day_of_week)
@@ -817,7 +856,9 @@ router.get('/timetable/free-faculty', requireRole('school_admin', 'principal'),
 // that didn't exist before — the weekly timetable (who's SUPPOSED to
 // teach when) and staff_attendance (who's ACTUALLY checked in, and
 // when) never talked to each other; this cross-references them live.
-router.get('/timetable/attention-required', requireRole('school_admin', 'principal'),
+// Same reasoning as free-faculty above — this surfaces staff attendance
+// status, not something to expose via the broadly-held timetable.view.
+router.get('/timetable/attention-required', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
     const now = new Date()
@@ -986,7 +1027,7 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 }))
 
 // ── POST /students ──────────────────────────────────────────
-router.post('/', requireRole('school_admin', 'principal', 'counselor'),
+router.post('/', requirePermissionV2('student.create'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = CreateStudentSchema.parse(req.body)
     const school_id = req.user!.school_id
@@ -1004,7 +1045,12 @@ router.post('/', requireRole('school_admin', 'principal', 'counselor'),
 )
 
 // ── PATCH /students/:id ─────────────────────────────────────
-router.patch('/:id', requireRole('school_admin', 'principal', 'teacher'),
+// Narrowed from requireRole('school_admin','principal','teacher') to
+// student.edit — DEFAULT_ROLE_PERMISSIONS only grants that to Class
+// Teacher among teaching roles (not every plain Teacher), matching this
+// codebase's own existing homework/syllabus precedent of Class Teacher
+// getting broader student-facing rights than a subject-only Teacher.
+router.patch('/:id', requirePermissionV2('student.edit'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const body = UpdateStudentSchema.parse(req.body)
@@ -1020,7 +1066,7 @@ router.patch('/:id', requireRole('school_admin', 'principal', 'teacher'),
 )
 
 // ── POST /students/:id/tc ───────────────────────────────────
-router.post('/:id/tc', requireRole('school_admin', 'principal', 'accountant'),
+router.post('/:id/tc', requirePermissionV2('tc.generate'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const school_id = req.user!.school_id
@@ -1070,11 +1116,22 @@ router.post('/:id/tc', requireRole('school_admin', 'principal', 'accountant'),
 )
  
 
+// No gate at all before — any authenticated user could act on this.
+// Excludes non-staff only, same reasoning as admission.ts's approve/
+// workflow-action routes: actOnWorkflow() below already does the real
+// per-step check (Accountant/dues_clearance then Principal/approve),
+// and Accountant isn't granted tc.generate/tc.view broadly enough to
+// safely gate on a specific code here without risk of blocking their
+// actual dues-clearance step.
 router.post('/:id/tc/:tcId/workflow-action', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id, tcId } = req.params
   const { status, notes } = req.body
   const school_id = req.user!.school_id
- 
+
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    return res.status(403).json({ success: false, error: 'Not authorized to act on transfer certificate requests' })
+  }
+
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ success: false, error: 'Invalid status. Must be approved or rejected.' })
   }
@@ -1180,7 +1237,7 @@ router.get('/:id/tc', asyncHandler(async (req: AuthRequest, res: Response) => {
 }))
 
 // ── POST /students/:id/photo ────────────────────────────────
-router.post('/:id/photo', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.post('/:id/photo', requirePermissionV2('student.edit'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
   const school_id = req.user!.school_id
   const { photo_base64, file_name, mime_type } = req.body
@@ -1204,7 +1261,7 @@ router.get('/:id/documents', asyncHandler(async (req: AuthRequest, res: Response
 }))
 
 // ── POST /students/:id/documents ─────────────────────────────
-router.post('/:id/documents', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.post('/:id/documents', requirePermissionV2('student.edit'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
   const school_id = req.user!.school_id
   const { file_base64, file_name, mime_type, document_type, document_name, notes } = req.body
@@ -1226,7 +1283,7 @@ router.post('/:id/documents', asyncHandler(async (req: AuthRequest, res: Respons
 }))
 
 // ── DELETE /students/:id/documents/:doc_id ────────────────────
-router.delete('/:id/documents/:doc_id', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.delete('/:id/documents/:doc_id', requirePermissionV2('student.edit'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id, doc_id } = req.params
   const { error } = await supabase.from('student_documents').delete().eq('id', doc_id).eq('student_id', id).eq('school_id', req.user!.school_id)
   if (error) return res.status(400).json({ success: false, error: error.message })

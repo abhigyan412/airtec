@@ -189,7 +189,46 @@ export async function actOnWorkflow(params: ActOnWorkflowParams): Promise<ActOnW
     isSuperUser = !!adminCheck
   }
 
+  // Delegated-approver fallback: a workflow step is authorized by ROLE,
+  // not by one specific person — anyone holding the role can act. That
+  // only stalls a queue when a school has exactly one holder of that
+  // role and they're on approved leave today. Rather than special-case
+  // this for Leave Approval alone, it's solved once here so it covers
+  // every workflow (Exit, Regularization, Comp-Off, Leave) that routes
+  // through actOnWorkflow. A user acts as delegate if: someone who
+  // nominated them (staff_profiles.leave_delegate_id) holds this step's
+  // role AND has an approved leave_requests row covering today.
+  let delegateFor: string | null = null
   if (!userRole && !isSuperUser) {
+    const { data: delegators } = await supabase
+      .from('staff_profiles')
+      .select('user_id, users:user_id(full_name)')
+      .eq('school_id', schoolId)
+      .eq('leave_delegate_id', userId)
+
+    if (delegators?.length) {
+      const { data: roleHolders } = await supabase
+        .from('user_roles').select('user_id')
+        .eq('school_id', schoolId).eq('role_id', currentStep.role_id)
+        .in('user_id', delegators.map(d => d.user_id))
+
+      const today = new Date().toISOString().slice(0, 10)
+      for (const holder of roleHolders ?? []) {
+        const { data: onLeave } = await supabase
+          .from('leave_requests').select('id')
+          .eq('user_id', holder.user_id).eq('status', 'approved')
+          .lte('from_date', today).gte('to_date', today)
+          .limit(1).maybeSingle()
+        if (onLeave) {
+          const delegator = delegators.find(d => d.user_id === holder.user_id)
+          delegateFor = (delegator as any)?.users?.full_name ?? 'the assigned approver'
+          break
+        }
+      }
+    }
+  }
+
+  if (!userRole && !isSuperUser && !delegateFor) {
     return { success: false, error: `You don't have the "${(currentStep as any).roles?.name}" role required for this step` }
   }
 
@@ -199,7 +238,7 @@ export async function actOnWorkflow(params: ActOnWorkflowParams): Promise<ActOnW
     workflow_step_id: currentStep.id,
     approved_by: userId,
     status,
-    notes: notes ?? null,
+    notes: delegateFor ? `[Acting as delegate for ${delegateFor}] ${notes ?? ''}`.trim() : (notes ?? null),
   })
 
   // Escalated/commented: record only, don't advance

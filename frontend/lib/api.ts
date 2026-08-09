@@ -143,6 +143,18 @@ export const documentsApi = {
     const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
     return `${API_BASE}/documents/report-card/${examId}/${studentId}?token=${token}`
   },
+  relievingLetter: (exitId: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
+    return `${API_BASE}/documents/relieving-letter/${exitId}?token=${token}`
+  },
+  offerLetter: (applicationId: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
+    return `${API_BASE}/documents/offer-letter/${applicationId}?token=${token}`
+  },
+  payslip: (payslipId: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
+    return `${API_BASE}/documents/payslip/${payslipId}?token=${token}`
+  },
 }
 
 export const studentsApi = {
@@ -623,9 +635,30 @@ export const hrmsApi = {
     stats: () => api.get('/hrms/staff/stats').then(r => r.data),
     get: (id: string) => api.get(`/hrms/staff/${id}`).then(r => r.data),
     updateProfile: (id: string, data: any) => api.put(`/hrms/staff/${id}/profile`, data).then(r => r.data),
+    positionHistory: (id: string) => api.get(`/hrms/staff/${id}/position-history`).then(r => r.data),
+    promote: (id: string, data: any) => api.post(`/hrms/staff/${id}/promote`, data).then(r => r.data),
+    probationConfirm: (id: string) => api.post(`/hrms/staff/${id}/probation/confirm`).then(r => r.data),
+    probationExtend: (id: string, new_probation_end_date: string) => api.post(`/hrms/staff/${id}/probation/extend`, { new_probation_end_date }).then(r => r.data),
+    documents: {
+      list: (userId: string) => api.get(`/hrms/staff/${userId}/documents`).then(r => r.data),
+      upload: (userId: string, data: any) => api.post(`/hrms/staff/${userId}/documents`, data).then(r => r.data),
+      delete: (userId: string, docId: string) => api.delete(`/hrms/staff/${userId}/documents/${docId}`).then(r => r.data),
+      acknowledge: (userId: string, docId: string) => api.post(`/hrms/staff/${userId}/documents/${docId}/acknowledge`).then(r => r.data),
+    },
+    orgChart: () => api.get('/hrms/staff/org-chart').then(r => r.data),
+  },
+  exit: {
+    get: (userId: string) => api.get(`/hrms/staff/${userId}/exit`).then(r => r.data),
+    initiate: (userId: string, data: any) => api.post(`/hrms/staff/${userId}/exit`, data).then(r => r.data),
+    toggleChecklistItem: (exitId: string, itemId: string, data: any) => api.patch(`/hrms/exit/${exitId}/checklist/${itemId}`, data).then(r => r.data),
+    submitSettlement: (exitId: string) => api.post(`/hrms/exit/${exitId}/submit-settlement`).then(r => r.data),
+    workflowAction: (exitId: string, data: any) => api.post(`/hrms/exit/${exitId}/workflow-action`, data).then(r => r.data),
   },
   leaveTypes: {
     list: () => api.get('/hrms/leave-types').then(r => r.data),
+    create: (data: any) => api.post('/hrms/leave-types', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/hrms/leave-types/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/hrms/leave-types/${id}`).then(r => r.data),
   },
   leaveRequests: {
     list: (params?: any) => api.get('/hrms/leave-requests', { params }).then(r => r.data),
@@ -636,24 +669,71 @@ export const hrmsApi = {
   },
   leaveBalances: (userId: string, year?: number) =>
     api.get(`/hrms/leave-balances/${userId}`, { params: { year } }).then(r => r.data),
+  compOff: {
+    list: (params?: any) => api.get('/hrms/comp-off', { params }).then(r => r.data),
+    request: (data: any) => api.post('/hrms/comp-off', data).then(r => r.data),
+    workflowAction: (id: string, status: 'approved' | 'rejected', notes?: string) =>
+      api.post(`/hrms/comp-off/${id}/workflow-action`, { status, notes }).then(r => r.data),
+  },
+  leavePolicy: {
+    runAccrual: () => api.post('/hrms/leave-accrual/run').then(r => r.data),
+    runYearEnd: (forYear?: number) => api.post('/hrms/leave-year-end/run', { for_year: forYear }).then(r => r.data),
+  },
   salaryStructure: {
     get: (userId: string) => api.get(`/hrms/salary-structure/${userId}`).then(r => r.data),
     set: (data: any) => api.put('/hrms/salary-structure', data).then(r => r.data),
   },
   payslips: {
     list: (params?: any) => api.get('/hrms/payslips', { params }).then(r => r.data),
+    get: (id: string) => api.get(`/hrms/payslips/${id}`).then(r => r.data),
     generate: (data: any) => api.post('/hrms/payslips/generate', data).then(r => r.data),
     update: (id: string, data: any) => api.patch(`/hrms/payslips/${id}`, data).then(r => r.data),
     approve: (id: string) => api.post(`/hrms/payslips/${id}/approve`).then(r => r.data),
   },
   payroll: {
     summary: (params?: any) => api.get('/hrms/payroll/summary', { params }).then(r => r.data),
+    settings: {
+      get: () => api.get('/hrms/payroll/settings').then(r => r.data),
+      update: (data: any) => api.put('/hrms/payroll/settings', data).then(r => r.data),
+    },
+    // hrms routes only accept the Authorization header (not ?token=), so
+    // this can't be a plain <a href> link like the documents/ print
+    // routes — fetch it through the authenticated client and trigger a
+    // browser download from the blob instead.
+    downloadBankExport: async (month: number, year: number) => {
+      const res = await api.get('/hrms/payroll/bank-export', { params: { month, year }, responseType: 'blob' })
+      const url = window.URL.createObjectURL(new Blob([res.data]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `bank-disbursement-${year}-${String(month).padStart(2, '0')}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    },
+  },
+  loans: {
+    list: (userId?: string) => api.get('/hrms/loans', { params: { user_id: userId } }).then(r => r.data),
+    create: (data: any) => api.post('/hrms/loans', data).then(r => r.data),
+    update: (id: string, status: string) => api.patch(`/hrms/loans/${id}`, { status }).then(r => r.data),
   },
   attendance: {
     list: (params?: any) => api.get('/hrms/attendance', { params }).then(r => r.data),
     save: (data: any) => api.post('/hrms/attendance', data).then(r => r.data),
     report: (month: number, year: number, department?: string) =>
       api.get('/hrms/attendance/report', { params: { month, year, department: department || undefined } }).then(r => r.data),
+  },
+  shifts: {
+    list: () => api.get('/hrms/shifts').then(r => r.data),
+    create: (data: any) => api.post('/hrms/shifts', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/hrms/shifts/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/hrms/shifts/${id}`).then(r => r.data),
+  },
+  regularizations: {
+    list: (params?: any) => api.get('/hrms/attendance/regularizations', { params }).then(r => r.data),
+    request: (data: any) => api.post('/hrms/attendance/regularize', data).then(r => r.data),
+    workflowAction: (id: string, status: 'approved' | 'rejected', notes?: string) =>
+      api.post(`/hrms/attendance/regularizations/${id}/workflow-action`, { status, notes }).then(r => r.data),
   },
   jobPostings: {
     list: (params?: any) => api.get('/hrms/job-postings', { params }).then(r => r.data),
@@ -666,15 +746,18 @@ export const hrmsApi = {
     get: (id: string) => api.get(`/hrms/applications/${id}`).then(r => r.data),
     create: (data: any) => api.post('/hrms/applications', data).then(r => r.data),
     update: (id: string, data: any) => api.patch(`/hrms/applications/${id}`, data).then(r => r.data),
+    submitScorecard: (id: string, data: { rating: number, notes?: string }) => api.post(`/hrms/applications/${id}/interviews`, data).then(r => r.data),
   },
   rolePermissions: {
     list: () => api.get('/hrms/role-permissions').then(r => r.data),
     set: (data: any) => api.put('/hrms/role-permissions', data).then(r => r.data),
   },
   reports: {
-    headcount: () => api.get('/hrms/reports/headcount').then(r => r.data),
-    leaveSummary: (year?: number) => api.get('/hrms/reports/leave-summary', { params: { year } }).then(r => r.data),
-    payrollSummary: (year?: number) => api.get('/hrms/reports/payroll-summary', { params: { year } }).then(r => r.data),
+    headcount: (department?: string) => api.get('/hrms/reports/headcount', { params: { department: department || undefined } }).then(r => r.data),
+    leaveSummary: (year?: number, department?: string) => api.get('/hrms/reports/leave-summary', { params: { year, department: department || undefined } }).then(r => r.data),
+    payrollSummary: (year?: number, department?: string) => api.get('/hrms/reports/payroll-summary', { params: { year, department: department || undefined } }).then(r => r.data),
+    analytics: (year?: number, department?: string, compare?: boolean) =>
+      api.get('/hrms/reports/analytics', { params: { year, department: department || undefined, compare: compare || undefined } }).then(r => r.data),
   },
 }
 
@@ -687,8 +770,8 @@ export const teamApi = {
   update: (id: string, data: any) => api.patch(`/team/${id}`, data).then(r => r.data),
   deactivate: (id: string) => api.delete(`/team/${id}`).then(r => r.data),
   extraRoles: () => api.get('/team/extra-roles').then(r => r.data),
-  assignRole: (userId: string, roleId: string) =>
-    api.post(`/team/${userId}/roles`, { role_id: roleId }).then(r => r.data),
+  assignRole: (userId: string, roleId: string, departmentScope?: string) =>
+    api.post(`/team/${userId}/roles`, { role_id: roleId, department_scope: departmentScope || undefined }).then(r => r.data),
   removeRole: (userId: string, roleId: string) =>
     api.delete(`/team/${userId}/roles/${roleId}`).then(r => r.data),
 }

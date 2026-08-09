@@ -7,6 +7,8 @@ import rateLimit from 'express-rate-limit'
 import cron from 'node-cron'
 import { runFeeReminders } from './shared/utils/feeReminders'
 import { runDeliveries } from './shared/utils/delivery'
+import { runLeaveAccrual, runLeaveYearEnd } from './shared/utils/leavePolicy'
+import { runHrAlerts } from './shared/utils/hrAlerts'
 
 import authRoutes from './modules/auth/routes'
 import sisRoutes from './modules/sis/routes'
@@ -137,6 +139,36 @@ cron.schedule('0 7 * * *', () => {
 // scheduler equivalent (design.md §7).
 cron.schedule('* * * * *', () => {
   runDeliveries().catch(err => console.error('[delivery] tick failed:', err?.message))
+})
+
+// Monthly leave accrual, 1st of the month, across every school. Same
+// unattended-sweep + manual-trigger-is-the-real-safety-net caveat as
+// the two jobs above — POST /hrms/leave-accrual/run is the per-school
+// equivalent.
+cron.schedule('0 2 1 * *', () => {
+  runLeaveAccrual()
+    .then(result => console.log(`[leave-accrual] checked ${result.checked} leave types, credited ${result.credited} balances`))
+    .catch(err => console.error('[leave-accrual] failed:', err))
+})
+
+// Year-end leave carry-forward/encashment processing, Jan 1st, across
+// every school, for the year that just ended. POST /hrms/leave-year-end/run
+// is the per-school equivalent.
+cron.schedule('0 3 1 1 *', () => {
+  runLeaveYearEnd()
+    .then(result => console.log(`[leave-year-end] checked ${result.checked} leave types, processed ${result.processed} balances`))
+    .catch(err => console.error('[leave-year-end] failed:', err))
+})
+
+// Daily HR alerts sweep (probation ending, documents/contracts
+// expiring, work anniversaries), 8:00 AM server time, across every
+// school. Same unattended-sweep + manual-trigger-is-the-real-safety-net
+// caveat as the jobs above — POST /hrms/hr-alerts/run is the per-school
+// equivalent.
+cron.schedule('0 8 * * *', () => {
+  runHrAlerts()
+    .then(result => console.log(`[hr-alerts] probation:${result.probationNotified} documents:${result.documentsNotified} anniversaries:${result.anniversariesNotified}`))
+    .catch(err => console.error('[hr-alerts] failed:', err))
 })
 
 app.listen(PORT, () => {

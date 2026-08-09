@@ -5,7 +5,7 @@ import { asyncHandler } from '../../shared/utils/helpers'
 import { amountDue, money } from '../../shared/utils/feeMoney'
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 import { getPermissionsForUser } from '../../shared/middleware/permissions-v2'
-import { FeeRequest, attachFeeScope, requireFeeView, requireFeeDiscount, requireFeeManage } from './lib/guards'
+import { FeeRequest, attachFeeScope, requireFeeView, requireFeeDiscount, requireFeeManage, requireSettingsManage } from './lib/guards'
 
 // Concessions and scholarships.
 //
@@ -263,7 +263,7 @@ router.get('/limits', requireFeeView, asyncHandler(async (req: FeeRequest, res: 
   })
 }))
 
-router.put('/limits/:roleId', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.put('/limits/:roleId', requireSettingsManage, asyncHandler(async (req: FeeRequest, res: Response) => {
   const { max_single_discount, max_monthly_total } = req.body ?? {}
   if (max_single_discount == null || Number(max_single_discount) < 0) {
     return res.status(400).json({ success: false, error: 'max_single_discount must be zero or more' })

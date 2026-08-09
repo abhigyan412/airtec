@@ -1,7 +1,8 @@
 import { Router, Response, Request } from 'express'
 import { supabase } from '../../shared/db/client'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
-import { authenticateFlexible, requireRole, AuthRequest } from '../../shared/middleware/auth'
+import { authenticateFlexible, AuthRequest } from '../../shared/middleware/auth'
+import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
 
 const router = Router()
@@ -51,7 +52,7 @@ router.get('/verify/certificate/:cert_number', asyncHandler(async (req: Request,
 // opened in a new tab, since those can't carry a custom header).
 router.use(authenticateFlexible)
 
-router.get('/certificate/:cert_number', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/certificate/:cert_number', requirePermissionV2('certificate.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { cert_number } = req.params
   const { data: cert } = await supabase
     .from('issued_certificates')
@@ -104,7 +105,7 @@ router.get('/certificate/:cert_number', asyncHandler(async (req: AuthRequest, re
   res.send(html)
 }))
 
-router.get('/admit-card/:exam_id/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/admit-card/:exam_id/:student_id', requirePermissionV2('exam.admit_card_generate'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { exam_id, student_id } = req.params
   const { data: student } = await supabase
     .from('students')
@@ -174,7 +175,7 @@ router.get('/admit-card/:exam_id/:student_id', asyncHandler(async (req: AuthRequ
   </div></body></html>`)
 }))
 
-router.get('/admit-cards/bulk/:exam_id', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/admit-cards/bulk/:exam_id', requirePermissionV2('exam.admit_card_generate'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { exam_id } = req.params
   const { class_id } = req.query
   const { data: exam } = await supabase.from('exams').select('*, academic_years(name)').eq('id', exam_id).eq('school_id', req.user!.school_id).single()
@@ -237,7 +238,7 @@ router.get('/admit-cards/bulk/:exam_id', asyncHandler(async (req: AuthRequest, r
   ${cards}</body></html>`)
 }))
 
-router.get('/id-card/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/id-card/:student_id', requirePermissionV2('student.generate_id'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { student_id } = req.params
   const { data: student } = await supabase
     .from('students')
@@ -251,7 +252,7 @@ router.get('/id-card/:student_id', asyncHandler(async (req: AuthRequest, res: Re
   res.send(idCardPage(student, parent))
 }))
 
-router.get('/id-cards/bulk', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/id-cards/bulk', requirePermissionV2('student.generate_id'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { class_id, section_id } = req.query
   let query = supabase
     .from('students')
@@ -273,7 +274,7 @@ router.get('/id-cards/bulk', asyncHandler(async (req: AuthRequest, res: Response
     ${cards}</body></html>`)
 }))
 
-router.get('/tc/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/tc/:student_id', requirePermissionV2('tc.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { student_id } = req.params
   const { data: tc } = await supabase
     .from('transfer_certificates')
@@ -288,6 +289,80 @@ router.get('/tc/:student_id', asyncHandler(async (req: AuthRequest, res: Respons
   res.send(generateTC(tc))
 }))
 
+// GET /relieving-letter/:exit_id — plain HTML, same rendering approach
+// as TC/certificate above. No document-number sequencing: unlike TCs
+// and certificates, a relieving letter has no uniqueness constraint
+// anywhere else in the app that would need one.
+router.get('/relieving-letter/:exit_id', requirePermissionV2('staff.exit_manage'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { exit_id } = req.params
+  const school_id = req.user!.school_id
+
+  const { data: exit } = await supabase
+    .from('staff_exits')
+    .select('*, users:user_id(full_name), schools:school_id(name, city, affiliation_board, phone)')
+    .eq('id', exit_id)
+    .eq('school_id', school_id)
+    .single()
+  if (!exit || exit.status !== 'settled') return res.status(404).send('<h2>Relieving letter not available — settlement must be complete first.</h2>')
+
+  const { data: profile } = await supabase.from('staff_profiles').select('designation, department, date_of_joining').eq('user_id', exit.user_id).eq('school_id', school_id).maybeSingle()
+
+  res.setHeader('Content-Type', 'text/html')
+  res.send(generateRelievingLetter(exit, profile))
+}))
+
+// GET /offer-letter/:application_id — same rendering approach as the
+// relieving letter above. Only generatable once the offer has actually
+// been approved (status offer_sent or joined), same "gate on real
+// state" reasoning as the relieving letter requiring 'settled'.
+router.get('/offer-letter/:application_id', requirePermissionV2('staff.recruitment_manage'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { application_id } = req.params
+  const school_id = req.user!.school_id
+
+  const { data: application } = await supabase
+    .from('job_applications')
+    .select('*, job_postings(title, department, designation, salary_range), schools:school_id(name, city, affiliation_board, phone)')
+    .eq('id', application_id)
+    .eq('school_id', school_id)
+    .single()
+
+  if (!application || !['offer_sent', 'joined'].includes(application.status)) {
+    return res.status(404).send('<h2>Offer letter not available — the offer must be approved and sent first.</h2>')
+  }
+
+  res.setHeader('Content-Type', 'text/html')
+  res.send(generateOfferLetter(application, application.schools))
+}))
+
+// GET /payslip/:id — printable payslip. Self-or-staff.payroll_view, same
+// pattern as GET /hrms/payslips/:id itself (a staff member can always
+// print their own; anyone else needs the payroll-view permission).
+router.get('/payslip/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { id } = req.params
+  const school_id = req.user!.school_id
+
+  const { data: payslip } = await supabase
+    .from('payslips')
+    .select('*, users:user_id(full_name), schools:school_id(name, city, affiliation_board, phone)')
+    .eq('id', id).eq('school_id', school_id).single()
+  if (!payslip) return res.status(404).send('<h2>Payslip not found</h2>')
+
+  if (payslip.user_id !== req.user!.id) {
+    const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+    if (!isSuperRole && !permissionCodes.has('staff.payroll_view')) {
+      return res.status(403).send('<h2>Missing permission: staff.payroll_view</h2>')
+    }
+  }
+
+  const { data: profile } = await supabase.from('staff_profiles').select('designation, department').eq('user_id', payslip.user_id).eq('school_id', school_id).maybeSingle()
+
+  res.setHeader('Content-Type', 'text/html')
+  res.send(generatePayslip(payslip, profile))
+}))
+
+// Staff callers need exam.view; parents/students keep the existing
+// self-access branch below (own child, published results only) rather
+// than being gated on a staff-oriented permission code.
 router.get('/report-card/:exam_id/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { exam_id } = req.params
   let { student_id } = req.params
@@ -301,6 +376,11 @@ router.get('/report-card/:exam_id/:student_id', asyncHandler(async (req: AuthReq
     const ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
     if (!ownStudentId) return res.status(404).send('<h2>Report card not found</h2>')
     student_id = ownStudentId
+  } else {
+    const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+    if (!isSuperRole && !permissionCodes.has('exam.view')) {
+      return res.status(403).send('<h2>Missing permission: exam.view</h2>')
+    }
   }
 
   const { data: rc } = await supabase
@@ -320,7 +400,7 @@ router.get('/report-card/:exam_id/:student_id', asyncHandler(async (req: AuthReq
   res.send(generateReportCard(rc, marks ?? []))
 }))
 
-router.get('/certificate-templates', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/certificate-templates', requirePermissionV2('certificate.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase
     .from('certificate_templates')
     .select('*')
@@ -331,7 +411,7 @@ router.get('/certificate-templates', asyncHandler(async (req: AuthRequest, res: 
   res.json({ success: true, data })
 }))
 
-router.post('/certificate-templates', requireRole('school_admin', 'principal'),
+router.post('/certificate-templates', requirePermissionV2('certificate.template_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { name, certificate_type, content } = req.body
     if (!name || !certificate_type || !content)
@@ -345,7 +425,7 @@ router.post('/certificate-templates', requireRole('school_admin', 'principal'),
   })
 )
 
-router.get('/issued-certificates', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/issued-certificates', requirePermissionV2('certificate.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { student_id } = req.query
   let query = supabase
     .from('issued_certificates')
@@ -358,7 +438,7 @@ router.get('/issued-certificates', asyncHandler(async (req: AuthRequest, res: Re
   res.json({ success: true, data })
 }))
 
-router.post('/issue-certificate', requireRole('school_admin', 'principal'),
+router.post('/issue-certificate', requirePermissionV2('certificate.generate'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { student_id, template_id, extra_data } = req.body
     const school_id = req.user!.school_id
@@ -447,6 +527,111 @@ function generateTC(tc: any): string {
       <tr><td>Dues Cleared</td><td>: <span class="dotted">${tc.dues_cleared ? 'Yes' : 'No'}</span></td></tr>
     </table>
     <div class="footer"><div class="sig">Class Teacher</div><div class="sig">Principal</div></div>
+  </div></body></html>`
+}
+
+function generateRelievingLetter(exit: any, profile: any): string {
+  const staffName = exit.users?.full_name ?? ''
+  const school = exit.schools ?? {}
+  const fmt = (d: string) => d ? new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : '-'
+  return `<!DOCTYPE html><html><head><title>Relieving Letter</title>
+  <style>@media print{.no-print{display:none}}body{font-family:'Times New Roman',serif;margin:0;background:#fff;color:#000}
+  .container{max-width:750px;margin:0 auto;padding:40px;border:3px double #000;min-height:70vh}
+  h1{text-align:center;font-size:26px;margin:0 0 4px;letter-spacing:2px}
+  .subtitle{text-align:center;font-size:13px;margin-bottom:20px}
+  .letter-title{text-align:center;font-size:18px;font-weight:bold;margin:20px 0;text-decoration:underline}
+  p{font-size:14px;line-height:1.9;text-align:justify}
+  .footer{margin-top:60px}
+  .sig{border-top:1px solid #000;width:180px;text-align:center;padding-top:6px;font-size:12px}</style></head><body>
+  <button class="no-print" onclick="window.print()" style="position:fixed;top:20px;right:20px;padding:10px 20px;background:#4F46E5;color:white;border:none;border-radius:8px;cursor:pointer;">Print</button>
+  <div class="container">
+    <h1>${school.name ?? 'School'}</h1>
+    <div class="subtitle">${school.city ?? ''} · ${school.affiliation_board ?? 'CBSE'}</div>
+    <div class="letter-title">RELIEVING LETTER</div>
+    <p>Date: ${fmt(exit.last_working_day)}</p>
+    <p>This is to certify that <b>${staffName}</b>, who served as <b>${profile?.designation ?? 'a staff member'}</b>${profile?.department ? ` in the ${profile.department} department` : ''}${profile?.date_of_joining ? ` from ${fmt(profile.date_of_joining)}` : ''}, has been relieved of their duties effective <b>${fmt(exit.last_working_day)}</b>, following their resignation dated ${fmt(exit.resignation_date)}${exit.reason ? ` (${exit.reason})` : ''}.</p>
+    <p>All dues have been settled and the exit clearance process has been completed. We wish them success in their future endeavors.</p>
+    <div class="footer"><div class="sig">Principal</div></div>
+  </div></body></html>`
+}
+
+function generateOfferLetter(application: any, school: any): string {
+  const posting = application.job_postings ?? {}
+  const fmt = (d: string) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
+  const designation = posting.designation || application.current_designation || 'the offered position'
+  return `<!DOCTYPE html><html><head><title>Offer Letter</title>
+  <style>@media print{.no-print{display:none}}body{font-family:'Times New Roman',serif;margin:0;background:#fff;color:#000}
+  .container{max-width:750px;margin:0 auto;padding:40px;border:3px double #000;min-height:70vh}
+  h1{text-align:center;font-size:26px;margin:0 0 4px;letter-spacing:2px}
+  .subtitle{text-align:center;font-size:13px;margin-bottom:20px}
+  .letter-title{text-align:center;font-size:18px;font-weight:bold;margin:20px 0;text-decoration:underline}
+  p{font-size:14px;line-height:1.9;text-align:justify}
+  .footer{margin-top:60px}
+  .sig{border-top:1px solid #000;width:180px;text-align:center;padding-top:6px;font-size:12px}</style></head><body>
+  <button class="no-print" onclick="window.print()" style="position:fixed;top:20px;right:20px;padding:10px 20px;background:#4F46E5;color:white;border:none;border-radius:8px;cursor:pointer;">Print</button>
+  <div class="container">
+    <h1>${school?.name ?? 'School'}</h1>
+    <div class="subtitle">${school?.city ?? ''} · ${school?.affiliation_board ?? 'CBSE'}</div>
+    <div class="letter-title">OFFER OF EMPLOYMENT</div>
+    <p>Date: ${fmt(application.updated_at)}</p>
+    <p>Dear <b>${application.candidate_name}</b>,</p>
+    <p>We are pleased to offer you the position of <b>${designation}</b>${posting.department ? ` in the ${posting.department} department` : ''} at ${school?.name ?? 'our school'}. This offer is extended on the basis of the interviews and assessments conducted as part of our selection process.</p>
+    <p>${posting.salary_range || application.expected_salary
+      ? `The compensation for this role is ${posting.salary_range || `₹${Number(application.expected_salary).toLocaleString('en-IN')}`}, subject to the terms of your employment contract.`
+      : 'Compensation details will be shared separately as part of your employment contract.'}</p>
+    <p>Please confirm your acceptance of this offer at the earliest so we can proceed with your onboarding${application.notice_period ? `, keeping in mind your notice period of ${application.notice_period}` : ''}.</p>
+    <p>We look forward to welcoming you to our team.</p>
+    <div class="footer"><div class="sig">Principal</div></div>
+  </div></body></html>`
+}
+
+const PAYSLIP_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
+
+function generatePayslip(p: any, profile: any): string {
+  const staffName = p.users?.full_name ?? ''
+  const school = p.schools ?? {}
+  const fmt = (n: any) => `₹${Number(n ?? 0).toLocaleString('en-IN')}`
+  const earnings = [
+    ['Basic Salary', p.basic_salary], ['HRA', p.hra], ['DA', p.da],
+    ['Conveyance', p.conveyance_allowance], ['Medical Allowance', p.medical_allowance], ['Other Allowances', p.other_allowances],
+  ].filter(([, v]) => Number(v) > 0)
+  const deductions = [
+    ['PF (Employee)', p.pf_deduction], ['Professional Tax', p.professional_tax], ['TDS', p.tds],
+    ['Loss of Pay', p.lop_amount], ['Loan Recovery', p.loan_deduction], ['Other Deductions', p.other_deductions],
+  ].filter(([, v]) => Number(v) > 0)
+  const row = ([label, val]: [string, any]) => `<tr><td style="padding:6px 4px;">${label}</td><td style="padding:6px 4px;text-align:right;">${fmt(val)}</td></tr>`
+
+  return `<!DOCTYPE html><html><head><title>Payslip - ${PAYSLIP_MONTHS[p.month - 1]} ${p.year}</title>
+  <style>@media print{.no-print{display:none}}body{font-family:Arial,sans-serif;margin:0;background:#f9fafb}
+  .card{max-width:640px;margin:20px auto;background:white;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);overflow:hidden}
+  .header{background:linear-gradient(135deg,#4F46E5,#7C3AED);color:white;padding:20px 28px}
+  .body{padding:24px 28px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;padding:6px 4px;font-size:11px;color:#6b7280;text-transform:uppercase;border-bottom:1px solid #e5e7eb}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px}
+  .net{background:#f9fafb;border-radius:10px;padding:16px;margin-top:20px;display:flex;justify-content:space-between;align-items:center}
+  .lop-note{font-size:11px;color:#6b7280;margin-top:4px}</style></head><body>
+  <button class="no-print" onclick="window.print()" style="position:fixed;top:20px;right:20px;padding:10px 20px;background:#4F46E5;color:white;border:none;border-radius:8px;cursor:pointer;">Print</button>
+  <div class="card">
+    <div class="header">
+      <div style="font-size:18px;font-weight:bold;">${school.name ?? 'School'}</div>
+      <div style="font-size:12px;opacity:0.85;margin-top:2px;">${school.city ?? ''} · ${school.affiliation_board ?? 'CBSE'}</div>
+      <div style="font-size:15px;font-weight:600;margin-top:10px;">Payslip — ${PAYSLIP_MONTHS[p.month - 1]} ${p.year}</div>
+    </div>
+    <div class="body">
+      <p style="font-size:13px;color:#6b7280;margin:0 0 20px;"><b style="color:#111;">${staffName}</b>${profile?.designation ? ` · ${profile.designation}` : ''}${profile?.department ? ` · ${profile.department}` : ''}</p>
+      <div class="cols">
+        <table><thead><tr><th colspan="2">Earnings</th></tr></thead><tbody>${earnings.map(row).join('')}</tbody></table>
+        <table><thead><tr><th colspan="2">Deductions</th></tr></thead><tbody>${deductions.map(row).join('')}</tbody></table>
+      </div>
+      ${Number(p.lop_days) > 0 ? `<p class="lop-note">Loss of Pay: ${p.lop_days} day(s)</p>` : ''}
+      ${Number(p.pf_employer) > 0 ? `<p class="lop-note">Employer PF Contribution (informational, not deducted): ${fmt(p.pf_employer)}</p>` : ''}
+      <div class="net">
+        <div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;">Gross</div><div style="font-size:16px;font-weight:700;">${fmt(p.gross_salary)}</div></div>
+        <div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;">Deductions</div><div style="font-size:16px;font-weight:700;color:#dc2626;">${fmt(p.total_deductions)}</div></div>
+        <div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;">Net Pay</div><div style="font-size:20px;font-weight:800;color:#4F46E5;">${fmt(p.net_salary)}</div></div>
+      </div>
+    </div>
   </div></body></html>`
 }
 

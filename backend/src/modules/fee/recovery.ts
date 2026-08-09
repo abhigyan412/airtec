@@ -4,7 +4,7 @@ import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { agingBucket, amountDue, daysOverdue, money } from '../../shared/utils/feeMoney'
 import { chunk } from './lib/db'
 import {
-  FeeRequest, attachFeeScope, requireFeeView, requireFeeCollect, requireFeeManage,
+  FeeRequest, attachFeeScope, requireFeeView, requireFeeCollect, requireFeeArrearManage,
   scopeInvoiceQuery, studentsEmbed,
 } from './lib/guards'
 
@@ -222,7 +222,7 @@ router.get('/defaulters', requireFeeView, asyncHandler(async (req: FeeRequest, r
 // Rules live on the structure now, so a school can charge a flat fee, per day, or
 // a percentage per month with a grace period — none of which the old flat
 // per-day rate could express.
-router.post('/apply-late-fees', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.post('/apply-late-fees', requireFeeArrearManage, asyncHandler(async (req: FeeRequest, res: Response) => {
   const school_id = req.user!.school_id
   const today = new Date()
 
@@ -274,7 +274,7 @@ router.post('/apply-late-fees', requireFeeManage, asyncHandler(async (req: FeeRe
 // source invoice is retired. Without that last step the same rupees appear in
 // dues, aging, defaulters and arrears at once — every outstanding figure in the
 // product inflates the moment a school rolls over a year.
-router.post('/arrears/carry-forward', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.post('/arrears/carry-forward', requireFeeArrearManage, asyncHandler(async (req: FeeRequest, res: Response) => {
   const { from_academic_year_id, to_academic_year_id } = req.body ?? {}
   const school_id = req.user!.school_id
 
@@ -377,7 +377,7 @@ router.post('/arrears/:id/payment', requireFeeCollect, asyncHandler(async (req: 
   res.json({ success: true, data })
 }))
 
-router.patch('/arrears/:id/waive', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.patch('/arrears/:id/waive', requireFeeArrearManage, asyncHandler(async (req: FeeRequest, res: Response) => {
   const reason = String(req.body?.reason ?? '').trim()
   if (!reason) return res.status(400).json({ success: false, error: 'A reason is required to waive an arrear' })
 

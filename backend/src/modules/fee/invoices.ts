@@ -2,7 +2,7 @@ import { Router, Response } from 'express'
 import { supabase } from '../../shared/db/client'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { amountDue } from '../../shared/utils/feeMoney'
-import { FeeRequest, attachFeeScope, requireFeeManage, scopeInvoiceQuery, studentsEmbed } from './lib/guards'
+import { FeeRequest, attachFeeScope, requireFeeInvoiceGenerate, scopeInvoiceQuery, studentsEmbed } from './lib/guards'
 
 const router = Router()
 const STUDENT_COLUMNS = 'id, first_name, last_name, admission_number, class_id, section_id, classes(name), sections(name)'
@@ -65,7 +65,7 @@ router.get('/:id', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Res
 // Voiding a mistake. Cancelled rather than deleted so the invoice number stays
 // accounted for, and the partial unique index excludes it so the period can be
 // billed again correctly.
-router.patch('/:id/cancel', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.patch('/:id/cancel', requireFeeInvoiceGenerate, asyncHandler(async (req: FeeRequest, res: Response) => {
   const school_id = req.user!.school_id
   const { data: invoice } = await supabase.from('fee_invoices')
     .select('id, amount_paid, status').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()

@@ -41,12 +41,38 @@ export const requireFeeCollect = requirePermissionV2('fee.collect')
 export const requireFeeDiscount = requirePermissionV2('fee.discount')
 
 /**
- * Configure the money: fee heads, class amounts, discount limits, invoice
- * generation, carry-forward, waivers, the late-fine sweep. These change what a
+ * Configure the catalogue and the plans: fee heads, structures and versions,
+ * assignments, RTE rates, discount rules and scholarships. These change what a
  * family owes, as opposed to recording what they paid, which is why they are
  * not folded into fee.collect.
  */
 export const requireFeeManage = requirePermissionV2('fee.structure_manage')
+
+// The three codes below are narrower than fee.structure_manage on purpose. Every
+// role seeded with them also holds fee.structure_manage (CORE grants it to
+// School Admin / Principal / Vice Principal, and Accountant lists both), so
+// splitting them out takes nothing away today — it exists so a school can hand a
+// clerk "generate the invoices" or "chase the arrears" without also handing them
+// the fee catalogue.
+
+/** Run a billing cycle: preview, generate, cancel an invoice. */
+export const requireFeeInvoiceGenerate = requirePermissionV2('fee.invoice_generate')
+
+/** Create, bill or cancel a one-off charge. */
+export const requireFeeAdhocManage = requirePermissionV2('fee.adhoc_manage')
+
+/** Carry arrears forward, waive them, or run the late-fine sweep. */
+export const requireFeeArrearManage = requirePermissionV2('fee.arrear_manage')
+
+/**
+ * Set a role's discount ceiling.
+ *
+ * Deliberately NOT fee.discount or fee.structure_manage: this endpoint sets the
+ * auto-approve limit *for* the roles that hold fee.discount, and Accountant
+ * holds both fee.discount and fee.structure_manage. Gating it on either would
+ * let an Accountant raise their own ceiling and self-approve any concession.
+ */
+export const requireSettingsManage = requirePermissionV2('settings.manage')
 
 /**
  * Resolve the caller's fee scope onto the request, or 403 if they have none.

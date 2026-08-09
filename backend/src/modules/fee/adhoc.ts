@@ -4,7 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { money } from '../../shared/utils/feeMoney'
-import { FeeRequest, attachFeeScope, requireFeeManage, scopeInvoiceQuery, studentsEmbed } from './lib/guards'
+import { FeeRequest, attachFeeScope, requireFeeAdhocManage, scopeInvoiceQuery, studentsEmbed } from './lib/guards'
 
 // One-off charges — a trip, a lost book, a re-exam.
 //
@@ -73,7 +73,7 @@ router.get('/', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Respon
   res.json({ success: true, data })
 }))
 
-router.post('/', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.post('/', requireFeeAdhocManage, asyncHandler(async (req: FeeRequest, res: Response) => {
   const body = CreateSchema.parse(req.body)
   const school_id = req.user!.school_id
 
@@ -92,7 +92,7 @@ router.post('/', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Res
   res.status(201).json({ success: true, data: { ...charge, invoice_id: invoice?.id ?? null }, invoice })
 }))
 
-router.post('/:id/bill', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.post('/:id/bill', requireFeeAdhocManage, asyncHandler(async (req: FeeRequest, res: Response) => {
   const school_id = req.user!.school_id
   const { data: charge } = await supabase.from('fee_adhoc_charges')
     .select('*').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
@@ -109,7 +109,7 @@ router.post('/:id/bill', requireFeeManage, asyncHandler(async (req: FeeRequest, 
   res.status(201).json({ success: true, data: invoice })
 }))
 
-router.patch('/:id/cancel', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.patch('/:id/cancel', requireFeeAdhocManage, asyncHandler(async (req: FeeRequest, res: Response) => {
   const { data: charge } = await supabase.from('fee_adhoc_charges')
     .select('id, invoice_id').eq('id', req.params.id).eq('school_id', req.user!.school_id).maybeSingle()
   if (!charge) return res.status(404).json({ success: false, error: 'Charge not found' })

@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { Search, Users, UserCheck, UserMinus, UserPlus, Briefcase, ChevronRight } from 'lucide-react'
+import { Search, Users, UserCheck, UserPlus, Briefcase, ChevronRight, ShieldAlert, FileWarning } from 'lucide-react'
 import Link from 'next/link'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { StatCard } from '@/components/shared/StatCard'
@@ -70,6 +70,7 @@ export default function StaffDirectoryPage() {
             <Button variant="outline" size="sm" asChild><Link href="/hr/leave">Leave</Link></Button>
             <Button variant="outline" size="sm" asChild><Link href="/hr/payroll">Payroll</Link></Button>
             <Button variant="outline" size="sm" asChild><Link href="/hr/reports">Reports</Link></Button>
+            <Button variant="outline" size="sm" asChild><Link href="/hr/org-chart">Org Chart</Link></Button>
             <Button variant="outline" size="sm" asChild><Link href="/hr/permissions">Permissions</Link></Button>
             <Button size="sm" asChild>
               <Link href="/hr/recruitment"><Briefcase className="h-4 w-4" /> Recruitment</Link>
@@ -86,9 +87,9 @@ export default function StaffDirectoryPage() {
           <>
             <StatCard label="Total Staff"    value={stats?.total_staff ?? 0}            icon={Users}     accent="primary" />
             <StatCard label="Active"         value={stats?.active_staff ?? 0}           icon={UserCheck} accent="success" />
-            <StatCard label="On Leave"       value={stats?.on_leave ?? 0}               icon={UserMinus} accent="warning" />
-            <StatCard label="Pending Leaves" value={stats?.pending_leave_requests ?? 0} icon={UserMinus} accent="info" />
             <StatCard label="Open Positions" value={stats?.open_positions ?? 0}         icon={Briefcase} accent="info" />
+            <StatCard label="Probation Ending Soon" value={stats?.probation_ending_soon ?? 0} icon={ShieldAlert} accent="warning" />
+            <StatCard label="Documents Expiring" value={stats?.documents_expiring_soon ?? 0} icon={FileWarning} accent="warning" />
           </>
         )}
       </div>

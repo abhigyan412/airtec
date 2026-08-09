@@ -6,7 +6,7 @@ import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { FREQUENCIES, Frequency, findPeriod, periodsForFrequency } from '../../shared/utils/billingPeriod'
 import { alreadyBilled, resolveBilling } from './lib/resolve'
 import { insertChunked, selectIn } from './lib/db'
-import { FeeRequest, requireFeeView, requireFeeManage } from './lib/guards'
+import { FeeRequest, requireFeeView, requireFeeInvoiceGenerate } from './lib/guards'
 
 // Raising a period's invoices.
 //
@@ -133,7 +133,7 @@ router.get('/periods', requireFeeView, asyncHandler(async (req: FeeRequest, res:
   })
 }))
 
-router.post('/preview', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.post('/preview', requireFeeInvoiceGenerate, asyncHandler(async (req: FeeRequest, res: Response) => {
   const body = RunSchema.parse(req.body)
   const r = await resolve(req.user!.school_id, body)
   if ('error' in r) return res.status(400).json({ success: false, error: r.error })
@@ -153,7 +153,7 @@ router.post('/preview', requireFeeManage, asyncHandler(async (req: FeeRequest, r
   })
 }))
 
-router.post('/generate', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
+router.post('/generate', requireFeeInvoiceGenerate, asyncHandler(async (req: FeeRequest, res: Response) => {
   const body = RunSchema.parse(req.body)
   const school_id = req.user!.school_id
 
