@@ -1515,18 +1515,20 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
     const fromDate = `${year}-${mStr}-01`
     const toDate = `${year}-${mStr}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`
 
-    const [{ rollupByUser }, { data: school }, { data: ptSlabs }, { data: activeLoans }, { data: encashProfiles }] = await Promise.all([
+    const [{ rollupByUser }, { data: school }, { data: ptSlabs }, { data: activeLoans }, { data: encashProfiles }, { data: bonuses }] = await Promise.all([
       computeStaffAttendanceRollup(school_id, targetUserIds, fromDate, toDate),
       supabase.from('schools').select('lop_grace_days, lop_per_day_formula').eq('id', school_id).single(),
       supabase.from('professional_tax_slabs').select('min_gross, max_gross, amount').eq('school_id', school_id),
       supabase.from('staff_loans').select('*').eq('school_id', school_id).eq('status', 'active').in('user_id', targetUserIds),
       supabase.from('staff_profiles').select('user_id, pending_leave_encashment_days').in('user_id', targetUserIds).gt('pending_leave_encashment_days', 0),
+      supabase.from('staff_bonuses').select('user_id, amount, reason').eq('school_id', school_id).eq('month', month).eq('year', year).in('user_id', targetUserIds),
     ])
 
     const graceDays = school?.lop_grace_days ?? 0
     const formula = school?.lop_per_day_formula ?? 'gross_30'
     const loanByUser = new Map((activeLoans ?? []).map(l => [l.user_id, l]))
     const encashDaysByUser = new Map((encashProfiles ?? []).map(p => [p.user_id, p.pending_leave_encashment_days]))
+    const bonusByUser = new Map((bonuses ?? []).map(b => [b.user_id, b]))
 
     // Safety check: LOP treats an unmarked working day the same as an
     // absence, so generating payroll before a month's attendance has
@@ -1589,7 +1591,14 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
       // reasoning as LOP/loan recovery being computed fresh here).
       const encashDays = encashDaysByUser.get(s.user_id) ?? 0
       const leaveEncashment = encashDays > 0 ? Math.round(encashDays * (gross / 30)) : 0
-      const net = gross - totalDeductions + leaveEncashment
+
+      // Bonus — a one-off award staged in staff_bonuses for this exact
+      // month (see that table's migration), snapshotted onto the
+      // payslip the same way leave_encashment is: added on top of gross
+      // rather than folded into it, so it never feeds PF/PT/TDS.
+      const bonus = bonusByUser.get(s.user_id)
+      const bonusAmount = Number(bonus?.amount ?? 0)
+      const net = gross - totalDeductions + leaveEncashment + bonusAmount
 
       const payslipData = {
         school_id, user_id: s.user_id, month, year,
@@ -1598,6 +1607,7 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
         other_allowances: s.other_allowances, gross_salary: gross,
         pf_deduction: s.pf_deduction, pf_employer: s.pf_employer ?? 0, professional_tax: professionalTax,
         other_deductions: s.other_deductions, tds, loan_deduction: loanDeduction, leave_encashment: leaveEncashment,
+        bonus_amount: bonusAmount, bonus_reason: bonus?.reason ?? null,
         lop_days: lopDays, lop_amount: lopAmount, total_deductions: totalDeductions, net_salary: net,
         payment_status: 'pending', generated_by: req.user!.id,
       }
@@ -1701,15 +1711,16 @@ router.patch('/payslips/:id', requirePermissionV2('staff.payroll_manage'),
     // total_deductions must include lop_amount, not just net_salary — a
     // manual LOP edit used to leave the two out of sync (net_salary
     // reflected the new LOP, total_deductions silently didn't). net_salary
-    // must also keep adding back leave_encashment (an earnings line, not
-    // a deduction) — generation includes it, so recomputing here without
-    // it would silently drop it on the first manual LOP edit.
+    // must also keep adding back leave_encashment and bonus_amount
+    // (earnings lines, not deductions) — generation includes both, so
+    // recomputing here without them would silently drop them on the
+    // first manual LOP edit.
     if (lop_amount !== undefined) {
-      const { data: existing } = await supabase.from('payslips').select('gross_salary, total_deductions, lop_amount, leave_encashment').eq('id', id).single()
+      const { data: existing } = await supabase.from('payslips').select('gross_salary, total_deductions, lop_amount, leave_encashment, bonus_amount').eq('id', id).single()
       if (existing) {
         const deductionsWithoutOldLop = existing.total_deductions - Number(existing.lop_amount ?? 0)
         update.total_deductions = deductionsWithoutOldLop + lop_amount
-        update.net_salary = existing.gross_salary - update.total_deductions + Number(existing.leave_encashment ?? 0)
+        update.net_salary = existing.gross_salary - update.total_deductions + Number(existing.leave_encashment ?? 0) + Number(existing.bonus_amount ?? 0)
       }
     }
 
@@ -1870,6 +1881,69 @@ router.patch('/loans/:id', requirePermissionV2('staff.payroll_manage'),
     const { data, error } = await supabase.from('staff_loans').update({ status, updated_at: new Date().toISOString() }).eq('id', id).eq('school_id', req.user!.school_id).select().single()
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true, data })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// STAFF BONUSES — one-off festival/performance bonuses, picked up by
+// POST /payslips/generate for the matching month (see migration
+// 20260809000000_staff_bonuses.sql for why this is its own table
+// rather than a salary_structures column).
+// ═══════════════════════════════════════════════════════════════
+
+const StaffBonusSchema = z.object({
+  user_ids: z.array(z.string().uuid()).min(1),
+  month: z.number().int().min(1).max(12),
+  year: z.number().int(),
+  amount: z.number().positive(),
+  reason: z.string().min(1),
+})
+
+// GET /hrms/bonuses?month=&year= — bonuses staged for a payroll run,
+// before or after generation (generation just snapshots amount+reason
+// onto the payslip; the row here stays as the editable source record).
+router.get('/bonuses', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { month, year } = req.query
+    const school_id = req.user!.school_id
+    const m = Number(month) || new Date().getMonth() + 1
+    const y = Number(year) || new Date().getFullYear()
+
+    const { data, error } = await supabase
+      .from('staff_bonuses').select('*, users:user_id(full_name)')
+      .eq('school_id', school_id).eq('month', m).eq('year', y)
+      .order('created_at', { ascending: false })
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// POST /hrms/bonuses — one row per user_id in the body, so "give
+// everyone ₹2000 for Diwali" is a single call with every staff ID
+// rather than N separate requests. Upserts on (user_id, month, year) —
+// resubmitting for someone already awarded that month just updates the
+// amount/reason instead of erroring or duplicating.
+router.post('/bonuses', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const body = StaffBonusSchema.parse(req.body)
+    const school_id = req.user!.school_id
+
+    const rows = body.user_ids.map(user_id => ({
+      school_id, user_id, month: body.month, year: body.year,
+      amount: body.amount, reason: body.reason, created_by: req.user!.id,
+    }))
+    const { data, error } = await supabase
+      .from('staff_bonuses').upsert(rows, { onConflict: 'user_id,month,year' }).select()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.delete('/bonuses/:id', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { error } = await supabase.from('staff_bonuses').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
   })
 )
 

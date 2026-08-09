@@ -32,6 +32,45 @@ const CreateExamSubjectSchema = z.object({
     exam_hall: z.string().optional(),
 })
 
+const UpdateExamSubjectSchema = z.object({
+    exam_date: z.string().optional(),
+    start_time: z.string().optional(),
+    end_time: z.string().optional(),
+    max_marks: z.number().optional(),
+    pass_marks: z.number().optional(),
+    exam_hall: z.string().optional(),
+})
+
+const CreateTimeSlotSchema = z.object({
+    name: z.string().min(1),
+    start_time: z.string().min(1),
+    end_time: z.string().min(1),
+})
+
+const CreateTemplateSchema = z.object({
+    name: z.string().min(1),
+    exam_type: z.enum(['unit_test', 'monthly', 'half_yearly', 'annual', 'pre_board', 'practical', 'other']),
+    grading_system: z.enum(['marks', 'grades', 'cgpa']).default('marks'),
+    subjects: z.array(z.object({
+        class_id: z.string(),
+        subject_name: z.string().min(1),
+        time_slot_id: z.string().optional(),
+        max_marks: z.number().default(100),
+        pass_marks: z.number().default(33),
+    })).min(1),
+})
+
+const ApplyTemplateSchema = z.object({
+    name: z.string().min(1),
+    academic_year_id: z.string().optional(),
+    start_date: z.string().optional(),
+    end_date: z.string().optional(),
+    subjects: z.array(z.object({
+        template_subject_id: z.string(),
+        exam_date: z.string().optional(),
+    })).min(1),
+})
+
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { page = '1', limit = '20', status } = req.query
     const { from, to } = getPagination(Number(page), Number(limit))
@@ -49,13 +88,22 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
 router.get('/stats', asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
-    const [total, draft, ongoing, completed] = await Promise.all([
+    // "Results declared" spans every stage from the initial declaration
+    // through the freeze/verify/publish workflow (see the status-flow
+    // comment above the freeze-workflow routes below) — not just the
+    // literal 'result_declared' value, and NOT 'completed' (an exam can
+    // be completed with marks still unentered/unpublished).
+    const [total, draft, ongoing, completed, resultsDeclared] = await Promise.all([
         supabase.from('exams').select('*', { count: 'exact', head: true }).eq('school_id', school_id),
         supabase.from('exams').select('*', { count: 'exact', head: true }).eq('school_id', school_id).eq('status', 'draft'),
         supabase.from('exams').select('*', { count: 'exact', head: true }).eq('school_id', school_id).eq('status', 'ongoing'),
         supabase.from('exams').select('*', { count: 'exact', head: true }).eq('school_id', school_id).eq('status', 'completed'),
+        supabase.from('exams').select('*', { count: 'exact', head: true }).eq('school_id', school_id).in('status', ['result_declared', 'result_frozen', 'result_verified', 'result_published']),
     ])
-    res.json({ success: true, data: { total: total.count ?? 0, draft: draft.count ?? 0, ongoing: ongoing.count ?? 0, completed: completed.count ?? 0 } })
+    res.json({ success: true, data: {
+        total: total.count ?? 0, draft: draft.count ?? 0, ongoing: ongoing.count ?? 0,
+        completed: completed.count ?? 0, results_declared: resultsDeclared.count ?? 0,
+    } })
 }))
 
 // GET /exams/upcoming — exams starting within the next N days (default 7),
@@ -104,6 +152,166 @@ router.post('/subjects/add', requirePermissionV2('exam.schedule'),
     })
 )
 
+// ── PATCH/DELETE /subjects/:id — exam_subjects rows could only ever be
+// created before this (POST /subjects/add above); no way to correct a
+// typo'd date/marks or remove a row short of touching the DB directly.
+// Also what the "apply template" flow below leans on — a template just
+// creates dateless rows, these are what let a date get filled in per
+// row afterward.
+router.patch('/subjects/:id', requirePermissionV2('exam.schedule'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const body = UpdateExamSubjectSchema.parse(req.body)
+        const { data, error } = await supabase
+            .from('exam_subjects')
+            .update(body)
+            .eq('id', req.params.id)
+            .eq('school_id', req.user!.school_id)
+            .select().single()
+        if (error) return res.status(400).json({ success: false, error: error.message })
+        if (!data) return res.status(404).json({ success: false, error: 'Subject not found' })
+        res.json({ success: true, data })
+    })
+)
+
+router.delete('/subjects/:id', requirePermissionV2('exam.schedule'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const { error } = await supabase.from('exam_subjects').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
+        if (error) return res.status(400).json({ success: false, error: error.message })
+        res.json({ success: true })
+    })
+)
+
+// ── EXAM TIME SLOTS — school-wide reusable named windows (e.g. "Morning
+// Session · 9:00-12:00"), picked by name instead of re-typing the same
+// start/end time on every subject/every exam.
+router.get('/time-slots', asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { data, error } = await supabase
+        .from('exam_time_slots').select('*').eq('school_id', req.user!.school_id).order('start_time')
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+}))
+
+router.post('/time-slots', requirePermissionV2('exam.schedule'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const body = CreateTimeSlotSchema.parse(req.body)
+        const { data, error } = await supabase
+            .from('exam_time_slots').insert({ ...body, school_id: req.user!.school_id }).select().single()
+        if (error) return res.status(400).json({ success: false, error: error.message })
+        res.status(201).json({ success: true, data })
+    })
+)
+
+router.delete('/time-slots/:id', requirePermissionV2('exam.schedule'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const { error } = await supabase.from('exam_time_slots').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
+        if (error) return res.status(400).json({ success: false, error: error.message })
+        res.json({ success: true })
+    })
+)
+
+// ── EXAM TEMPLATES — a reusable class+subject+time-slot blueprint for a
+// recurring exam type (e.g. "Half Yearly Examination"). A school's exam
+// calendar is structurally fixed year to year; only actual dates shift.
+// POST /templates/:id/apply below is what turns a blueprint into a real
+// exams row + its exam_subjects, in one call instead of one-at-a-time.
+router.get('/templates', asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { data, error } = await supabase
+        .from('exam_templates')
+        .select('*, exam_template_subjects(*, classes(name), exam_time_slots(name, start_time, end_time))')
+        .eq('school_id', req.user!.school_id)
+        .order('created_at', { ascending: false })
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+}))
+
+router.post('/templates', requirePermissionV2('exam.create'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const body = CreateTemplateSchema.parse(req.body)
+        const school_id = req.user!.school_id
+
+        const { data: template, error: templateErr } = await supabase
+            .from('exam_templates')
+            .insert({ name: body.name, exam_type: body.exam_type, grading_system: body.grading_system, school_id, created_by: req.user!.id })
+            .select().single()
+        if (templateErr) return res.status(400).json({ success: false, error: templateErr.message })
+
+        const { error: subjectsErr } = await supabase
+            .from('exam_template_subjects')
+            .insert(body.subjects.map(s => ({ ...s, template_id: template.id })))
+        if (subjectsErr) {
+            // Roll back the orphaned template rather than leaving a
+            // subject-less template behind that "New Template" would
+            // otherwise never let you fix (no edit route — recreate-only,
+            // matching certificate_templates' existing convention).
+            await supabase.from('exam_templates').delete().eq('id', template.id)
+            return res.status(400).json({ success: false, error: subjectsErr.message })
+        }
+
+        res.status(201).json({ success: true, data: template })
+    })
+)
+
+router.delete('/templates/:id', requirePermissionV2('exam.create'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const { error } = await supabase.from('exam_templates').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
+        if (error) return res.status(400).json({ success: false, error: error.message })
+        res.json({ success: true })
+    })
+)
+
+router.post('/templates/:id/apply', requirePermissionV2('exam.create'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const body = ApplyTemplateSchema.parse(req.body)
+        const school_id = req.user!.school_id
+
+        const { data: templateSubjects, error: tsErr } = await supabase
+            .from('exam_template_subjects')
+            .select('*, exam_time_slots(start_time, end_time)')
+            .eq('template_id', req.params.id)
+        if (tsErr) return res.status(400).json({ success: false, error: tsErr.message })
+        if (!templateSubjects?.length) return res.status(404).json({ success: false, error: 'Template not found or has no subjects' })
+
+        const { data: template, error: templateErr } = await supabase
+            .from('exam_templates').select('exam_type, grading_system').eq('id', req.params.id).eq('school_id', school_id).single()
+        if (templateErr || !template) return res.status(404).json({ success: false, error: 'Template not found' })
+
+        let academic_year_id = body.academic_year_id
+        if (!academic_year_id) {
+            const { data: currentYear } = await supabase.from('academic_years').select('id').eq('school_id', school_id).eq('is_current', true).maybeSingle()
+            academic_year_id = currentYear?.id
+        }
+
+        const { data: exam, error: examErr } = await supabase
+            .from('exams')
+            .insert({
+                school_id, created_by: req.user!.id, name: body.name,
+                exam_type: template.exam_type, grading_system: template.grading_system,
+                academic_year_id, start_date: body.start_date || null, end_date: body.end_date || null,
+            })
+            .select().single()
+        if (examErr) return res.status(400).json({ success: false, error: examErr.message })
+
+        const dateBySubjectId = new Map(body.subjects.map(s => [s.template_subject_id, s.exam_date]))
+        const subjectRows = templateSubjects.map((ts: any) => ({
+            exam_id: exam.id, school_id, class_id: ts.class_id, subject_name: ts.subject_name,
+            max_marks: ts.max_marks, pass_marks: ts.pass_marks,
+            exam_date: dateBySubjectId.get(ts.id) || null,
+            start_time: ts.exam_time_slots?.start_time ?? null,
+            end_time: ts.exam_time_slots?.end_time ?? null,
+        }))
+        const { error: insertErr } = await supabase.from('exam_subjects').insert(subjectRows)
+        if (insertErr) {
+            // Same reasoning as the template-creation rollback above — an
+            // exam with zero datesheet rows is a dead end with no bulk
+            // recovery, so don't leave one behind on a partial failure.
+            await supabase.from('exams').delete().eq('id', exam.id)
+            return res.status(400).json({ success: false, error: insertErr.message })
+        }
+
+        res.status(201).json({ success: true, data: exam })
+    })
+)
+
 router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { data, error } = await supabase
@@ -119,9 +327,21 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.post('/', requirePermissionV2('exam.create'),
     asyncHandler(async (req: AuthRequest, res: Response) => {
         const body = CreateExamSchema.parse(req.body)
+        const school_id = req.user!.school_id
+
+        // The frontend form has never sent this (dead code fetching
+        // academic years and not using them) — every exam has been
+        // created with a null academic year. Default to the current one
+        // rather than leaving it unset.
+        let academic_year_id = body.academic_year_id
+        if (!academic_year_id) {
+            const { data: currentYear } = await supabase.from('academic_years').select('id').eq('school_id', school_id).eq('is_current', true).maybeSingle()
+            academic_year_id = currentYear?.id
+        }
+
         const { data, error } = await supabase
             .from('exams')
-            .insert({ ...body, school_id: req.user!.school_id, created_by: req.user!.id })
+            .insert({ ...body, academic_year_id, school_id, created_by: req.user!.id })
             .select().single()
         if (error) return res.status(400).json({ success: false, error: error.message })
         res.status(201).json({ success: true, data })

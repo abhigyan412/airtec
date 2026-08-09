@@ -1,9 +1,9 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { hrmsApi } from '@/lib/api'
+import { hrmsApi, calendarApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { ArrowLeft, Loader2, ClipboardList, BarChart3, ChevronLeft, ChevronRight, Users, UserCheck, Inbox, Clock3, Plus, Trash2, Check, X } from 'lucide-react'
+import { ArrowLeft, Loader2, ClipboardList, BarChart3, ChevronLeft, ChevronRight, Users, UserCheck, Inbox, Clock3, Plus, Trash2, Check, X, PartyPopper } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -91,6 +91,24 @@ function MarkTab() {
     queryFn: () => hrmsApi.attendance.list({ date }).then(r => r.data),
   })
 
+  // Same academic calendar (holidays + weekly-off) the backend rollup
+  // already excludes from working-day counts — surfaced here too so the
+  // marking sheet doesn't read as "nobody's attendance is marked" on a
+  // day nobody was expected to mark in the first place.
+  const dateYear = Number(date.slice(0, 4))
+  const { data: holidaysInYear } = useQuery({
+    queryKey: ['calendar-holidays', dateYear],
+    queryFn: () => calendarApi.holidays.list(dateYear).then(r => r.data),
+  })
+  const { data: weeklyOff } = useQuery({
+    queryKey: ['calendar-weekly-off'],
+    queryFn: () => calendarApi.weeklyOff.get().then(r => r.data),
+    staleTime: 60 * 60 * 1000,
+  })
+  const holidayToday = (holidaysInYear ?? []).find((h: any) => h.date === date)
+  const isWeeklyOffToday = (weeklyOff?.weekly_off_days ?? []).includes(new Date(`${date}T00:00:00`).getDay())
+  const isNonWorkingDay = !!holidayToday || isWeeklyOffToday
+
   useEffect(() => {
     const init: Record<string, RecordState> = {}
     for (const a of existingAttendance ?? []) {
@@ -139,7 +157,7 @@ function MarkTab() {
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
-        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || isNonWorkingDay}>
           {saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save Attendance
         </Button>
       </div>
@@ -151,28 +169,46 @@ function MarkTab() {
             <Label htmlFor="attendance-date">Date</Label>
             <Input id="attendance-date" type="date" value={date} onChange={e => setDate(e.target.value)} className="w-auto" />
           </div>
-          <Button variant="outline" onClick={markAllPresent}
-            className="border-success/30 text-success hover:bg-success/10 hover:text-success">
-            Mark All Present
-          </Button>
-          <div className="ml-auto flex items-center gap-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-success">{stats.present}</p>
-              <p className="text-xs text-muted-foreground">Present</p>
+          {!isNonWorkingDay && (
+            <Button variant="outline" onClick={markAllPresent}
+              className="border-success/30 text-success hover:bg-success/10 hover:text-success">
+              Mark All Present
+            </Button>
+          )}
+          {isNonWorkingDay ? (
+            <div className="ml-auto flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-medium text-muted-foreground">
+              <PartyPopper className="h-4 w-4" />
+              {holidayToday ? holidayToday.name : 'Weekly off'}
             </div>
-            <div className="text-center">
-              <p className="text-2xl font-bold text-destructive">{stats.absent}</p>
-              <p className="text-xs text-muted-foreground">Absent</p>
+          ) : (
+            <div className="ml-auto flex items-center gap-6">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-success">{stats.present}</p>
+                <p className="text-xs text-muted-foreground">Present</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-destructive">{stats.absent}</p>
+                <p className="text-xs text-muted-foreground">Absent</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-muted-foreground">{stats.marked}/{stats.total}</p>
+                <p className="text-xs text-muted-foreground">Marked</p>
+              </div>
             </div>
-            <div className="text-center">
-              <p className="text-2xl font-bold text-muted-foreground">{stats.marked}/{stats.total}</p>
-              <p className="text-xs text-muted-foreground">Marked</p>
-            </div>
-          </div>
+          )}
         </CardContent>
       </Card>
 
       {/* Staff list */}
+      {isNonWorkingDay ? (
+        <Card>
+          <EmptyState
+            icon={PartyPopper}
+            title={holidayToday ? `${holidayToday.name} — no attendance needed` : 'Weekly off — no attendance needed'}
+            description="This date is off on the academic calendar, so it isn't counted as a working day and won't show up as unmarked for any staff member."
+          />
+        </Card>
+      ) : (
       <Card className="overflow-hidden">
         {isLoading ? (
           <div className="space-y-3 p-6">
@@ -241,6 +277,7 @@ function MarkTab() {
           </Table>
         )}
       </Card>
+      )}
     </div>
   )
 }

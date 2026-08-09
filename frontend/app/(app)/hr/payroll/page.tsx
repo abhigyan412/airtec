@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, AlertTriangle, Wallet, Download, CalendarX2, Settings, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, AlertTriangle, Wallet, Download, CalendarX2, Settings, Plus, Trash2, Gift } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -41,6 +41,7 @@ export default function PayrollPage() {
   const [skipped, setSkipped] = useState<{ user_id: string; full_name: string; role: string }[] | null>(null)
   const [selectedPayslip, setSelectedPayslip] = useState<any | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showBonuses, setShowBonuses] = useState(false)
 
   const { data: payslips, isLoading } = useQuery({
     queryKey: ['payslips', month, year],
@@ -137,6 +138,9 @@ export default function PayrollPage() {
           </div>
           <Button variant="outline" onClick={() => hrmsApi.payroll.downloadBankExport(month, year)}>
             <Download className="h-4 w-4" /> Bank Export (CSV)
+          </Button>
+          <Button variant="outline" onClick={() => setShowBonuses(true)}>
+            <Gift className="h-4 w-4" /> Bonuses
           </Button>
           <Button variant="outline" onClick={() => setShowSettings(true)}>
             <Settings className="h-4 w-4" /> Payroll Settings
@@ -287,6 +291,7 @@ export default function PayrollPage() {
 
       {selectedPayslip && <PayslipBreakdownModal payslip={selectedPayslip} onClose={() => setSelectedPayslip(null)} />}
       {showSettings && <PayrollSettingsModal onClose={() => setShowSettings(false)} />}
+      {showBonuses && <BonusesModal month={month} year={year} onClose={() => setShowBonuses(false)} />}
 
       {coverageWarning && (
         <Dialog open onOpenChange={(o) => { if (!o) setCoverageWarning(null) }}>
@@ -430,6 +435,145 @@ function PayrollSettingsModal({ onClose }: { onClose: () => void }) {
   )
 }
 
+// ── BONUSES — one-off festival/performance bonuses for a specific
+// month. Staged here (staff_bonuses table); POST /payslips/generate
+// picks up whatever's on file for the selected month and adds it to
+// that staff member's payslip as its own earnings line.
+function BonusesModal({ month, year, onClose }: { month: number; year: number; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [amount, setAmount] = useState('')
+  const [reason, setReason] = useState('')
+
+  const { data: staffData, isLoading: staffLoading } = useQuery({
+    queryKey: ['hr-staff-all'],
+    queryFn: () => hrmsApi.staff.list({ limit: 100 }).then(r => r.data),
+  })
+  const staff = (staffData ?? []).filter((s: any) => !['resigned', 'terminated'].includes(s.staff_profile?.employment_status))
+
+  const { data: bonuses, isLoading: bonusesLoading } = useQuery({
+    queryKey: ['staff-bonuses', month, year],
+    queryFn: () => hrmsApi.bonuses.list(month, year).then(r => r.data),
+  })
+
+  const toggle = (id: string) => setSelected(s => {
+    const next = new Set(s)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+  const allSelected = staff.length > 0 && selected.size === staff.length
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(staff.map((s: any) => s.id)))
+
+  const awardMutation = useMutation({
+    mutationFn: () => hrmsApi.bonuses.create({
+      user_ids: Array.from(selected), month, year, amount: Number(amount), reason: reason.trim(),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['staff-bonuses', month, year] })
+      toast.success(`Bonus awarded to ${selected.size} staff member${selected.size !== 1 ? 's' : ''}`)
+      setSelected(new Set()); setAmount(''); setReason('')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to award bonus'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => hrmsApi.bonuses.delete(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['staff-bonuses', month, year] })
+      toast.success('Bonus removed')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to remove'),
+  })
+
+  const canAward = selected.size > 0 && Number(amount) > 0 && reason.trim().length > 0
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Gift className="h-4 w-4 text-primary" /> Bonuses — {MONTHS[month - 1]} {year}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Awarded here shows up as its own earnings line the next time payslips are generated for this month — it doesn't affect PF, professional tax, or TDS.
+          </p>
+
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <Label>Recipients</Label>
+              {staff.length > 0 && (
+                <button type="button" onClick={toggleAll} className="text-xs font-medium text-primary hover:text-primary/80">
+                  {allSelected ? 'Clear all' : 'Select all'}
+                </button>
+              )}
+            </div>
+            {staffLoading ? (
+              <Skeleton className="h-32 w-full" />
+            ) : (
+              <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border p-2">
+                {staff.map((s: any) => (
+                  <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-muted/60">
+                    <input type="checkbox" className="h-4 w-4 rounded border-border" checked={selected.has(s.id)} onChange={() => toggle(s.id)} />
+                    <span className="text-foreground">{s.full_name}</span>
+                    <span className="text-xs text-muted-foreground">{s.staff_profile?.designation ?? s.role}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Amount (₹) *</Label>
+              <Input type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} placeholder="2000" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reason *</Label>
+              <Input value={reason} onChange={e => setReason(e.target.value)} placeholder="Diwali Bonus" />
+            </div>
+          </div>
+
+          <Button onClick={() => awardMutation.mutate()} disabled={!canAward || awardMutation.isPending} className="w-full">
+            {awardMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Gift className="h-4 w-4" />}
+            Award to {selected.size || 0} staff member{selected.size !== 1 ? 's' : ''}
+          </Button>
+
+          <div className="border-t border-border pt-3">
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Already staged for {MONTHS[month - 1]}</p>
+            {bonusesLoading ? (
+              <Skeleton className="h-16 w-full" />
+            ) : (bonuses ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground">No bonuses staged for this month yet.</p>
+            ) : (
+              <div className="max-h-48 space-y-1.5 overflow-y-auto">
+                {(bonuses ?? []).map((b: any) => (
+                  <div key={b.id} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm">
+                    <div>
+                      <p className="font-medium text-foreground">{b.users?.full_name}</p>
+                      <p className="text-xs text-muted-foreground">{b.reason}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="tabular-nums font-semibold text-success">{formatCurrency(Number(b.amount))}</span>
+                      <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(b.id)} disabled={deleteMutation.isPending} className="h-7 w-7 text-muted-foreground hover:text-destructive">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 const ATTENDANCE_STATUS_LABEL: Record<string, string> = { present: 'Present', absent: 'Absent', half_day: 'Half Day', on_leave: 'On Leave' }
 const ATTENDANCE_STATUS_COLOR: Record<string, string> = {
   present: 'bg-success/10 text-success', absent: 'bg-destructive/10 text-destructive',
@@ -469,6 +613,7 @@ function PayslipBreakdownModal({ payslip: p, onClose }: { payslip: any; onClose:
     ['Basic Salary', p.basic_salary], ['HRA', p.hra], ['DA', p.da],
     ['Conveyance', p.conveyance_allowance], ['Medical Allowance', p.medical_allowance],
     ['Other Allowances', p.other_allowances], ['Leave Encashment', p.leave_encashment],
+    [p.bonus_reason ? `Bonus (${p.bonus_reason})` : 'Bonus', p.bonus_amount],
   ].filter(([, v]) => Number(v) > 0) as [string, number][]
 
   const deductions = [

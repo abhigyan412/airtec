@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { studentsApi } from '@/lib/api'
+import { studentsApi, calendarApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { ArrowLeft, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react'
 import Link from 'next/link'
@@ -37,6 +37,16 @@ export default function StudentAttendancePage() {
     queryKey: ['student-attendance', id, month, year],
     queryFn: () => studentsApi.getAttendance(id, month, year).then(r => r.data),
   })
+
+  // Same academic calendar the backend uses for every attendance/leave/
+  // payroll calculation — this calendar cell's fallback tint should
+  // reflect the school's actual weekly-off days, not an assumed Sunday.
+  const { data: weeklyOff } = useQuery({
+    queryKey: ['calendar-weekly-off'],
+    queryFn: () => calendarApi.weeklyOff.get().then(r => r.data),
+    staleTime: 60 * 60 * 1000,
+  })
+  const weeklyOffDays = new Set<number>(weeklyOff?.weekly_off_days ?? [0])
 
   const records = attData?.records ?? []
   const summary = attData?.summary ?? { present: 0, absent: 0, late: 0, total: 0, percentage: 0 }
@@ -140,12 +150,12 @@ export default function StudentAttendancePage() {
                 const status = getStatusForDate(dateStr)
                 const isToday = dateStr === new Date().toISOString().split('T')[0]
                 const isFuture = new Date(dateStr) > new Date()
-                const isSunday = new Date(dateStr).getDay() === 0
+                const isWeeklyOff = weeklyOffDays.has(new Date(`${dateStr}T00:00:00`).getDay())
 
                 return (
                   <div key={day} className={cn(
                     'aspect-square rounded-xl flex flex-col items-center justify-center text-sm transition-all',
-                    status ? STATUS_COLORS[status] : isSunday ? 'bg-muted text-muted-foreground/50' : isFuture ? 'text-muted-foreground/50' : 'bg-muted text-muted-foreground',
+                    status ? STATUS_COLORS[status] : isWeeklyOff ? 'bg-muted text-muted-foreground/50' : isFuture ? 'text-muted-foreground/50' : 'bg-muted text-muted-foreground',
                     isToday && !status && 'ring-2 ring-primary ring-offset-1 ring-offset-background'
                   )}>
                     <span className="font-semibold text-sm">{day}</span>

@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { api, admitCardApi, documentsApi } from '@/lib/api'
+import { api, admitCardApi, documentsApi, classesApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
 import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone, BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
@@ -45,6 +45,9 @@ export default function ExamDetailPage() {
   const { id } = useParams<{ id: string }>()
   const [tab, setTab] = useState('Datesheet')
   const [showAddSubject, setShowAddSubject] = useState(false)
+  const [editingSubject, setEditingSubject] = useState<any>(null)
+  const [scheduleClassFilter, setScheduleClassFilter] = useState('')
+  const [scheduleSubjectFilter, setScheduleSubjectFilter] = useState('')
   const qc = useQueryClient()
 
   const { data: exam, isLoading } = useQuery({
@@ -109,6 +112,39 @@ export default function ExamDetailPage() {
     )
   }
 
+  // An exam's datesheet can span multiple classes at once (e.g. one
+  // "Unit Test 4" covering Class 1 English and Class 2 Economics as
+  // separate rows) — a flat table mixing every class/subject together
+  // reads as a jumble once there's more than a couple of rows, so the
+  // schedule is filterable down to one class and/or one subject.
+  const examSubjects: any[] = exam?.exam_subjects ?? []
+  const scheduleClasses = Array.from(
+    new Map(examSubjects.map((s: any) => [s.class_id, { id: s.class_id, name: s.classes?.name }])).values()
+  ).filter(c => c.id)
+  const scheduleSubjectsForClass = Array.from(new Set(
+    examSubjects
+      .filter((s: any) => !scheduleClassFilter || s.class_id === scheduleClassFilter)
+      .map((s: any) => s.subject_name)
+  )).sort()
+  const filteredSchedule = examSubjects.filter((s: any) =>
+    (!scheduleClassFilter || s.class_id === scheduleClassFilter) &&
+    (!scheduleSubjectFilter || s.subject_name === scheduleSubjectFilter)
+  )
+
+  // A datesheet's whole point is "what's happening on which date" — date
+  // is the primary organizing axis, Class/Subject above are just narrowing
+  // filters on top of it. Grouped and sorted chronologically rather than
+  // left in whatever order the rows happen to have been added in.
+  const scheduleByDate = new Map<string, any[]>()
+  for (const s of filteredSchedule) {
+    const key = s.exam_date ?? ''
+    if (!scheduleByDate.has(key)) scheduleByDate.set(key, [])
+    scheduleByDate.get(key)!.push(s)
+  }
+  const scheduleDateGroups = Array.from(scheduleByDate.entries())
+    .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+    .map(([date, rows]) => ({ date, rows: rows.sort((a, b) => (a.start_time ?? '').localeCompare(b.start_time ?? '')) }))
+
   return (
     <div className="space-y-6 max-w-5xl">
       <div>
@@ -163,13 +199,33 @@ export default function ExamDetailPage() {
 
         <TabsContent value="Datesheet" className="mt-6">
           <Card>
-            <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
               <h3 className="font-semibold text-foreground">Exam Schedule</h3>
-              <Button variant="ghost" size="sm" onClick={() => setShowAddSubject(true)}>
-                <Plus className="h-4 w-4" /> Add Subject
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {scheduleClasses.length > 1 && (
+                  <Select value={scheduleClassFilter || 'all'} onValueChange={v => { setScheduleClassFilter(v === 'all' ? '' : v); setScheduleSubjectFilter('') }}>
+                    <SelectTrigger className="h-8 w-auto min-w-[130px] text-xs"><SelectValue placeholder="All classes" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All classes</SelectItem>
+                      {scheduleClasses.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                )}
+                {scheduleSubjectsForClass.length > 1 && (
+                  <Select value={scheduleSubjectFilter || 'all'} onValueChange={v => setScheduleSubjectFilter(v === 'all' ? '' : v)}>
+                    <SelectTrigger className="h-8 w-auto min-w-[130px] text-xs"><SelectValue placeholder="All subjects" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All subjects</SelectItem>
+                      {scheduleSubjectsForClass.map((s: string) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                )}
+                <Button variant="ghost" size="sm" onClick={() => setShowAddSubject(true)}>
+                  <Plus className="h-4 w-4" /> Add Subject
+                </Button>
+              </div>
             </div>
-            {!(exam.exam_subjects ?? []).length ? (
+            {!examSubjects.length ? (
               <EmptyState
                 icon={FileText}
                 title="No subjects added yet"
@@ -180,37 +236,57 @@ export default function ExamDetailPage() {
                   </Button>
                 }
               />
+            ) : !filteredSchedule.length ? (
+              <EmptyState
+                icon={FileText}
+                title="No subjects match this filter"
+                description="Clear the class/subject filter above to see the full datesheet."
+                action={
+                  <Button variant="outline" onClick={() => { setScheduleClassFilter(''); setScheduleSubjectFilter('') }}>
+                    Clear filters
+                  </Button>
+                }
+              />
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead>Subject</TableHead>
-                    <TableHead>Class</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Time</TableHead>
-                    <TableHead>Max Marks</TableHead>
-                    <TableHead>Pass Marks</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(exam.exam_subjects ?? []).map((sub: any) => (
-                    <TableRow key={sub.id} className="cursor-default">
-                      <TableCell className="font-medium text-foreground">{sub.subject_name}</TableCell>
-                      <TableCell className="text-muted-foreground">{sub.classes?.name}</TableCell>
-                      <TableCell className="text-muted-foreground">{sub.exam_date ? formatDate(sub.exam_date) : '-'}</TableCell>
-                      <TableCell className="text-muted-foreground">{sub.start_time ?? '-'}</TableCell>
-                      <TableCell className="font-medium text-foreground">{sub.max_marks}</TableCell>
-                      <TableCell className="text-muted-foreground">{sub.pass_marks}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <div className="divide-y divide-border">
+                {scheduleDateGroups.map(({ date, rows }) => (
+                  <div key={date || 'undated'} className="px-6 py-4">
+                    <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {date ? formatDate(date) : 'Date not set'}
+                    </p>
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead>Subject</TableHead>
+                          <TableHead>Class</TableHead>
+                          <TableHead>Time</TableHead>
+                          <TableHead>Max Marks</TableHead>
+                          <TableHead>Pass Marks</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {rows.map((sub: any) => (
+                          <TableRow key={sub.id} onClick={() => setEditingSubject(sub)} className="cursor-pointer hover:bg-muted/40">
+                            <TableCell className="font-medium text-foreground">{sub.subject_name}</TableCell>
+                            <TableCell className="text-muted-foreground">{sub.classes?.name}</TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {sub.start_time ? `${sub.start_time.slice(0, 5)}${sub.end_time ? `–${sub.end_time.slice(0, 5)}` : ''}` : '-'}
+                            </TableCell>
+                            <TableCell className="font-medium text-foreground">{sub.max_marks}</TableCell>
+                            <TableCell className="text-muted-foreground">{sub.pass_marks}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ))}
+              </div>
             )}
           </Card>
         </TabsContent>
 
         <TabsContent value="Marks Entry" className="mt-6">
-          <MarksEntry examId={id} exam={exam} classes={classes ?? []} />
+          <MarksEntry examId={id} exam={exam} />
         </TabsContent>
 
         <TabsContent value="Results" className="mt-6">
@@ -224,6 +300,13 @@ export default function ExamDetailPage() {
       {showAddSubject && (
         <AddSubjectModal examId={id} classes={classes ?? []} onClose={() => {
           setShowAddSubject(false)
+          qc.invalidateQueries({ queryKey: ['exam', id] })
+        }} />
+      )}
+
+      {editingSubject && (
+        <EditSubjectModal subject={editingSubject} onClose={() => {
+          setEditingSubject(null)
           qc.invalidateQueries({ queryKey: ['exam', id] })
         }} />
       )}
@@ -508,11 +591,20 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant={c.variant}>{c.label}</Badge>
 }
 
-function MarksEntry({ examId, exam, classes }: any) {
+function MarksEntry({ examId, exam }: any) {
   const [selectedClass, setSelectedClass] = useState('')
   const [selectedSubject, setSelectedSubject] = useState('')
   const [marksData, setMarksData] = useState<Record<string, any>>({})
   const qc = useQueryClient()
+
+  // Only classes actually on this exam's datesheet belong here — the
+  // full school class list (every class the school has, whether or not
+  // this exam applies to it) was showing classes with no subject/date
+  // configured for this exam at all, which meant picking most of them
+  // left "Select Subject" permanently empty.
+  const examClasses = Array.from(
+    new Map((exam.exam_subjects ?? []).map((s: any) => [s.class_id, { id: s.class_id, name: s.classes?.name }])).values()
+  ).filter((c: any) => c.id)
 
   const subjectsForClass = (exam.exam_subjects ?? []).filter((s: any) => s.class_id === selectedClass)
 
@@ -561,7 +653,7 @@ function MarksEntry({ examId, exam, classes }: any) {
               <SelectValue placeholder="Choose class..." />
             </SelectTrigger>
             <SelectContent>
-              {classes.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              {examClasses.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
@@ -803,6 +895,23 @@ function AddSubjectModal({ examId, classes, onClose }: any) {
     start_time: '', end_time: '', max_marks: 100, pass_marks: 33,
   })
 
+  // Subjects come from the class's master list (Settings -> Classes &
+  // Sections) — the same source Timetable and Homework already draw
+  // from, so a datesheet entry for "Mathematics" matches exactly what
+  // those modules mean by it, instead of free text that could drift.
+  const { data: subjectsData } = useQuery({
+    queryKey: ['subjects', form.class_id],
+    queryFn: () => classesApi.subjects.list(form.class_id).then(r => r.data),
+    enabled: !!form.class_id,
+  })
+
+  // Reusable named windows (Settings -> Exam Templates) instead of
+  // re-typing the same start/end time on every subject added.
+  const { data: timeSlots } = useQuery({
+    queryKey: ['exam-time-slots'],
+    queryFn: () => api.get('/exams/time-slots').then(r => r.data.data),
+  })
+
   const mutation = useMutation({
     mutationFn: (data: any) => api.post('/exams/subjects/add', { ...data, exam_id: examId }),
     onSuccess: () => {
@@ -823,7 +932,7 @@ function AddSubjectModal({ examId, classes, onClose }: any) {
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label>Class</Label>
-            <Select value={form.class_id} onValueChange={v => setForm(f => ({ ...f, class_id: v }))}>
+            <Select value={form.class_id} onValueChange={v => setForm(f => ({ ...f, class_id: v, subject_name: '' }))}>
               <SelectTrigger>
                 <SelectValue placeholder="Select class..." />
               </SelectTrigger>
@@ -833,14 +942,46 @@ function AddSubjectModal({ examId, classes, onClose }: any) {
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="subject-name">Subject Name</Label>
-            <Input id="subject-name" value={form.subject_name} onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))}
-              placeholder="e.g. Mathematics" />
+            <Label>Subject *</Label>
+            <Select value={form.subject_name || undefined} disabled={!form.class_id}
+              onValueChange={v => setForm(f => ({ ...f, subject_name: v }))}>
+              <SelectTrigger>
+                <SelectValue placeholder={form.class_id ? 'Select subject...' : 'Select a class first'} />
+              </SelectTrigger>
+              <SelectContent>
+                {(subjectsData ?? []).map((s: any) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {form.class_id && (subjectsData ?? []).length === 0 && (
+              <p className="mt-1.5 text-xs text-warning">No subjects set up for this class yet — add some in Settings → Classes & Sections.</p>
+            )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="subject-date">Exam Date</Label>
               <Input id="subject-date" type="date" value={form.exam_date} onChange={e => setForm(f => ({ ...f, exam_date: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Time Slot</Label>
+              <Select value={form.start_time ? `${form.start_time}-${form.end_time}` : 'none'}
+                onValueChange={v => {
+                  if (v === 'none') { setForm(f => ({ ...f, start_time: '', end_time: '' })); return }
+                  const slot = (timeSlots ?? []).find((s: any) => `${s.start_time}-${s.end_time}` === v)
+                  setForm(f => ({ ...f, start_time: slot?.start_time ?? '', end_time: slot?.end_time ?? '' }))
+                }}>
+                <SelectTrigger><SelectValue placeholder="No time slot" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No time slot</SelectItem>
+                  {(timeSlots ?? []).map((s: any) => (
+                    <SelectItem key={s.id} value={`${s.start_time}-${s.end_time}`}>
+                      {s.name} · {s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {(timeSlots ?? []).length === 0 && (
+                <p className="mt-1.5 text-xs text-muted-foreground">No time slots set up yet — add some under Manage Templates.</p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="subject-max">Max Marks</Label>
@@ -855,6 +996,96 @@ function AddSubjectModal({ examId, classes, onClose }: any) {
             {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
             Add Subject
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Class/subject don't change once a datesheet row exists — reassigning
+// either is really "delete this, add a different one" — so this only
+// edits the fields that legitimately vary after the fact: date, time,
+// and marks. Closes the create-only gap PATCH/DELETE /exams/subjects/:id
+// fixes on the backend.
+function EditSubjectModal({ subject, onClose }: any) {
+  const [form, setForm] = useState({
+    exam_date: subject.exam_date ?? '', start_time: subject.start_time ?? '', end_time: subject.end_time ?? '',
+    max_marks: subject.max_marks, pass_marks: subject.pass_marks,
+  })
+
+  const { data: timeSlots } = useQuery({
+    queryKey: ['exam-time-slots'],
+    queryFn: () => api.get('/exams/time-slots').then(r => r.data.data),
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: () => api.patch(`/exams/subjects/${subject.id}`, form),
+    onSuccess: () => { toast.success('Subject updated'); onClose() },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: () => api.delete(`/exams/subjects/${subject.id}`),
+    onSuccess: () => { toast.success('Subject removed from datesheet'); onClose() },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to remove'),
+  })
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{subject.subject_name} · {subject.classes?.name}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-subject-date">Exam Date</Label>
+              <Input id="edit-subject-date" type="date" value={form.exam_date} onChange={e => setForm(f => ({ ...f, exam_date: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Time Slot</Label>
+              <Select value={form.start_time ? `${form.start_time}-${form.end_time}` : 'none'}
+                onValueChange={v => {
+                  if (v === 'none') { setForm(f => ({ ...f, start_time: '', end_time: '' })); return }
+                  const slot = (timeSlots ?? []).find((s: any) => `${s.start_time}-${s.end_time}` === v)
+                  setForm(f => ({ ...f, start_time: slot?.start_time ?? '', end_time: slot?.end_time ?? '' }))
+                }}>
+                <SelectTrigger><SelectValue placeholder="No time slot" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No time slot</SelectItem>
+                  {(timeSlots ?? []).map((s: any) => (
+                    <SelectItem key={s.id} value={`${s.start_time}-${s.end_time}`}>
+                      {s.name} · {s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-subject-max">Max Marks</Label>
+              <Input id="edit-subject-max" type="number" value={form.max_marks} onChange={e => setForm(f => ({ ...f, max_marks: Number(e.target.value) }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-subject-pass">Pass Marks</Label>
+              <Input id="edit-subject-pass" type="number" value={form.pass_marks} onChange={e => setForm(f => ({ ...f, pass_marks: Number(e.target.value) }))} />
+            </div>
+          </div>
+        </div>
+        <DialogFooter className="sm:justify-between">
+          <Button variant="ghost" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}
+            className="text-destructive hover:text-destructive">
+            {deleteMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+            Remove
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button onClick={() => updateMutation.mutate()} disabled={updateMutation.isPending}>
+              {updateMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+              Save
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { timetableApi, admissionApi, classesApi, api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -34,16 +35,36 @@ function SegBtn({ active, onClick, children }: { active: boolean; onClick: () =>
   )
 }
 
+function viewModeFromParam(v: string | null): ViewMode {
+  return v === 'teacher' ? 'teacher' : v === 'free' ? 'free' : 'class'
+}
+
 export default function TimetablePage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
   const [selectedClass,   setSelectedClass]   = useState('')
   const [selectedSection, setSelectedSection] = useState('')
   const [selectedTeacher, setSelectedTeacher] = useState('')
-  const [viewMode,        setViewMode]        = useState<ViewMode>('class')
+  // Driven by ?view= so the sidebar's Class View/Teacher View/Free
+  // Faculty sub-items can link straight to a tab, and so switching tabs
+  // in-page keeps that same URL (and the sidebar's active-highlight) in
+  // sync — see components/layout/Sidebar.tsx's query-aware hrefMatches.
+  const [viewMode,        setViewModeState]   = useState<ViewMode>(() => viewModeFromParam(searchParams.get('view')))
   const [gridOrList,      setGridOrList]      = useState<'grid'|'list'>('grid')
   const [showAdd,         setShowAdd]         = useState(false)
   const [addingDay,       setAddingDay]       = useState(1)
   const [showPrint,       setShowPrint]       = useState(false)
   const qc = useQueryClient()
+
+  useEffect(() => {
+    setViewModeState(viewModeFromParam(searchParams.get('view')))
+  }, [searchParams])
+
+  const setViewMode = (v: ViewMode) => {
+    setViewModeState(v)
+    router.replace(v === 'class' ? '/timetable' : `/timetable?view=${v}`)
+  }
 
   // ── RBAC ──────────────────────────────────────────────────
   const { can, isLoading: permLoading } = usePermissions()
