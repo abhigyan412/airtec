@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import { Skeleton } from '@/components/ui/skeleton'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -112,7 +113,8 @@ export default function LeavePage() {
           description={isAdmin ? 'Review and approve staff leave requests' : 'Apply for leave and track your balances'}
           icon={ClipboardList}
           actions={
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <HrQuickNav current="leave" />
               {isAdmin && (
                 <Button variant="outline" onClick={() => setShowManageTypes(true)}>
                   <Settings className="h-4 w-4" /> Manage Leave Types

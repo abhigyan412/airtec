@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
@@ -55,14 +56,17 @@ export default function StaffAttendancePage() {
           }
           icon={UserCheck}
           actions={
-            <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-              <TabsList>
-                <TabsTrigger value="mark"><ClipboardList className="h-4 w-4" /> Mark</TabsTrigger>
-                <TabsTrigger value="report"><BarChart3 className="h-4 w-4" /> Report</TabsTrigger>
-                <TabsTrigger value="requests"><Inbox className="h-4 w-4" /> Requests</TabsTrigger>
-                <TabsTrigger value="shifts"><Clock3 className="h-4 w-4" /> Shifts</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            <>
+              <HrQuickNav current="attendance" />
+              <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+                <TabsList>
+                  <TabsTrigger value="mark"><ClipboardList className="h-4 w-4" /> Mark</TabsTrigger>
+                  <TabsTrigger value="report"><BarChart3 className="h-4 w-4" /> Report</TabsTrigger>
+                  <TabsTrigger value="requests"><Inbox className="h-4 w-4" /> Requests</TabsTrigger>
+                  <TabsTrigger value="shifts"><Clock3 className="h-4 w-4" /> Shifts</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </>
           }
         />
       </div>

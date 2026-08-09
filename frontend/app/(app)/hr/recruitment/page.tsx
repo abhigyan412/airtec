@@ -19,6 +19,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 
 // Stage colours are categorical — they identify a step in the hiring pipeline,
 // not a good/bad state — so they stay outside the semantic token scale. Each
@@ -90,6 +91,7 @@ export default function RecruitmentPage() {
           icon={UserPlus}
           actions={
             <>
+              <HrQuickNav current="recruitment" />
               <Button variant="outline" asChild>
                 <Link href="/hr/recruitment/jobs"><Briefcase className="h-4 w-4" /> Manage Jobs</Link>
               </Button>

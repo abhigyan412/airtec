@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import { Skeleton } from '@/components/ui/skeleton'
 
 type StaffNode = {
@@ -47,7 +48,8 @@ export default function OrgChartPage() {
         <Button variant="ghost" size="icon" asChild className="mt-1 shrink-0">
           <Link href="/hr/staff" aria-label="Back to staff"><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
-        <PageHeader className="mb-0 flex-1" title="Org Chart" description="Reporting structure, built from each staff member's Reports To field" icon={Network} />
+        <PageHeader className="mb-0 flex-1" title="Org Chart" description="Reporting structure, built from each staff member's Reports To field" icon={Network}
+          actions={<HrQuickNav current="org-chart" />} />
       </div>
 
       <Card>

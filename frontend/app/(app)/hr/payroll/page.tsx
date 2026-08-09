@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -110,6 +111,7 @@ export default function PayrollPage() {
           title="Payroll"
           description="Generate and manage monthly payslips"
           icon={Wallet}
+          actions={<HrQuickNav current="payroll" />}
         />
       </div>
 
@@ -173,8 +175,9 @@ export default function PayrollPage() {
       )}
 
       {skipped !== null && skipped.length > 0 && (() => {
-        const missingStructure = skipped.filter((s: any) => s.reason !== 'resigned')
+        const missingStructure = skipped.filter((s: any) => s.reason === 'no_salary_structure')
         const resigned = skipped.filter((s: any) => s.reason === 'resigned')
+        const alreadyFinalized = skipped.filter((s: any) => s.reason === 'already_finalized')
         const nameList = (list: any[]) => list.map((s, i) => (
           <span key={s.user_id}>
             {i > 0 && ', '}
@@ -191,6 +194,18 @@ export default function PayrollPage() {
                   <p className="mt-1 text-xs text-muted-foreground">
                     {nameList(missingStructure)}
                     {' — set their salary under Staff → Payroll tab, then generate again.'}
+                  </p>
+                </div>
+              </div>
+            )}
+            {alreadyFinalized.length > 0 && (
+              <div className="flex items-start gap-3 rounded-2xl border border-success/30 bg-success/10 px-5 py-4">
+                <ShieldCheck className="mt-0.5 h-5 w-5 flex-shrink-0 text-success" />
+                <div className="text-sm text-foreground">
+                  <p className="font-semibold">{alreadyFinalized.length} staff member{alreadyFinalized.length !== 1 ? 's' : ''} left untouched — already approved/paid</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {nameList(alreadyFinalized)}
+                    {' — re-running Generate never overwrites a payslip that\'s already been approved or paid. Need to fix one? Edit it directly from the table below.'}
                   </p>
                 </div>
               </div>

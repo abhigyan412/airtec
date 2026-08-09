@@ -8,6 +8,7 @@ import Link from 'next/link'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { StatCard } from '@/components/shared/StatCard'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
@@ -64,19 +65,7 @@ export default function StaffDirectoryPage() {
         title="Staff Directory"
         description="Manage staff profiles, leave, payroll and recruitment"
         icon={Users}
-        actions={
-          <>
-            <Button variant="outline" size="sm" asChild><Link href="/hr/attendance">Attendance</Link></Button>
-            <Button variant="outline" size="sm" asChild><Link href="/hr/leave">Leave</Link></Button>
-            <Button variant="outline" size="sm" asChild><Link href="/hr/payroll">Payroll</Link></Button>
-            <Button variant="outline" size="sm" asChild><Link href="/hr/reports">Reports</Link></Button>
-            <Button variant="outline" size="sm" asChild><Link href="/hr/org-chart">Org Chart</Link></Button>
-            <Button variant="outline" size="sm" asChild><Link href="/hr/permissions">Permissions</Link></Button>
-            <Button size="sm" asChild>
-              <Link href="/hr/recruitment"><Briefcase className="h-4 w-4" /> Recruitment</Link>
-            </Button>
-          </>
-        }
+        actions={<HrQuickNav current="staff" />}
       />
 
       {/* Stats */}

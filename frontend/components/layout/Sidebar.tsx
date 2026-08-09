@@ -8,9 +8,7 @@ import {
   MessageSquare, Award, Clock, Library, Briefcase, Settings as SettingsIcon,
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
-
-  Network, UserCheck2, Send, Grid3X3, User,
-
+  Network, UserCheck2, Send, Grid3X3, User, Layers, Receipt, Tag,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -78,7 +76,14 @@ const NAV: NavItem[] = [
       { label: 'Discounts', href: '/fees/discounts', icon: Tag, requireAny: ['fee.discount', 'fee.view'] },
     ],
   },
-  { label: 'Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
+  {
+    label: 'Examinations',
+    icon: BookOpen,
+    children: [
+      { label: 'All Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
+      { label: 'Results', href: '/exams/results', icon: BarChart3, permission: 'exam.view', indent: true },
+    ],
+  },
   { label: 'Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true },
   {
     label: 'Timetable',

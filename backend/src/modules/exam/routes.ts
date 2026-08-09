@@ -633,6 +633,7 @@ router.get('/:id/workflow-status', asyncHandler(async (req: AuthRequest, res: Re
 
 router.get('/:id/results', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
+    const { class_id, section_id } = req.query
     const school_id = req.user!.school_id
 
     // Students/parents can only see results once published. Staff can
@@ -644,12 +645,19 @@ router.get('/:id/results', asyncHandler(async (req: AuthRequest, res: Response) 
         }
     }
 
-    const { data, error } = await supabase
+    // report_cards has no class_id/section_id of its own — only reachable
+    // via students, so filtering by either requires !inner (a plain left
+    // embed doesn't restrict the parent rows, it just returns null for
+    // students that don't match).
+    let query = supabase
         .from('report_cards')
-        .select('*, students(id, first_name, last_name, admission_number, roll_number, class_id, section_id, classes(name, numeric_level), sections(name))')
+        .select('*, students!inner(id, first_name, last_name, admission_number, roll_number, class_id, section_id, classes(name, numeric_level), sections(name))')
         .eq('exam_id', id)
         .eq('school_id', school_id)
-        .order('rank')
+    if (class_id) query = query.eq('students.class_id', class_id as string)
+    if (section_id) query = query.eq('students.section_id', section_id as string)
+
+    const { data, error } = await query.order('rank')
     if (error) return res.status(500).json({ success: false, error: error.message })
     res.json({ success: true, data })
 }))
