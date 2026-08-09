@@ -1,8 +1,9 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, classesApi } from '@/lib/api'
-import { Plus, Trash2, Loader2, ArrowLeft, Clock, LayoutTemplate, BookOpen } from 'lucide-react'
+import { Plus, Trash2, Loader2, ArrowLeft, Clock, LayoutTemplate, BookOpen, Sparkles } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ export default function ExamTemplatesPage() {
   const qc = useQueryClient()
   const [showAddSlot, setShowAddSlot] = useState(false)
   const [showNewTemplate, setShowNewTemplate] = useState(false)
+  const [applyTemplateId, setApplyTemplateId] = useState<string | null>(null)
   const [slotForm, setSlotForm] = useState({ name: '', start_time: '', end_time: '' })
 
   const { data: classes } = useQuery({
@@ -74,9 +76,14 @@ export default function ExamTemplatesPage() {
         </Button>
         <PageHeader
           className="mb-0 flex-1"
-          title="Exam Templates"
+          title="Examination Settings"
           description="Reusable time slots and datesheet blueprints — build a recurring exam once, apply it every year"
           icon={LayoutTemplate}
+          actions={
+            <Button variant="outline" onClick={() => setApplyTemplateId('')}>
+              <Sparkles className="h-4 w-4" /> Pre Set Exams
+            </Button>
+          }
         />
       </div>
 
@@ -169,9 +176,7 @@ export default function ExamTemplatesPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href={`/exams?template=${t.id}`}>Use This Template</Link>
-                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setApplyTemplateId(t.id)}>Use This Template</Button>
                     <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
                       onClick={() => deleteTemplateMutation.mutate(t.id)} aria-label={`Remove template ${t.name}`}>
                       <Trash2 className="h-3.5 w-3.5" />
@@ -190,7 +195,120 @@ export default function ExamTemplatesPage() {
           qc.invalidateQueries({ queryKey: ['exam-templates'] })
         }} />
       )}
+
+      {applyTemplateId !== null && (
+        <ApplyTemplateModal initialTemplateId={applyTemplateId || undefined} onClose={() => setApplyTemplateId(null)} />
+      )}
     </div>
+  )
+}
+
+// Turns a blueprint (Exam Templates) into a real exam + fully-built
+// datesheet in one submit — only per-subject dates need touching,
+// everything else (class, subject, time slot, marks) is inherited from
+// the template as-is.
+function ApplyTemplateModal({ initialTemplateId, onClose }: { initialTemplateId?: string; onClose: () => void }) {
+  const router = useRouter()
+  const qc = useQueryClient()
+  const [templateId, setTemplateId] = useState(initialTemplateId ?? '')
+  const [name, setName] = useState('')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [dates, setDates] = useState<Record<string, string>>({})
+
+  const { data: templates, isLoading: templatesLoading } = useQuery({
+    queryKey: ['exam-templates'],
+    queryFn: () => api.get('/exams/templates').then(r => r.data.data),
+  })
+
+  const template = (templates ?? []).find((t: any) => t.id === templateId)
+  const templateSubjects = template?.exam_template_subjects ?? []
+
+  useEffect(() => {
+    if (template && !name) setName(template.name)
+  }, [template, name])
+
+  const mutation = useMutation({
+    mutationFn: () => api.post(`/exams/templates/${templateId}/apply`, {
+      name, start_date: startDate || undefined, end_date: endDate || undefined,
+      subjects: templateSubjects.map((ts: any) => ({ template_subject_id: ts.id, exam_date: dates[ts.id] || undefined })),
+    }),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['exams'] })
+      qc.invalidateQueries({ queryKey: ['exam-stats'] })
+      toast.success('Exam created from template!')
+      onClose()
+      router.push(`/exams/${res.data.data.id}`)
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to apply template'),
+  })
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>New Exam from Template</DialogTitle>
+        </DialogHeader>
+        <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
+          <div className="space-y-1.5">
+            <Label>Template *</Label>
+            <Select value={templateId || undefined} disabled={templatesLoading} onValueChange={v => { setTemplateId(v); setName(''); setDates({}) }}>
+              <SelectTrigger><SelectValue placeholder={templatesLoading ? 'Loading...' : 'Select template...'} /></SelectTrigger>
+              <SelectContent>
+                {(templates ?? []).map((t: any) => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {!templatesLoading && (templates ?? []).length === 0 && (
+              <p className="mt-1.5 text-xs text-warning">No templates yet — create one first.</p>
+            )}
+          </div>
+
+          {template && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="space-y-1.5 sm:col-span-3">
+                  <Label htmlFor="apply-name">Exam Name *</Label>
+                  <Input id="apply-name" value={name} onChange={e => setName(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="apply-start">Start Date</Label>
+                  <Input id="apply-start" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="apply-end">End Date</Label>
+                  <Input id="apply-end" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Subjects — set each date</Label>
+                <div className="space-y-2">
+                  {templateSubjects.map((ts: any) => (
+                    <div key={ts.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-2.5">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground">{ts.subject_name} · {ts.classes?.name}</p>
+                        {ts.exam_time_slots && (
+                          <p className="text-xs text-muted-foreground">{ts.exam_time_slots.name} · {ts.exam_time_slots.start_time?.slice(0, 5)}–{ts.exam_time_slots.end_time?.slice(0, 5)}</p>
+                        )}
+                      </div>
+                      <Input type="date" className="w-auto" value={dates[ts.id] ?? ''}
+                        onChange={e => setDates(d => ({ ...d, [ts.id]: e.target.value }))} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} disabled={!template || !name.trim() || mutation.isPending}>
+            {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+            Create Exam
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

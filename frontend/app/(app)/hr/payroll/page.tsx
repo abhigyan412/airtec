@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { HrQuickNav } from '@/components/hr/HrQuickNav'
+import { StaffAvatar, staffPhotoUrl } from '@/components/hr/StaffAvatar'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -265,8 +266,13 @@ export default function PayrollPage() {
                 {(payslips ?? []).map((p: any) => (
                   <TableRow key={p.id} onClick={() => setSelectedPayslip(p)} className="cursor-pointer hover:bg-muted/40">
                     <TableCell>
-                      <p className="font-semibold text-foreground">{p.users?.full_name}</p>
-                      <p className="text-xs capitalize text-muted-foreground">{p.users?.role?.replace('_', ' ')}</p>
+                      <div className="flex items-center gap-2.5">
+                        <StaffAvatar photoUrl={staffPhotoUrl(p.users?.staff_profiles)} fullName={p.users?.full_name} className="h-8 w-8 text-xs" />
+                        <div>
+                          <p className="font-semibold text-foreground">{p.users?.full_name}</p>
+                          <p className="text-xs capitalize text-muted-foreground">{p.users?.role?.replace('_', ' ')}</p>
+                        </div>
+                      </div>
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(Number(p.gross_salary))}</TableCell>
                     <TableCell className="text-right tabular-nums">
@@ -530,6 +536,7 @@ function BonusesModal({ month, year, onClose }: { month: number; year: number; o
                 {staff.map((s: any) => (
                   <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-muted/60">
                     <input type="checkbox" className="h-4 w-4 rounded border-border" checked={selected.has(s.id)} onChange={() => toggle(s.id)} />
+                    <StaffAvatar photoUrl={s.staff_profile?.photo_url} fullName={s.full_name} className="h-6 w-6 text-[10px]" />
                     <span className="text-foreground">{s.full_name}</span>
                     <span className="text-xs text-muted-foreground">{s.staff_profile?.designation ?? s.role}</span>
                   </label>
@@ -564,9 +571,12 @@ function BonusesModal({ month, year, onClose }: { month: number; year: number; o
               <div className="max-h-48 space-y-1.5 overflow-y-auto">
                 {(bonuses ?? []).map((b: any) => (
                   <div key={b.id} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm">
-                    <div>
-                      <p className="font-medium text-foreground">{b.users?.full_name}</p>
-                      <p className="text-xs text-muted-foreground">{b.reason}</p>
+                    <div className="flex items-center gap-2">
+                      <StaffAvatar photoUrl={staffPhotoUrl(b.users?.staff_profiles)} fullName={b.users?.full_name} className="h-7 w-7 text-[10px]" />
+                      <div>
+                        <p className="font-medium text-foreground">{b.users?.full_name}</p>
+                        <p className="text-xs text-muted-foreground">{b.reason}</p>
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="tabular-nums font-semibold text-success">{formatCurrency(Number(b.amount))}</span>
@@ -643,7 +653,10 @@ function PayslipBreakdownModal({ payslip: p, onClose }: { payslip: any; onClose:
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{p.users?.full_name} — {MONTHS[p.month - 1]} {p.year}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2.5">
+            <StaffAvatar photoUrl={staffPhotoUrl(p.users?.staff_profiles)} fullName={p.users?.full_name} className="h-7 w-7 text-[11px]" />
+            {p.users?.full_name} — {MONTHS[p.month - 1]} {p.year}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-5">

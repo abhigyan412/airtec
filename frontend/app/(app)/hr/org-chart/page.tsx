@@ -1,13 +1,14 @@
 'use client'
 import { useQuery } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
-import { Network, ArrowLeft, User } from 'lucide-react'
+import { Network, ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { HrQuickNav } from '@/components/hr/HrQuickNav'
+import { StaffAvatar } from '@/components/hr/StaffAvatar'
 import { Skeleton } from '@/components/ui/skeleton'
 
 type StaffNode = {
@@ -16,6 +17,7 @@ type StaffNode = {
   designation: string | null
   department: string | null
   reporting_to: string | null
+  photo_url: string | null
 }
 
 // Basic tree/hierarchy, built client-side from the flat org-chart list —
@@ -83,9 +85,7 @@ function OrgNode({ node, byManager, depth, ancestors }: { node: StaffNode; byMan
   return (
     <div>
       <div className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-muted/50" style={{ marginLeft: depth * 24 }}>
-        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <User className="h-4 w-4" />
-        </div>
+        <StaffAvatar photoUrl={node.photo_url} fullName={node.full_name} className="h-8 w-8 text-xs" />
         <div className="min-w-0">
           <Link href={`/hr/staff/${node.id}`} className="text-sm font-semibold text-foreground hover:underline">{node.full_name}</Link>
           <p className="text-xs text-muted-foreground">{[node.designation, node.department].filter(Boolean).join(' · ') || '—'}</p>

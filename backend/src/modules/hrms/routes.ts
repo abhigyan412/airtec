@@ -229,13 +229,13 @@ router.get('/staff/org-chart', requirePermissionV2('staff.view'), asyncHandler(a
 
   const { data, error } = await supabase
     .from('users')
-    .select('id, full_name, staff_profiles!staff_profiles_user_id_fkey(designation, department, reporting_to)')
+    .select('id, full_name, staff_profiles!staff_profiles_user_id_fkey(designation, department, reporting_to, photo_url)')
     .eq('school_id', school_id).neq('role', 'student').neq('role', 'parent').order('full_name')
   if (error) return res.status(500).json({ success: false, error: error.message })
 
   const result = (data ?? []).map((u: any) => {
     const profile = Array.isArray(u.staff_profiles) ? u.staff_profiles[0] : u.staff_profiles
-    return { id: u.id, full_name: u.full_name, designation: profile?.designation ?? null, department: profile?.department ?? null, reporting_to: profile?.reporting_to ?? null }
+    return { id: u.id, full_name: u.full_name, designation: profile?.designation ?? null, department: profile?.department ?? null, reporting_to: profile?.reporting_to ?? null, photo_url: profile?.photo_url ?? null }
   })
   res.json({ success: true, data: result })
 }))
@@ -396,6 +396,35 @@ router.put('/staff/:user_id/profile', requirePermissionV2('staff.edit'),
     res.json({ success: true, data: result.data })
   })
 )
+
+// POST /hrms/staff/:user_id/photo — same base64-upload-then-store-the-
+// public-URL shape as POST /students/:id/photo, just onto staff_profiles
+// (which may not exist yet for this user, hence upsert) and the
+// staff-photos bucket instead.
+router.post('/staff/:user_id/photo', requirePermissionV2('staff.edit'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { user_id } = req.params
+  const school_id = req.user!.school_id
+  const { photo_base64, file_name, mime_type } = req.body
+  if (!photo_base64) return res.status(400).json({ success: false, error: 'No photo provided' })
+
+  const { data: user } = await supabase.from('users').select('id').eq('id', user_id).eq('school_id', school_id).maybeSingle()
+  if (!user) return res.status(404).json({ success: false, error: 'Staff member not found' })
+
+  const base64Data = photo_base64.replace(/^data:image\/\w+;base64,/, '')
+  const buffer = Buffer.from(base64Data, 'base64')
+  const filePath = `${school_id}/${user_id}/${file_name ?? 'photo.jpg'}`
+  const { error: uploadErr } = await supabase.storage.from('staff-photos').upload(filePath, buffer, { contentType: mime_type ?? 'image/jpeg', upsert: true })
+  if (uploadErr) return res.status(400).json({ success: false, error: uploadErr.message })
+  const { data: urlData } = supabase.storage.from('staff-photos').getPublicUrl(filePath)
+
+  const { data: existing } = await supabase.from('staff_profiles').select('id').eq('user_id', user_id).maybeSingle()
+  if (existing) {
+    await supabase.from('staff_profiles').update({ photo_url: urlData.publicUrl }).eq('user_id', user_id)
+  } else {
+    await supabase.from('staff_profiles').insert({ school_id, user_id, photo_url: urlData.publicUrl })
+  }
+  res.json({ success: true, data: { photo_url: urlData.publicUrl } })
+}))
 
 // ═══════════════════════════════════════════════════════════════
 // STAFF SHIFTS — optional per-staff override of the school-wide
@@ -972,7 +1001,7 @@ router.get('/leave-requests', asyncHandler(async (req: AuthRequest, res: Respons
 
   let query = supabase
     .from('leave_requests')
-    .select(`*, leave_types(name, code, is_paid), users:user_id(full_name, role), approver:approved_by(full_name)`, { count: 'exact' })
+    .select(`*, leave_types(name, code, is_paid), users:user_id(full_name, role, staff_profiles!staff_profiles_user_id_fkey(photo_url)), approver:approved_by(full_name)`, { count: 'exact' })
     .eq('school_id', school_id)
     .range(from, to)
     .order('applied_at', { ascending: false })
@@ -1436,7 +1465,7 @@ router.get('/payslips', asyncHandler(async (req: AuthRequest, res: Response) => 
 
   let query = supabase
     .from('payslips')
-    .select(`*, users:user_id(full_name, role)`, { count: 'exact' })
+    .select(`*, users:user_id(full_name, role, staff_profiles!staff_profiles_user_id_fkey(photo_url))`, { count: 'exact' })
     .eq('school_id', school_id)
     .range(from, to)
     .order('year', { ascending: false })
@@ -1944,7 +1973,7 @@ router.get('/bonuses', requirePermissionV2('staff.payroll_manage'),
     const y = Number(year) || new Date().getFullYear()
 
     const { data, error } = await supabase
-      .from('staff_bonuses').select('*, users:user_id(full_name)')
+      .from('staff_bonuses').select('*, users:user_id(full_name, staff_profiles!staff_profiles_user_id_fkey(photo_url))')
       .eq('school_id', school_id).eq('month', m).eq('year', y)
       .order('created_at', { ascending: false })
     if (error) return res.status(500).json({ success: false, error: error.message })
@@ -2180,20 +2209,20 @@ router.get('/attendance/report', asyncHandler(async (req: AuthRequest, res: Resp
 
   const { data: staffRaw, error: staffErr } = await supabase
     .from('users')
-    .select('id, full_name, role, staff_profiles!staff_profiles_user_id_fkey(department)')
+    .select('id, full_name, role, staff_profiles!staff_profiles_user_id_fkey(department, photo_url)')
     .eq('school_id', school_id).neq('role', 'student').neq('role', 'parent').order('full_name')
   if (staffErr) return res.status(500).json({ success: false, error: staffErr.message })
 
   let staff = (staffRaw ?? []).map((u: any) => {
     const profile = Array.isArray(u.staff_profiles) ? u.staff_profiles[0] : u.staff_profiles
-    return { id: u.id, full_name: u.full_name, role: u.role, department: profile?.department ?? null }
+    return { id: u.id, full_name: u.full_name, role: u.role, department: profile?.department ?? null, photo_url: profile?.photo_url ?? null }
   })
   if (department) staff = staff.filter(s => s.department === department)
 
   const { rollupByUser, workingDays, holidaysInMonth } = await computeStaffAttendanceRollup(school_id, staff.map(s => s.id), fromDate, toDate)
 
   const data = staff.map(s => ({
-    user_id: s.id, full_name: s.full_name, role: s.role, department: s.department,
+    user_id: s.id, full_name: s.full_name, role: s.role, department: s.department, photo_url: s.photo_url,
     ...rollupByUser.get(s.id)!,
   }))
 
@@ -2247,7 +2276,7 @@ router.get('/attendance/regularizations', asyncHandler(async (req: AuthRequest, 
   const isAdmin = isSuperRole || permissionCodes.has('staff.attendance_mark')
 
   let query = supabase.from('staff_attendance_regularizations')
-    .select('*, users:user_id(full_name, role)').eq('school_id', school_id).order('created_at', { ascending: false })
+    .select('*, users:user_id(full_name, role, staff_profiles!staff_profiles_user_id_fkey(photo_url))').eq('school_id', school_id).order('created_at', { ascending: false })
 
   if (!isAdmin) query = query.eq('user_id', req.user!.id)
   else if (user_id) query = query.eq('user_id', user_id as string)
@@ -2344,7 +2373,7 @@ router.get('/comp-off', asyncHandler(async (req: AuthRequest, res: Response) => 
   const isAdmin = isSuperRole || permissionCodes.has('staff.leave_approve')
 
   let query = supabase.from('staff_comp_off_requests')
-    .select('*, users:user_id(full_name, role)').eq('school_id', school_id).order('created_at', { ascending: false })
+    .select('*, users:user_id(full_name, role, staff_profiles!staff_profiles_user_id_fkey(photo_url))').eq('school_id', school_id).order('created_at', { ascending: false })
 
   if (!isAdmin) query = query.eq('user_id', req.user!.id)
   else if (user_id) query = query.eq('user_id', user_id as string)

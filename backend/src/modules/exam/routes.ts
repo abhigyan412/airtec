@@ -18,6 +18,7 @@ const CreateExamSchema = z.object({
     start_date: z.string().optional(),
     end_date: z.string().optional(),
     grading_system: z.enum(['marks', 'grades', 'cgpa']).default('marks'),
+    default_time_slot_id: z.string().optional(),
 })
 
 const CreateExamSubjectSchema = z.object({
@@ -316,7 +317,7 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { data, error } = await supabase
         .from('exams')
-        .select('*, academic_years(name), exam_subjects(*, classes(name))')
+        .select('*, academic_years(name), exam_subjects(*, classes(name)), default_time_slot:default_time_slot_id(id, name, start_time, end_time)')
         .eq('id', id)
         .eq('school_id', req.user!.school_id)
         .single()

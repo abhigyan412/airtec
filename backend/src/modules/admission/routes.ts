@@ -7,6 +7,7 @@ import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, getPagination, NON_STAFF_ROLES } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
+import { ensureAdmissionApprovalWorkflowDefinition } from '../rbac/seed'
 
 const router = Router()
 router.use(authenticate)
@@ -61,7 +62,7 @@ const CreateApplicationSchema = z.object({
 // ── INQUIRIES ───────────────────────────────────────────────
 
 router.get('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { page = '1', limit = '20', search, status, counselor_id } = req.query
+  const { page = '1', limit = '20', search, status, counselor_id, source_id } = req.query
   const { from, to, limit: lim, page: pg } = getPagination(Number(page), Number(limit))
   const school_id = req.user!.school_id
 
@@ -81,6 +82,7 @@ router.get('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) =>
   if (search) query = query.ilike('student_name', `%${search}%`)
   if (status) query = query.eq('status', status)
   if (counselor_id) query = query.eq('counselor_id', counselor_id)
+  if (source_id) query = query.eq('source_id', source_id as string)
 
   const { data, error, count } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })
@@ -279,7 +281,8 @@ router.post('/inquiries/:id/convert-to-application', requirePermissionV2('admiss
   // Mark the inquiry as having moved into formal application stage
   await supabase.from('admission_inquiries').update({ status: 'documents_submitted' }).eq('id', id)
  
-  // Auto-start the Admission Approval Workflow (Counselor -> Accountant -> Principal)
+  // Auto-start the Admission Approval Workflow (Counselor -> Principal -> School Admin)
+  await ensureAdmissionApprovalWorkflowDefinition(school_id)
   const wfResult = await startWorkflow({
     schoolId: school_id,
     workflowName: 'Admission Approval Workflow',
@@ -359,7 +362,7 @@ router.post('/inquiries/:id/follow-ups', requirePermissionV2('admission.follow_u
 // ── APPLICATIONS ────────────────────────────────────────────
 
 router.get('/applications', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { page = '1', limit = '20', status } = req.query
+  const { page = '1', limit = '20', status, search, class_id, date_from, date_to } = req.query
   const { from, to, limit: lim, page: pg } = getPagination(Number(page), Number(limit))
   const school_id = req.user!.school_id
 
@@ -375,11 +378,51 @@ router.get('/applications', asyncHandler(async (req: AuthRequest, res: Response)
     .order('created_at', { ascending: false })
 
   if (status) query = query.eq('status', status)
+  if (class_id) query = query.eq('applying_for_class_id', class_id as string)
+  // One box searching name/phone/application number — same multi-column
+  // .or() ilike idiom used for job-application search in hrms/routes.ts.
+  if (search) {
+    query = query.or(
+      `student_first_name.ilike.%${search}%,student_last_name.ilike.%${search}%,father_phone.ilike.%${search}%,application_number.ilike.%${search}%`
+    )
+  }
+  if (date_from) query = query.gte('created_at', `${date_from}T00:00:00`)
+  // A plain date string compared with .lte() means midnight — that
+  // silently excludes the rest of the "to" day itself, so push the
+  // bound to the end of that day instead.
+  if (date_to) query = query.lte('created_at', `${date_to}T23:59:59`)
 
   const { data, error, count } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })
 
-  res.json({ success: true, data, meta: { total: count ?? 0, page: pg, limit: lim } })
+  // Batch-attach each application's live workflow state — same "one
+  // query, then match in JS" idiom used elsewhere in this file (e.g.
+  // the scorecard avg-rating batch-attach in hrms/routes.ts). The
+  // admission_applications.status column itself only ever moves
+  // pending -> admitted/rejected (see POST .../workflow-action below);
+  // everything in between only lives in workflow_instances/steps, so a
+  // list view has no way to show real progress without this.
+  const appIds = (data ?? []).map(a => a.id)
+  const { data: instances } = appIds.length
+    ? await supabase.from('workflow_instances').select('entity_id, status, current_step_id').eq('entity_type', 'admission_application').in('entity_id', appIds)
+    : { data: [] }
+  const stepIds = [...new Set((instances ?? []).map(i => i.current_step_id).filter(Boolean))]
+  const { data: steps } = stepIds.length
+    ? await supabase.from('workflow_steps').select('id, action_name').in('id', stepIds)
+    : { data: [] }
+  const stepNameById = new Map((steps ?? []).map(s => [s.id, s.action_name]))
+  const instanceByAppId = new Map((instances ?? []).map(i => [i.entity_id, i]))
+
+  const withWorkflow = (data ?? []).map(app => {
+    const instance = instanceByAppId.get(app.id)
+    return {
+      ...app,
+      workflow_status: instance?.status ?? null,
+      current_step_name: instance?.current_step_id ? stepNameById.get(instance.current_step_id) ?? null : null,
+    }
+  })
+
+  res.json({ success: true, data: withWorkflow, meta: { total: count ?? 0, page: pg, limit: lim } })
 }))
 
 // GET /applications/:id — single application detail
@@ -402,7 +445,27 @@ router.get('/applications/:id', asyncHandler(async (req: AuthRequest, res: Respo
     return res.status(404).json({ success: false, error: 'Application not found' })
   }
 
-  res.json({ success: true, data })
+  // Same workflow_status/current_step_name attachment as GET /applications
+  // (list) — keeps this page's own header badge showing the same live
+  // stage instead of a bare "Pending" while the pipeline below it shows
+  // the real detail.
+  const { data: instance } = await supabase
+    .from('workflow_instances')
+    .select('status, current_step_id')
+    .eq('entity_type', 'admission_application')
+    .eq('entity_id', id)
+    .eq('school_id', school_id)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  let current_step_name: string | null = null
+  if (instance?.current_step_id) {
+    const { data: step } = await supabase.from('workflow_steps').select('action_name').eq('id', instance.current_step_id).maybeSingle()
+    current_step_name = step?.action_name ?? null
+  }
+
+  res.json({ success: true, data: { ...data, workflow_status: instance?.status ?? null, current_step_name } })
 }))
 
 router.post('/applications', requirePermissionV2('admission.create'), asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -429,6 +492,7 @@ router.post('/applications', requirePermissionV2('admission.create'), asyncHandl
   // Fire-and-forget: don't fail application creation if the workflow
   // fails to start — just log it so an admin can manually start it
   // later via POST /applications/:id/start-workflow if needed.
+  await ensureAdmissionApprovalWorkflowDefinition(school_id)
   const wfResult = await startWorkflow({
     schoolId: school_id,
     workflowName: 'Admission Approval Workflow',
@@ -711,6 +775,7 @@ router.post('/applications/:id/start-workflow', requirePermissionV2('admission.a
       return res.status(404).json({ success: false, error: 'Application not found' })
     }
 
+    await ensureAdmissionApprovalWorkflowDefinition(school_id)
     const result = await startWorkflow({
       schoolId: school_id,
       workflowName: 'Admission Approval Workflow',

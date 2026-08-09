@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { admissionApi } from '@/lib/api'
 import { WorkflowPipeline } from '@/components/admission/WorkflowPipeline'
-import { formatDate } from '@/lib/utils'
+import { formatDate, admissionApplicationStatusBadge } from '@/lib/utils'
 import { ArrowLeft, Phone, User, ClipboardList } from 'lucide-react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -12,12 +12,6 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
-
-const STATUS_VARIANTS: Record<string, 'warning' | 'success' | 'destructive' | 'secondary'> = {
-  pending: 'warning',
-  approved: 'success',
-  rejected: 'destructive',
-}
 
 export default function ApplicationDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -72,7 +66,10 @@ export default function ApplicationDetailPage() {
         title={`${app.student_first_name} ${app.student_last_name}`}
         description={`${app.application_number} · Submitted ${formatDate(app.created_at)}`}
         icon={ClipboardList}
-        actions={<Badge variant={STATUS_VARIANTS[app.status] ?? 'secondary'} className="capitalize">{app.status}</Badge>}
+        actions={(() => {
+          const badge = admissionApplicationStatusBadge(app)
+          return <Badge variant={badge.variant}>{badge.label}</Badge>
+        })()}
       />
 
       {/* Basic details */}

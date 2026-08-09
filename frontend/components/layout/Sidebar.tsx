@@ -82,6 +82,7 @@ const NAV: NavItem[] = [
     children: [
       { label: 'All Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
       { label: 'Results', href: '/exams/results', icon: BarChart3, permission: 'exam.view', indent: true },
+      { label: 'Examination Settings', href: '/exams/templates', icon: SettingsIcon, permission: 'exam.view', indent: true },
     ],
   },
   { label: 'Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true },

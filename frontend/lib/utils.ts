@@ -60,3 +60,30 @@ export const STATUS_COLORS: Record<string, string> = {
   partial: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/20',
   pending: 'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
 }
+
+/**
+ * admission_applications.status only ever moves pending -> admitted/rejected
+ * in the live app now (the approval workflow, not this column, tracks
+ * everything in between) — the four granular values below are read-only
+ * leftovers a couple of old seed rows still carry. Given a row's status
+ * plus the live workflow fields GET /admission/applications now returns
+ * (workflow_status, current_step_name), this resolves what a status badge
+ * should actually show: the live stage while in progress, not a status
+ * that never changes until the very end.
+ */
+export function admissionApplicationStatusBadge(app: { status: string; current_step_name?: string | null }): {
+  label: string
+  variant: 'success' | 'destructive' | 'info' | 'secondary'
+} {
+  if (app.status === 'admitted') return { label: 'Admitted', variant: 'success' }
+  if (app.status === 'rejected') return { label: 'Rejected', variant: 'destructive' }
+  if (app.status === 'pending') {
+    return app.current_step_name
+      ? { label: app.current_step_name, variant: 'info' }
+      : { label: 'Not Started', variant: 'secondary' }
+  }
+  // Legacy values (counselor_approved, documents_verified, fee_paid,
+  // principal_approved) — no live code writes these anymore, just a
+  // cosmetic fallback so old seed rows still render legibly.
+  return { label: app.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), variant: 'secondary' }
+}

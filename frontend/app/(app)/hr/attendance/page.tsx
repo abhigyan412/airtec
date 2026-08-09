@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { HrQuickNav } from '@/components/hr/HrQuickNav'
+import { StaffAvatar, staffPhotoUrl } from '@/components/hr/StaffAvatar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
@@ -246,7 +247,12 @@ function MarkTab() {
                 const rec: Partial<RecordState> = records[s.id] ?? {}
                 return (
                   <TableRow key={s.id} className="cursor-default">
-                    <TableCell className="font-semibold text-foreground">{s.full_name}</TableCell>
+                    <TableCell className="font-semibold text-foreground">
+                      <div className="flex items-center gap-2.5">
+                        <StaffAvatar photoUrl={s.staff_profile?.photo_url} fullName={s.full_name} className="h-8 w-8 text-xs" />
+                        {s.full_name}
+                      </div>
+                    </TableCell>
                     <TableCell className="text-xs capitalize text-muted-foreground">{s.role?.replace('_',' ')}</TableCell>
                     <TableCell>
                       <div className="flex gap-1.5">
@@ -387,8 +393,13 @@ function ReportTab() {
               {staff.map((s: any) => (
                 <TableRow key={s.user_id} className="cursor-default">
                   <TableCell>
-                    <p className="font-medium text-foreground">{s.full_name}</p>
-                    <p className="text-xs capitalize text-muted-foreground">{s.role?.replace('_', ' ')}</p>
+                    <div className="flex items-center gap-2.5">
+                      <StaffAvatar photoUrl={s.photo_url} fullName={s.full_name} className="h-8 w-8 text-xs" />
+                      <div>
+                        <p className="font-medium text-foreground">{s.full_name}</p>
+                        <p className="text-xs capitalize text-muted-foreground">{s.role?.replace('_', ' ')}</p>
+                      </div>
+                    </div>
                   </TableCell>
                   <TableCell className="text-muted-foreground">{s.department ?? '—'}</TableCell>
                   <TableCell className="text-center font-mono text-foreground">{s.present}</TableCell>
@@ -445,13 +456,16 @@ function RequestsTab() {
         <div className="divide-y divide-border">
           {(requests ?? []).map((r: any) => (
             <div key={r.id} className="flex items-center justify-between px-6 py-4">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-foreground">{r.users?.full_name}</span>
-                  <span className="text-xs text-muted-foreground">·</span>
-                  <span className="text-sm text-muted-foreground">{r.date} → requesting {STATUS_LABELS[r.requested_status]}</span>
+              <div className="flex items-start gap-3">
+                <StaffAvatar photoUrl={staffPhotoUrl(r.users?.staff_profiles)} fullName={r.users?.full_name} className="mt-0.5 h-8 w-8 text-xs" />
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-foreground">{r.users?.full_name}</span>
+                    <span className="text-xs text-muted-foreground">·</span>
+                    <span className="text-sm text-muted-foreground">{r.date} → requesting {STATUS_LABELS[r.requested_status]}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{r.reason}</p>
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">{r.reason}</p>
               </div>
               <div className="flex gap-2">
                 <Button size="sm" onClick={() => actionMutation.mutate({ id: r.id, status: 'approved' })} disabled={actionMutation.isPending}
