@@ -3,11 +3,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // The sweep's value is entirely in which invoices it selects and who it
 // notifies, so the data layer is stubbed and those decisions asserted.
 const invoiceRows: any[] = []
-const paymentRows: any[] = []
+const assignmentRows: any[] = []
 const notifyCalls: any[] = []
 
-// Table-aware: the sweep queries fee_invoices and then fee_payments, and
-// handing the same rows to both makes every payment invisible.
+// Table-aware, per table rather than "everything that isn't fee_payments".
+//
+// The sweep reads three tables now — invoices, payments, and the assignments it
+// checks fee categories on. Falling back to the invoice rows for the third made
+// every invoice look like an RTE assignment, so the sweep correctly skipped
+// everybody and three unrelated assertions failed. A default of "no rows" is
+// also the honest default: a school with no RTE seats excludes nobody.
 vi.mock('../../db/client', () => {
   const make = (rows: () => any[]) => {
     const chain: any = {
@@ -16,8 +21,11 @@ vi.mock('../../db/client', () => {
     }
     return chain
   }
+  const forTable = (t: string) =>
+     t === 'fee_assignments' ? assignmentRows
+    : invoiceRows
   return {
-    supabase: { from: (t: string) => make(() => (t === 'fee_payments' ? paymentRows : invoiceRows)) },
+    supabase: { from: (t: string) => make(() => forTable(t)) },
     createUserClient: vi.fn(),
   }
 })
@@ -32,6 +40,13 @@ vi.mock('../notifications', () => ({
 
 const { runFeeReminders } = await import('../feeReminders')
 
+// amount_paid lives ON the invoice, maintained by a trigger on fee_payments.
+//
+// These fixtures used to push rows into a `fee_payments` table for the sweep to
+// sum, which is what fetchPaidByInvoice did before the model rewrite. It now
+// reads fee_invoices.amount_paid directly, so the stubbed payments reached
+// nothing and three assertions had been failing ever since — the code was right
+// and the fixtures were describing a function that no longer exists.
 const invoice = (over: Record<string, any> = {}) => ({
   id: crypto.randomUUID(),
   school_id: 'school-1',
@@ -39,12 +54,15 @@ const invoice = (over: Record<string, any> = {}) => ({
   invoice_number: 'INV202600001',
   due_date: '2020-01-01',      // long past
   total_amount: 5000,
+  amount_paid: 0,
   status: 'unpaid',
-  fee_payments: [],
   ...over,
 })
 
-beforeEach(() => { invoiceRows.length = 0; paymentRows.length = 0; notifyCalls.length = 0 })
+beforeEach(() => {
+  invoiceRows.length = 0
+  assignmentRows.length = 0; notifyCalls.length = 0
+})
 
 describe('runFeeReminders', () => {
   it('reports zero when there is nothing outstanding', async () => {
@@ -79,17 +97,13 @@ describe('runFeeReminders', () => {
   })
 
   it('names the amount still outstanding, not the invoice total', async () => {
-    const inv = invoice({ total_amount: 5000, status: 'partial' })
-    invoiceRows.push(inv)
-    paymentRows.push({ invoice_id: inv.id, amount_paid: 3000 })
+    invoiceRows.push(invoice({ total_amount: 5000, amount_paid: 3000, status: 'partial' }))
     await runFeeReminders('school-1')
     expect(notifyCalls[0].params.message).toContain('2,000')
   })
 
   it('skips an invoice already settled by payments', async () => {
-    const inv = invoice({ total_amount: 5000 })
-    invoiceRows.push(inv)
-    paymentRows.push({ invoice_id: inv.id, amount_paid: 5000 })
+    invoiceRows.push(invoice({ total_amount: 5000, amount_paid: 5000 }))
     const r = await runFeeReminders('school-1')
     expect(r.notified).toBe(0)
   })
@@ -108,11 +122,46 @@ describe('runFeeReminders', () => {
   })
 
   it('counts every invoice it examined, not just the ones it notified for', async () => {
-    const settled = invoice()
-    invoiceRows.push(settled, invoice())
-    paymentRows.push({ invoice_id: settled.id, amount_paid: 99999 })
+    invoiceRows.push(invoice({ amount_paid: 5000 }), invoice())
     const r = await runFeeReminders('school-1')
     expect(r.checked).toBe(2)
     expect(r.notified).toBe(1)
+  })
+
+  // An RTE child is admitted free under §12(1)(c) and the STATE reimburses the
+  // school. Texting the parents at 7am about a balance they do not owe, cannot
+  // pay and were told about at admission is the worst thing this job can do.
+  describe('students whose dues are not their family\'s', () => {
+    it('does not remind the parents of an RTE student', async () => {
+      invoiceRows.push(invoice({ student_id: 'rte-child' }))
+      assignmentRows.push({ student_id: 'rte-child' })
+      const r = await runFeeReminders('school-1')
+      expect(r.notified).toBe(0)
+      expect(notifyCalls).toHaveLength(0)
+    })
+
+    it('counts them rather than hiding them', async () => {
+      // A sweep that quietly got quieter is indistinguishable from a broken one.
+      invoiceRows.push(invoice({ student_id: 'rte-child' }))
+      assignmentRows.push({ student_id: 'rte-child' })
+      const r = await runFeeReminders('school-1')
+      expect(r.checked).toBe(1)
+      expect(r.skipped_not_owed_by_family).toBe(1)
+    })
+
+    it('still reminds everyone else in the same run', async () => {
+      invoiceRows.push(invoice({ student_id: 'rte-child' }), invoice({ student_id: 'paying-child' }))
+      assignmentRows.push({ student_id: 'rte-child' })
+      const r = await runFeeReminders('school-1')
+      expect(r.notified).toBe(1)
+      expect(notifyCalls).toHaveLength(1)
+    })
+
+    it('chases everyone when no student is on an excluded category', async () => {
+      invoiceRows.push(invoice())
+      const r = await runFeeReminders('school-1')
+      expect(r.notified).toBe(1)
+      expect(r.skipped_not_owed_by_family).toBe(0)
+    })
   })
 })

@@ -14,7 +14,7 @@ import authRoutes from './modules/auth/routes'
 import sisRoutes from './modules/sis/routes'
 import hrmsRoutes from './modules/hrms/routes'
 import admissionRoutes from './modules/admission/routes'
-import feeRoutes from './modules/fee/routes'
+import feeRoutes, { feeWebhookRoutes } from './modules/fee'
 import examRoutes from './modules/exam/routes'
 import documentRoutes from './modules/documents/routes'
 import { errorHandler, notFoundHandler } from './shared/utils/helpers'
@@ -76,6 +76,12 @@ app.use(cors({
   credentials: true,
 }))
 app.use(morgan('dev'))
+// Payment webhooks are verified by HMAC over the RAW body, so they must reach
+// the handler unparsed — express.json() would re-serialise and the hash would no
+// longer match what the provider signed. Mounted ahead of the parser, and ahead
+// of the fee module's `authenticate`, because a payment provider has no login.
+app.use('/api/fees/gateway/webhook', express.raw({ type: '*/*', limit: '1mb' }), feeWebhookRoutes)
+
 app.use(express.json({ limit: '10mb' }))
 
 // Brute-force protection, scoped to the endpoints where a guess is

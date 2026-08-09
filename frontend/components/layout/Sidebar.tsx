@@ -8,7 +8,7 @@ import {
   MessageSquare, Award, Clock, Library, Briefcase, Settings as SettingsIcon,
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
-  Network,
+  Layers, Receipt, Tag, Network,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -59,9 +59,16 @@ const NAV: NavItem[] = [
     label: 'Fees',
     icon: CreditCard,
     children: [
+      // Kept in step with the tab bar in app/(app)/fees/layout.tsx — the two
+      // drifting is how Discounts ended up reachable from one nav and not the
+      // other, and how Billing outlived the screen it pointed at.
       { label: 'Overview', href: '/fees', icon: Wallet, permission: 'fee.view' },
-      { label: 'Collections', href: '/fees/collections', icon: CreditCard, requireAny: ['fee.collect', 'fee.view'] },
-      { label: 'Arrears', href: '/fees/arrears', icon: BarChart3, permission: 'fee.view' },
+      { label: 'Collect', href: '/fees/collect', icon: CreditCard, requireAny: ['fee.collect', 'fee.view'] },
+      { label: 'Structures', href: '/fees/structures', icon: Layers, requireAny: ['fee.structure_manage', 'fee.view'] },
+      { label: 'Recovery', href: '/fees/recovery', icon: BarChart3, permission: 'fee.view' },
+      { label: 'Receipts', href: '/fees/receipts', icon: Receipt, requireAny: ['fee.view', 'fee.collect'] },
+      { label: 'Approvals', href: '/fees/approvals', icon: UserCheck, requireAny: ['fee.structure_manage', 'fee.discount'] },
+      { label: 'Discounts', href: '/fees/discounts', icon: Tag, requireAny: ['fee.discount', 'fee.view'] },
     ],
   },
   { label: 'Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },

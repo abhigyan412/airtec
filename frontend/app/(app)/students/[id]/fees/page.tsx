@@ -1,278 +1,236 @@
 'use client'
-import { useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useParams } from 'next/navigation'
-import { studentsApi, documentsApi } from '@/lib/api'
-import { formatDate, formatCurrency, cn, STATUS_COLORS } from '@/lib/utils'
-import { TransferCertificateCard } from '@/components/students/TransferCertificateCard'
-import { ArrowLeft, User, BookOpen, Phone, CreditCard, FileText, Calendar, Droplets, MapPin, Mail, Hash, Camera, Loader2, Users } from 'lucide-react'
 import Link from 'next/link'
-import { toast } from 'sonner'
+import { useParams } from 'next/navigation'
+import { useQuery } from '@tanstack/react-query'
+import { ArrowLeft, Wallet, Receipt, FileText, Tag } from 'lucide-react'
+import { feeApi } from '@/lib/api'
+import { usePermissions } from '@/lib/usePermissions'
+import { formatCurrency, formatDate, cn, STATUS_COLORS } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Alert } from '@/components/ui/alert'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
-import { Button } from '@/components/ui/button'
-import { Card as UICard, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Separator } from '@/components/ui/separator'
 
-export default function StudentDetailPage() {
+// One student's complete fee position.
+//
+// This route existed and rendered the student PROFILE — it was a stripped copy
+// of ../page.tsx with the fee content never written. A class teacher clicking an
+// overdue amount on their homeroom follow-ups list landed on demographics.
+//
+// Backed by /fees/students/:id — the same read the Collect flow uses, so the two
+// never disagree about what a family owes.
+
+export default function StudentFeeLedgerPage() {
   const { id } = useParams<{ id: string }>()
+  const { can } = usePermissions()
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['student', id],
-    queryFn: () => studentsApi.get(id).then(r => r.data),
+  const { data, isPending } = useQuery({
+    queryKey: ['fee-student-summary', id],
+    queryFn: () => feeApi.student(id).then(r => r.data),
   })
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <div className="max-w-5xl space-y-6">
-        <div className="flex items-center gap-4">
-          <Skeleton className="h-16 w-16 rounded-2xl" />
-          <div className="space-y-2">
-            <Skeleton className="h-6 w-48" />
-            <Skeleton className="h-4 w-32" />
-          </div>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          <Skeleton className="col-span-2 h-64 rounded-xl" />
-          <Skeleton className="h-64 rounded-xl" />
-        </div>
+        <Skeleton className="h-10 w-64" />
+        <Skeleton className="h-36 w-full rounded-xl" />
+        <Skeleton className="h-64 w-full rounded-xl" />
       </div>
     )
   }
 
   if (!data) {
     return (
-      <EmptyState
-        icon={Users}
-        title="Student not found"
-        description="This student may have been removed, or the link is out of date."
-        action={
-          <Button asChild>
-            <Link href="/students">Back to students</Link>
-          </Button>
-        }
-      />
+      <Card>
+        <EmptyState icon={Wallet} title="No fee record found" description="This student has no fee history yet." />
+      </Card>
     )
   }
 
-  const s = data
-  const parent = s.parents?.[0]
-  const initials = `${s.first_name?.[0] ?? ''}${s.last_name?.[0] ?? ''}`.toUpperCase()
-  const subtitle = [
-    s.classes?.name ? `${s.classes.name}${s.sections?.name ? ` · ${s.sections.name}` : ''}` : null,
-    s.admission_number ? `#${s.admission_number}` : null,
-  ].filter(Boolean).join(' · ')
+  const student = data.student
+  const summary = data.summary
+  const invoices: any[] = data.invoices ?? []
+  const payments: any[] = data.payments ?? []
+  const arrears: any[] = (data.arrears ?? []).filter((a: any) => a.amount_due > 0)
+  const adhoc: any[] = (data.adhoc_charges ?? []).filter((a: any) => a.status !== 'cancelled')
+
+  const name = `${student?.first_name ?? ''} ${student?.last_name ?? ''}`.trim()
+  const settled = (summary?.totalDue ?? 0) <= 0
 
   return (
     <div className="max-w-5xl space-y-6">
       <div className="flex items-start gap-3">
-        <Button asChild variant="ghost" size="icon" className="mt-1 shrink-0" aria-label="Back to students">
-          <Link href="/students"><ArrowLeft className="h-5 w-5" /></Link>
+        <Button asChild variant="ghost" size="icon" className="mt-0.5 shrink-0" aria-label="Back to student">
+          <Link href={`/students/${id}`}><ArrowLeft className="h-5 w-5" /></Link>
         </Button>
-        <PhotoUpload studentId={id} currentUrl={s.photo_url} initials={initials} />
         <PageHeader
+          title={name || 'Fee ledger'}
+          description={[
+            student?.classes?.name && `${student.classes.name}${student.sections?.name ? `-${student.sections.name}` : ''}`,
+            student?.admission_number,
+          ].filter(Boolean).join(' · ') || 'Fee ledger'}
+          icon={Wallet}
           className="mb-0 flex-1"
-          title={`${s.first_name} ${s.last_name}`}
-          description={subtitle || undefined}
           actions={
-            <>
-              <span className={cn('px-2.5 py-1 rounded-full text-xs font-semibold capitalize', STATUS_COLORS[s.status])}>
-                {s.status}
-              </span>
-              {s.houses && (
-                <span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ backgroundColor: s.houses.color ?? '#6366f1' }}>
-                  {s.houses.name}
-                </span>
-              )}
-              <Button asChild variant="outline" size="sm">
-                <a href={documentsApi.idCard(id)} target="_blank" rel="noreferrer">ID Card</a>
+            can('fee.discount') && (
+              <Button asChild variant="outline">
+                <Link href={`/fees/discounts?student=${id}`}><Tag className="h-4 w-4" /> Concession</Link>
               </Button>
-              <Button asChild variant="outline" size="sm">
-                <Link href={`/students/${id}/edit`}>Edit profile</Link>
-              </Button>
-            </>
+            )
           }
         />
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        <div className="col-span-2 space-y-5">
-          <Card title="Personal Information" icon={User}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
-              <Detail label="Date of Birth" value={s.date_of_birth ? formatDate(s.date_of_birth) : '—'} />
-              <Detail label="Gender" value={s.gender ? s.gender.charAt(0).toUpperCase() + s.gender.slice(1) : '—'} />
-              <Detail label="Blood Group" value={s.blood_group ?? '—'} />
-              <Detail label="Aadhaar" value={s.aadhaar_number ?? '—'} />
-              <Detail label="Email" value={s.email ?? '—'} />
-              <Detail label="Phone" value={s.phone ?? '—'} />
-              <div className="col-span-2">
-                <Detail label="Address" value={[s.permanent_address, s.city, s.state, s.pincode].filter(Boolean).join(', ') || '—'} />
-              </div>
-            </div>
-          </Card>
-
-          <Card title="Academic Details" icon={BookOpen}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
-              <Detail label="Class" value={s.classes?.name ?? '—'} />
-              <Detail label="Section" value={s.sections?.name ?? '—'} />
-              <Detail label="Roll Number" value={s.roll_number ?? '—'} />
-              <Detail label="Stream" value={s.stream ?? '—'} />
-              <Detail label="Academic Year" value={s.academic_years?.name ?? '—'} />
-              <Detail label="House" value={s.houses?.name ?? '—'} />
-            </div>
-            {(s.is_school_captain || s.is_house_captain) && (
-              <>
-                <Separator className="mt-4" />
-                <div className="mt-4 flex gap-2 flex-wrap">
-                  {s.is_school_captain && <Badge variant="warning">School Captain</Badge>}
-                  {s.is_house_captain && <Badge className="border-transparent bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400">House Captain</Badge>}
-                </div>
-              </>
-            )}
-          </Card>
-
-          {parent && (
-            <Card title="Parent / Guardian" icon={Phone}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                {parent.father_name && (
-                  <div className="space-y-3">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Father</p>
-                    <Detail label="Name" value={parent.father_name} />
-                    <Detail label="Phone" value={parent.father_phone ?? '—'} />
-                    <Detail label="Email" value={parent.father_email ?? '—'} />
-                  </div>
-                )}
-                {parent.mother_name && (
-                  <div className="space-y-3">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Mother</p>
-                    <Detail label="Name" value={parent.mother_name} />
-                    <Detail label="Phone" value={parent.mother_phone ?? '—'} />
-                    <Detail label="Email" value={parent.mother_email ?? '—'} />
-                  </div>
-                )}
-              </div>
-            </Card>
-          )}
-
-          <TransferCertificateCard studentId={id} studentStatus={s.status} />
-        </div>
-
-        <div className="space-y-5">
-          <Card title="Fee Summary" icon={CreditCard}>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between py-2 border-b border-border">
-                <span className="text-sm text-muted-foreground">Total Billed</span>
-                <span className="text-sm font-semibold text-foreground">{formatCurrency(s.fee_summary?.total_billed ?? 0)}</span>
-              </div>
-              <div className="flex items-center justify-between py-2 border-b border-border">
-                <span className="text-sm text-muted-foreground">Collected</span>
-                <span className="text-sm font-semibold text-success">{formatCurrency(s.fee_summary?.total_paid ?? 0)}</span>
-              </div>
-              <div className="flex items-center justify-between py-2">
-                <span className="text-sm text-muted-foreground">Due</span>
-                <span className="text-sm font-bold text-destructive">{formatCurrency(s.fee_summary?.total_due ?? 0)}</span>
-              </div>
-            </div>
-          </Card>
-
-          <Card title="Quick Actions" icon={FileText}>
-            <div className="space-y-2">
-              <QuickAction href={`/students/${id}/fees`} label="View Fees & Invoices" />
-              <QuickAction href={`/students/${id}/documents`} label="View Documents" />
-              <QuickAction href={`/students/${id}/attendance`} label="View Attendance" />
-              <QuickAction href={documentsApi.idCard(id)} label="Print ID Card" external />
-            </div>
-          </Card>
-
-          <div className="bg-muted rounded-2xl p-4 space-y-2">
-            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Record info</p>
-            <p className="text-xs text-muted-foreground">Added on {formatDate(s.created_at)}</p>
+      <Card>
+        <CardContent className="p-5">
+          <p className="text-sm font-medium text-muted-foreground">
+            {settled ? 'Nothing outstanding' : 'Total outstanding'}
+          </p>
+          <p className={cn('text-4xl font-bold tabular-nums tracking-tight', settled ? 'text-success' : 'text-destructive')}>
+            {formatCurrency(summary?.totalDue ?? 0)}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3 border-t pt-3.5">
+            <Metric label="Billed" value={summary?.totalBilled ?? 0} />
+            <Metric label="Paid" value={summary?.totalPaid ?? 0} tone="success" />
+            <Metric label="On invoices" value={summary?.invoiceDue ?? 0} tone="destructive" />
+            {/* Arrears and one-off charges are shown as their own lines because
+                the total used to omit them entirely — the school's figure and the
+                family's figure disagreed. */}
+            {(summary?.arrearsDue ?? 0) > 0 && <Metric label="Arrears" value={summary.arrearsDue} tone="destructive" />}
+            {(summary?.adhocDue ?? 0) > 0 && <Metric label="One-off charges" value={summary.adhocDue} tone="destructive" />}
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
+
+      {!!arrears.length && (
+        <Alert variant="warning" title={`${formatCurrency(summary?.arrearsDue ?? 0)} carried forward from a previous year`}>
+          {arrears.map(a => (
+            <span key={a.id} className="block">
+              {a.from_year?.name ?? 'Previous year'} → {a.to_year?.name ?? 'this year'} · {formatCurrency(a.amount_due)} remaining
+            </span>
+          ))}
+        </Alert>
+      )}
+
+      <Card>
+        <CardHeader><CardTitle>Invoices</CardTitle></CardHeader>
+        <CardContent className="p-0">
+          {!invoices.length ? (
+            <EmptyState icon={FileText} title="No invoices" description="Nothing has been billed to this student yet." />
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Invoice</TableHead>
+                    <TableHead>Issued</TableHead>
+                    <TableHead>Due</TableHead>
+                    <TableHead className="text-right">Billed</TableHead>
+                    <TableHead className="text-right">Outstanding</TableHead>
+                    <TableHead>Status</TableHead>
+                    {can('fee.collect') && <TableHead />}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {invoices.map(inv => (
+                    <TableRow key={inv.id} className="cursor-default">
+                      <TableCell>
+                        <p className="font-mono text-xs text-muted-foreground">{inv.invoice_number}</p>
+                        {Number(inv.late_fee) > 0 && (
+                          <p className="text-[11px] text-warning">incl. {formatCurrency(inv.late_fee)} late fee</p>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{formatDate(inv.invoice_date)}</TableCell>
+                      <TableCell className="text-muted-foreground">{inv.due_date ? formatDate(inv.due_date) : '—'}</TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(inv.total_amount)}</TableCell>
+                      <TableCell className={cn('text-right font-semibold tabular-nums', inv.amount_due > 0 ? 'text-destructive' : 'text-success')}>
+                        {formatCurrency(inv.amount_due)}
+                      </TableCell>
+                      <TableCell>
+                        <span className={cn('whitespace-nowrap rounded-full px-2 py-1 text-xs font-medium', STATUS_COLORS[inv.status] ?? 'bg-muted text-muted-foreground')}>
+                          {inv.status === 'carried_forward' ? 'carried forward' : inv.status}
+                        </span>
+                      </TableCell>
+                      {can('fee.collect') && (
+                        <TableCell className="text-right">
+                          {/* Not a per-invoice modal any more. One handover is one
+                              payment with one receipt, split across whatever it
+                              settles — so collecting always goes through the
+                              student's counter screen, never a single row. */}
+                          {(inv.status === 'unpaid' || inv.status === 'partial') && (
+                            <Button asChild size="sm" variant="secondary">
+                              <Link href={`/fees/collect/student/${id}/payment`}>Take payment</Link>
+                            </Button>
+                          )}
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {!!adhoc.length && (
+        <Card>
+          <CardHeader><CardTitle>One-off charges</CardTitle></CardHeader>
+          <div className="divide-y border-t">
+            {adhoc.map(a => (
+              <div key={a.id} className="flex items-center justify-between gap-3 px-5 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">{a.title}</p>
+                  <p className="text-xs capitalize text-muted-foreground">
+                    {a.status}{a.due_date ? ` · due ${formatDate(a.due_date)}` : ''}
+                  </p>
+                </div>
+                <p className={cn('shrink-0 text-sm font-semibold tabular-nums', a.status === 'paid' ? 'text-success' : 'text-foreground')}>
+                  {formatCurrency(a.amount)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader><CardTitle>Receipts</CardTitle></CardHeader>
+        {!payments.length ? (
+          <EmptyState icon={Receipt} title="No payments recorded" description="Receipts appear here once a payment is taken." />
+        ) : (
+          <div className="divide-y border-t">
+            {payments.map(p => (
+              <div key={p.id} className="flex items-center justify-between gap-3 px-5 py-3">
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-sm font-medium text-foreground">{p.receipt_number}</p>
+                  <p className="text-xs capitalize text-muted-foreground">
+                    {formatDate(p.payment_date)} · {p.method}
+                    {p.reference ? ` · ${p.reference}` : ''}
+                  </p>
+                </div>
+                <p className="shrink-0 text-sm font-semibold tabular-nums text-success">{formatCurrency(Number(p.amount) - Number(p.refunded_amount ?? 0))}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
     </div>
   )
 }
 
-function QuickAction({ href, label, external }: { href: string; label: string; external?: boolean }) {
-  const className = 'flex items-center justify-between px-3 py-2.5 rounded-xl text-sm text-muted-foreground font-medium hover:bg-muted hover:text-foreground transition-colors border border-transparent hover:border-border'
-  const inner = <>{label} <span className="text-muted-foreground/50">→</span></>
-  if (external) {
-    return <a href={href} target="_blank" rel="noreferrer" className={className}>{inner}</a>
-  }
-  return <Link href={href} className={className}>{inner}</Link>
-}
-
-function PhotoUpload({ studentId, currentUrl, initials }: { studentId: string, currentUrl?: string, initials: string }) {
-  const [preview, setPreview] = useState(currentUrl)
-  const [uploading, setUploading] = useState(false)
-  const qc = useQueryClient()
-
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setUploading(true)
-    const reader = new FileReader()
-    reader.onload = async () => {
-      try {
-        const base64 = reader.result as string
-        const res = await studentsApi.uploadPhoto(studentId, {
-          photo_base64: base64,
-          file_name: file.name,
-          mime_type: file.type,
-        })
-        setPreview(res.data.photo_url)
-        qc.invalidateQueries({ queryKey: ['student', studentId] })
-        toast.success('Photo updated!')
-      } catch {
-        toast.error('Upload failed')
-      } finally {
-        setUploading(false)
-      }
-    }
-    reader.readAsDataURL(file)
-  }
-
-  return (
-    <label className="relative cursor-pointer group flex-shrink-0">
-      <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center overflow-hidden">
-        {preview
-          ? <img src={preview} alt="" className="w-16 h-16 object-cover rounded-2xl" />
-          : <span className="text-2xl font-bold text-primary">{initials}</span>
-        }
-        <div className="absolute inset-0 bg-black/50 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-          {uploading
-            ? <Loader2 className="w-5 h-5 text-white animate-spin" />
-            : <Camera className="w-5 h-5 text-white" />
-          }
-        </div>
-      </div>
-      <input type="file" accept="image/*" className="hidden" onChange={handleFile} disabled={uploading} />
-    </label>
-  )
-}
-
-function Card({ title, icon: Icon, children }: { title: string; icon?: any; children: React.ReactNode }) {
-  return (
-    <UICard className="rounded-2xl">
-      <CardHeader className="pb-4">
-        <CardTitle className="flex items-center gap-2 text-sm">
-          {Icon && <Icon className="w-4 h-4 text-muted-foreground" />}
-          {title}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </UICard>
-  )
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, tone }: { label: string; value: number; tone?: 'success' | 'destructive' }) {
   return (
     <div>
-      <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
-      <p className="text-sm font-medium text-foreground">{value}</p>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={cn('mt-0.5 text-base font-semibold tabular-nums',
+        tone === 'success' ? 'text-success' : tone === 'destructive' ? 'text-destructive' : 'text-foreground')}>
+        {formatCurrency(value)}
+      </p>
     </div>
   )
 }

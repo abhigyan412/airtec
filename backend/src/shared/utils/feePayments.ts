@@ -16,25 +16,24 @@ import { supabase } from '../db/client'
 const CHUNK = 150
 
 /**
- * Sum payments per invoice, returned as `invoice_id -> total paid`.
+ * How much has been paid against each invoice, as `invoice_id -> total paid`.
  *
- * Every caller needs this to compute what is actually still owed:
- * `fee_invoices.total_amount` is the ORIGINAL bill, not the remaining balance.
+ * WAS BROKEN. This selected `fee_payments.invoice_id`, a column the fee model
+ * rewrite removed: a payment no longer belongs to one invoice, it has allocation
+ * rows saying which invoices it settled and for how much. Every caller therefore
+ * threw — the nightly fee-reminder sweep and both homeroom dues endpoints have
+ * been failing outright since that migration landed, which is why no family had
+ * received a due or overdue reminder since.
  *
- * Two things this fixes over the inline version it replaces, both of which
- * caused the endpoint to over-report what a family owes:
+ * The fix is not to re-sum the allocations. `fee_invoices.amount_paid` is now a
+ * maintained column, kept in step with the allocation rows by trigger, and it is
+ * what every other read in the fee module already trusts — the invoice list, the
+ * student summary, recovery. Summing a second time from a different table is how
+ * two numbers for one fact start to disagree.
  *
- *  1. The old code did `const { data: payments } = await supabase...` and never
- *     looked at `error`. Past ~300 invoices the query failed, `payments` came
- *     back undefined, the paid-per-invoice map stayed empty, and every invoice
- *     reported `amount_due === total_amount`. A parent who had paid 80% of
- *     their fees was shown the full amount as outstanding, and the carry-forward
- *     job would have written that inflated figure into next year's invoices.
- *     This throws instead, so the route 500s loudly rather than quietly lying
- *     about money.
- *
- *  2. Chunking keeps it working as a school's invoice count grows, instead of
- *     breaking silently the month it crosses the threshold.
+ * Kept as a helper with its original signature so the three call sites are fixed
+ * without touching them. A caller that ALREADY has the invoice row does not need
+ * this at all — read `amount_paid` off it directly.
  */
 export async function fetchPaidByInvoice(invoiceIds: string[]): Promise<Map<string, number>> {
   const paidByInvoice = new Map<string, number>()
@@ -52,9 +51,9 @@ export async function fetchPaidByInvoice(invoiceIds: string[]): Promise<Map<stri
   const results = await Promise.all(
     batches.map(async (batch, idx) => {
       const { data, error } = await supabase
-        .from('fee_payments')
-        .select('invoice_id, amount_paid')
-        .in('invoice_id', batch)
+        .from('fee_invoices')
+        .select('id, amount_paid')
+        .in('id', batch)
 
       // Loud, not silent: a partial result here understates payments, which
       // overstates dues. Telling a family they owe more than they do is worse
@@ -70,11 +69,8 @@ export async function fetchPaidByInvoice(invoiceIds: string[]): Promise<Map<stri
   )
 
   for (const rows of results) {
-    for (const p of rows) {
-      paidByInvoice.set(
-        p.invoice_id,
-        (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount_paid),
-      )
+    for (const inv of rows) {
+      paidByInvoice.set(inv.id, Number(inv.amount_paid ?? 0))
     }
   }
 

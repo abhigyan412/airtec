@@ -1,16 +1,19 @@
 'use client'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, Receipt } from 'lucide-react'
+import { FileText, Receipt, CalendarClock, Wallet } from 'lucide-react'
 import { studentsApi, feeApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { PayDialog } from '@/components/fees/PayDialog'
 import { formatCurrency, formatDate, formatRelativeDue, statusVariant, cn } from '@/lib/utils'
+import { invoiceHeads, invoiceTitle } from '@/lib/fees'
 
 export default function PortalFeesPage() {
   // Fees is parent-only (see (portal)/layout.tsx nav) — this catches a
@@ -28,9 +31,11 @@ export default function PortalFeesPage() {
 
   const { data, isPending: summaryPending } = useQuery({
     queryKey: ['portal-fee-summary', me?.id],
-    queryFn: () => feeApi.studentSummary(me.id).then(r => r.data),
+    queryFn: () => feeApi.student(me.id).then(r => r.data),
     enabled: !!me?.id,
   })
+
+  const [paying, setPaying] = useState(false)
 
   // `isLoading` is `isPending && isFetching`, and a DISABLED query is never
   // fetching — so while `me` is still resolving, isLoading reads false, the
@@ -45,6 +50,11 @@ export default function PortalFeesPage() {
   const summary = data?.summary
   const invoices: any[] = data?.invoices ?? []
   const payments: any[] = data?.payments ?? []
+  const upcoming: any[] = data?.upcoming ?? []
+  // What can actually be paid online right now. Arrears and unbilled one-off
+  // charges are in totalDue but have no invoice to settle, so offering to
+  // collect them here would take money the allocator cannot place.
+  const payableNow = summary?.invoiceDue ?? 0
 
   const totalDue = summary?.totalDue ?? 0
   const settled = totalDue <= 0
@@ -101,12 +111,31 @@ export default function PortalFeesPage() {
             <p className="mt-1.5 text-sm text-muted-foreground">
               {settled
                 ? "You're all paid up — there's nothing outstanding right now."
-                : nextDue
-                  ? 'Please clear this at the school office to keep the account current.'
-                  : 'No due date has been set on these invoices yet.'}
+                : payableNow > 0
+                  ? 'Pay online below, or at the school office.'
+                  : 'Please clear this at the school office to keep the account current.'}
             </p>
 
-            <div className="mt-4 flex items-start gap-8 border-t pt-3.5">
+            {payableNow > 0 && (
+              <Button className="mt-4 w-full" onClick={() => setPaying(true)}>
+                <Wallet className="mr-2 h-4 w-4" /> Pay {formatCurrency(payableNow)} now
+              </Button>
+            )}
+            {!settled && payableNow > 0 && payableNow < totalDue && (
+              // The difference is arrears or an unbilled charge. Saying so beats
+              // a parent paying and wondering why they still owe something.
+              <p className="mt-2 text-center text-xs text-muted-foreground">
+                {formatCurrency(totalDue - payableNow)} of the total isn&apos;t on an
+                invoice yet — settle that at the office.
+              </p>
+            )}
+
+            {/* The total above now includes carried-forward arrears and one-off
+                charges, which it previously omitted — a family could clear every
+                invoice on this page and still be a defaulter in the school's own
+                records. Where those exist they are named, so the figure is not a
+                number the parent cannot account for. */}
+            <div className="mt-4 flex flex-wrap items-start gap-x-8 gap-y-3 border-t pt-3.5">
               <div>
                 <p className="text-xs font-medium text-muted-foreground">Total billed</p>
                 <p className="mt-0.5 text-base font-semibold tabular-nums text-foreground">
@@ -119,8 +148,51 @@ export default function PortalFeesPage() {
                   {formatCurrency(summary?.totalPaid ?? 0)}
                 </p>
               </div>
+              {(summary?.arrearsDue ?? 0) > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">From last year</p>
+                  <p className="mt-0.5 text-base font-semibold tabular-nums text-destructive">
+                    {formatCurrency(summary.arrearsDue)}
+                  </p>
+                </div>
+              )}
+              {(summary?.adhocDue ?? 0) > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">One-off charges</p>
+                  <p className="mt-0.5 text-base font-semibold tabular-nums text-destructive">
+                    {formatCurrency(summary.adhocDue)}
+                  </p>
+                </div>
+              )}
             </div>
           </Card>
+
+          {/* What is coming, before it is billed. The schedule lives on the
+              school's fee plan, so a family can budget for the next term instead
+              of finding out when the invoice lands. */}
+          {upcoming.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Coming up</CardTitle>
+              </CardHeader>
+              <div className="divide-y border-t">
+                {upcoming.slice(0, 4).map((u: any) => (
+                  <div key={u.period_token} className="flex items-center justify-between gap-3 px-5 py-3.5">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <CalendarClock className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <p className="truncate text-sm font-medium text-foreground">{u.label}</p>
+                    </div>
+                    <p className="shrink-0 text-xs text-muted-foreground">
+                      due {formatDate(u.due_date)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <p className="px-5 pb-3.5 pt-1 text-xs text-muted-foreground">
+                Not billed yet — you&apos;ll be notified here when each one is raised.
+              </p>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>
@@ -136,18 +208,34 @@ export default function PortalFeesPage() {
               <div className="divide-y border-t">
                 {invoices.map((inv: any) => (
                   <div key={inv.id} className="flex items-start justify-between gap-3 px-5 py-3.5">
+                    {/* The term and the heads lead; the invoice number is the
+                        reference you quote back to the office, not the thing
+                        being described. A parent has no way to look one up. */}
                     <div className="min-w-0">
-                      <p className="truncate font-mono text-sm font-medium text-foreground">
-                        {inv.invoice_number}
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {invoiceTitle(inv)}
                       </p>
+                      {invoiceHeads(inv.line_items) && (
+                        <p className="mt-0.5 text-xs text-muted-foreground">{invoiceHeads(inv.line_items)}</p>
+                      )}
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {inv.due_date ? `Due ${formatDate(inv.due_date)}` : formatDate(inv.invoice_date)}
+                        {' · '}
+                        <span className="font-mono">{inv.invoice_number}</span>
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1.5">
+                      {/* Outstanding, not the original bill. A partially paid
+                          invoice showed its full amount here, so a parent who
+                          had paid most of it was told they still owed all of it. */}
                       <p className="text-sm font-semibold tabular-nums text-foreground">
-                        {formatCurrency(inv.total_amount)}
+                        {formatCurrency(inv.amount_due ?? inv.total_amount)}
                       </p>
+                      {inv.amount_due != null && Number(inv.amount_paid) > 0 && inv.status !== 'paid' && (
+                        <p className="text-[11px] tabular-nums text-muted-foreground">
+                          {formatCurrency(inv.amount_paid)} of {formatCurrency(inv.total_amount)} paid
+                        </p>
+                      )}
                       <Badge variant={statusVariant(inv.status)}>{inv.status}</Badge>
                     </div>
                   </div>
@@ -175,11 +263,15 @@ export default function PortalFeesPage() {
                         {p.receipt_number}
                       </p>
                       <p className="mt-0.5 text-xs capitalize text-muted-foreground">
-                        {formatDate(p.payment_date)} · {p.payment_mode}
+                        {formatDate(p.payment_date)} · {p.method}
+                        {p.status === 'bounced' && ' · returned by bank'}
                       </p>
                     </div>
-                    <p className="shrink-0 text-sm font-semibold tabular-nums text-success">
-                      {formatCurrency(p.amount_paid)}
+                    <p className={cn(
+                      'shrink-0 text-sm font-semibold tabular-nums',
+                      p.status === 'bounced' ? 'text-muted-foreground line-through' : 'text-success',
+                    )}>
+                      {formatCurrency(Number(p.amount) - Number(p.refunded_amount ?? 0))}
                     </p>
                   </div>
                 ))}
@@ -187,6 +279,10 @@ export default function PortalFeesPage() {
             )}
           </Card>
         </>
+      )}
+
+      {paying && (
+        <PayDialog outstanding={payableNow} onClose={() => setPaying(false)} />
       )}
     </div>
   )

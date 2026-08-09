@@ -173,7 +173,7 @@ export default function DashboardPage() {
                       hint={`${feeStats?.paid_invoices ?? 0} paid invoices`}
                     />
                   </Link>
-                  <Link href="/fees/arrears">
+                  <Link href="/fees/recovery">
                     <StatCard
                       label="Pending Dues"
                       value={feeStats ? formatCurrency(feeStats.total_due) : '—'}
@@ -254,7 +254,7 @@ export default function DashboardPage() {
                       <CardTitle>Pending Dues</CardTitle>
                       <p className="mt-0.5 text-xs text-muted-foreground">{(dues ?? []).length} students</p>
                     </div>
-                    <ViewAll href="/fees/arrears" />
+                    <ViewAll href="/fees/recovery" />
                   </CardHeader>
                   <CardContent>
                     {duesLoading ? (

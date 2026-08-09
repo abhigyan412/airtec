@@ -71,7 +71,7 @@ function ClassWiseDues() {
   })
 
   const { data: dues, isLoading } = useQuery({
-    queryKey: ['dues', classId],
+    queryKey: ['fee-dues', classId],
     queryFn: () => feeApi.dues(classId ? { class_id: classId } : undefined).then(r => r.data),
   })
 
