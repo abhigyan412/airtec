@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, AlertTriangle, Wallet, Download, CalendarX2, Settings, Plus, Trash2, Gift } from 'lucide-react'
+import { ArrowLeft, IndianRupee, Loader2, Play, Check, ShieldCheck, ShieldAlert, AlertTriangle, Wallet, Download, CalendarX2, Settings, Plus, Trash2, Gift, XCircle, History, ClipboardList } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -19,7 +19,10 @@ import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import { StaffAvatar, staffPhotoUrl } from '@/components/hr/StaffAvatar'
+import { PayslipBreakdownModal } from '@/components/hr/PayslipBreakdownModal'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
+import { usePermissions } from '@/lib/usePermissions'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -44,18 +47,31 @@ export default function PayrollPage() {
   const [selectedPayslip, setSelectedPayslip] = useState<any | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showBonuses, setShowBonuses] = useState(false)
+  const [showArrears, setShowArrears] = useState(false)
+  const [showDutyLog, setShowDutyLog] = useState(false)
 
   const { data: payslips, isLoading } = useQuery({
     queryKey: ['payslips', month, year],
     queryFn: () => hrmsApi.payslips.list({ month, year, limit: 100 }).then(r => r.data),
   })
 
+  // Stage 8: school-wide, not scoped to whichever month happens to be
+  // selected above — a failure from two months ago is still someone
+  // who hasn't been paid, and it must not go unnoticed just because
+  // the accountant is looking at this month's run.
+  const { data: failedPayslips } = useQuery({
+    queryKey: ['payslips', 'failed'],
+    queryFn: () => hrmsApi.payslips.list({ payment_status: 'failed', limit: 100 }).then(r => r.data),
+    enabled: canApprove,
+  })
+  const [failingPayslip, setFailingPayslip] = useState<any | null>(null)
+
   const { data: summary } = useQuery({
     queryKey: ['payroll-summary', month, year],
     queryFn: () => hrmsApi.payroll.summary({ month, year }).then(r => r.data),
   })
 
-  const [coverageWarning, setCoverageWarning] = useState<{ error: string; coverage_pct: number } | null>(null)
+  const [coverageWarning, setCoverageWarning] = useState<{ error: string; coverage_pct: number; unmarked_dates: string[]; unmarked_dates_more: number } | null>(null)
 
   const generateMutation = useMutation({
     mutationFn: (confirm?: boolean) => hrmsApi.payslips.generate({ month, year, confirm }),
@@ -75,7 +91,10 @@ export default function PayrollPage() {
       // that data gap as absenteeism for most of the staff. Surface it
       // as a confirmation step instead of a plain error toast.
       if (e?.response?.data?.needs_confirmation) {
-        setCoverageWarning({ error: e.response.data.error, coverage_pct: e.response.data.coverage_pct })
+        setCoverageWarning({
+          error: e.response.data.error, coverage_pct: e.response.data.coverage_pct,
+          unmarked_dates: e.response.data.unmarked_dates ?? [], unmarked_dates_more: e.response.data.unmarked_dates_more ?? 0,
+        })
         return
       }
       toast.error(e?.response?.data?.error ?? 'Failed to generate')
@@ -116,6 +135,38 @@ export default function PayrollPage() {
         />
       </div>
 
+      {/* Stage 8: failed payments — school-wide and always shown up here
+          regardless of which month/year is currently selected below, so
+          a bounced transfer from a different month can't go unnoticed. */}
+      {canApprove && (failedPayslips ?? []).length > 0 && (
+        <div className="flex items-start gap-3 rounded-2xl border border-destructive/40 bg-destructive/10 px-5 py-4">
+          <XCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" />
+          <div className="min-w-0 flex-1 text-sm">
+            <p className="font-semibold text-destructive">
+              {failedPayslips!.length} payment{failedPayslips!.length !== 1 ? 's' : ''} failed — action needed
+            </p>
+            <div className="mt-2 space-y-1.5">
+              {failedPayslips!.map((p: any) => (
+                <div key={p.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-background/70 px-3 py-2">
+                  <div className="min-w-0">
+                    <button type="button" onClick={() => { setMonth(p.month); setYear(p.year); setSelectedPayslip(p) }}
+                      className="font-medium text-foreground underline decoration-dotted underline-offset-2 hover:text-primary">
+                      {p.users?.full_name}
+                    </button>
+                    <span className="ml-1.5 text-xs text-muted-foreground">
+                      {MONTHS[p.month - 1]} {p.year}{p.failure_reason ? ` · ${p.failure_reason}` : ''}
+                    </span>
+                  </div>
+                  <Link href={`/hr/staff/${p.user_id}`} className="whitespace-nowrap text-xs font-medium text-primary underline hover:text-primary/80">
+                    Fix bank details →
+                  </Link>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Period selector */}
       <Card>
         <CardContent className="flex flex-wrap items-end gap-4 p-5">
@@ -144,6 +195,12 @@ export default function PayrollPage() {
           </Button>
           <Button variant="outline" onClick={() => setShowBonuses(true)}>
             <Gift className="h-4 w-4" /> Bonuses
+          </Button>
+          <Button variant="outline" onClick={() => setShowArrears(true)}>
+            <History className="h-4 w-4" /> Salary Arrears
+          </Button>
+          <Button variant="outline" onClick={() => setShowDutyLog(true)}>
+            <ClipboardList className="h-4 w-4" /> Duty Log
           </Button>
           <Button variant="outline" onClick={() => setShowSettings(true)}>
             <Settings className="h-4 w-4" /> Payroll Settings
@@ -178,7 +235,12 @@ export default function PayrollPage() {
       {skipped !== null && skipped.length > 0 && (() => {
         const missingStructure = skipped.filter((s: any) => s.reason === 'no_salary_structure')
         const resigned = skipped.filter((s: any) => s.reason === 'resigned')
+        const exited = skipped.filter((s: any) => s.reason === 'exited')
         const alreadyFinalized = skipped.filter((s: any) => s.reason === 'already_finalized')
+        const suspended = skipped.filter((s: any) => s.reason === 'suspended')
+        const absconded = skipped.filter((s: any) => s.reason === 'absconded')
+        const insufficientData = skipped.filter((s: any) => s.reason === 'insufficient_attendance_data')
+        const noApprovedSessions = skipped.filter((s: any) => s.reason === 'no_approved_sessions')
         const nameList = (list: any[]) => list.map((s, i) => (
           <span key={s.user_id}>
             {i > 0 && ', '}
@@ -223,6 +285,72 @@ export default function PayrollPage() {
                 </div>
               </div>
             )}
+            {exited.length > 0 && (
+              <div className="flex items-start gap-3 rounded-2xl border border-border bg-muted/50 px-5 py-4">
+                <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-muted-foreground" />
+                <div className="text-sm text-foreground">
+                  <p className="font-semibold">{exited.length} staff member{exited.length !== 1 ? 's' : ''} excluded — notice period ended before this month</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {nameList(exited)}
+                    {' — their last working day was before this period, but their exit settlement hasn\'t been approved yet. Approve it under Staff → Exit, or generate their final payslip for the month they actually left.'}
+                  </p>
+                </div>
+              </div>
+            )}
+            {suspended.length > 0 && (
+              <div className="flex items-start gap-3 rounded-2xl border border-border bg-muted/50 px-5 py-4">
+                <ShieldAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-muted-foreground" />
+                <div className="text-sm text-foreground">
+                  <p className="font-semibold">{suspended.length} staff member{suspended.length !== 1 ? 's' : ''} excluded — suspended</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {nameList(suspended)}
+                    {' — this school\'s suspension pay policy is set to Exclude. Change it under Payroll Settings if suspended staff should still be paid in full or in part.'}
+                  </p>
+                </div>
+              </div>
+            )}
+            {absconded.length > 0 && (
+              <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-5 py-4">
+                <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" />
+                <div className="text-sm text-foreground">
+                  <p className="font-semibold">{absconded.length} staff member{absconded.length !== 1 ? 's' : ''} excluded — absconded</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {absconded.map((s: any, i: number) => (
+                      <span key={s.user_id}>
+                        {i > 0 && ', '}
+                        <Link href={`/hr/staff/${s.user_id}`} className="text-primary underline hover:text-primary/80">{s.full_name}</Link>
+                        {s.last_seen && <span className="text-muted-foreground"> (last seen {s.last_seen})</span>}
+                      </span>
+                    ))}
+                    {' — manually transition them to Active or Terminated once resolved.'}
+                  </p>
+                </div>
+              </div>
+            )}
+            {insufficientData.length > 0 && (
+              <div className="flex items-start gap-3 rounded-2xl border border-warning/30 bg-warning/10 px-5 py-4">
+                <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
+                <div className="text-sm text-foreground">
+                  <p className="font-semibold">{insufficientData.length} hourly staff member{insufficientData.length !== 1 ? 's' : ''} skipped — no attendance marked</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {nameList(insufficientData)}
+                    {' — hourly pay is derived from present/half-day attendance; mark it first, then generate again.'}
+                  </p>
+                </div>
+              </div>
+            )}
+            {noApprovedSessions.length > 0 && (
+              <div className="flex items-start gap-3 rounded-2xl border border-warning/30 bg-warning/10 px-5 py-4">
+                <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
+                <div className="text-sm text-foreground">
+                  <p className="font-semibold">{noApprovedSessions.length} per-session staff member{noApprovedSessions.length !== 1 ? 's' : ''} skipped — no approved sessions</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {nameList(noApprovedSessions)}
+                    {' — log and approve their sessions under Payroll → Duty Log, then generate again.'}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         )
       })()}
@@ -233,6 +361,8 @@ export default function PayrollPage() {
           Payslips need Principal approval before they can be marked as paid.
         </div>
       )}
+
+      {canApprove && <PendingCorrections />}
 
       {/* Payslips table */}
       <Card className="overflow-hidden">
@@ -301,6 +431,11 @@ export default function PayrollPage() {
                           {markPaidMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Mark Paid
                         </Button>
                       )}
+                      {p.payment_status === 'paid' && canApprove && (
+                        <Button size="sm" variant="ghost" onClick={() => setFailingPayslip(p)} className="ml-auto text-destructive hover:bg-destructive/10 hover:text-destructive">
+                          <XCircle className="h-3.5 w-3.5" /> Mark Failed
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -313,6 +448,9 @@ export default function PayrollPage() {
       {selectedPayslip && <PayslipBreakdownModal payslip={selectedPayslip} onClose={() => setSelectedPayslip(null)} />}
       {showSettings && <PayrollSettingsModal onClose={() => setShowSettings(false)} />}
       {showBonuses && <BonusesModal month={month} year={year} onClose={() => setShowBonuses(false)} />}
+      {showArrears && <ArrearsModal onClose={() => setShowArrears(false)} />}
+      {showDutyLog && <DutyLogModal onClose={() => setShowDutyLog(false)} />}
+      {failingPayslip && <MarkFailedModal payslip={failingPayslip} onClose={() => setFailingPayslip(null)} />}
 
       {coverageWarning && (
         <Dialog open onOpenChange={(o) => { if (!o) setCoverageWarning(null) }}>
@@ -322,6 +460,19 @@ export default function PayrollPage() {
             </DialogHeader>
             <p className="text-sm text-foreground">{coverageWarning.error}</p>
             <p className="text-xs text-muted-foreground">Only {coverageWarning.coverage_pct}% attendance coverage for {MONTHS[month - 1]} {year} so far.</p>
+            {coverageWarning.unmarked_dates.length > 0 && (
+              <div className="rounded-lg bg-muted/50 p-3">
+                <p className="mb-1.5 text-xs font-semibold uppercase text-muted-foreground">Dates needing attention</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {coverageWarning.unmarked_dates.map(d => (
+                    <span key={d} className="rounded-full bg-warning/10 px-2 py-1 text-xs font-medium text-warning">{formatDate(d)}</span>
+                  ))}
+                  {coverageWarning.unmarked_dates_more > 0 && (
+                    <span className="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">and {coverageWarning.unmarked_dates_more} more</span>
+                  )}
+                </div>
+              </div>
+            )}
             <DialogFooter>
               <Button variant="ghost" onClick={() => setCoverageWarning(null)}>Cancel — mark attendance first</Button>
               <Button
@@ -352,12 +503,24 @@ function PayrollSettingsModal({ onClose }: { onClose: () => void }) {
 
   const [graceDays, setGraceDays] = useState('0')
   const [formula, setFormula] = useState<'gross_30' | 'working_days'>('gross_30')
+  const [suspensionPolicy, setSuspensionPolicy] = useState<'exclude' | 'full' | 'partial'>('exclude')
+  const [suspensionPercent, setSuspensionPercent] = useState('0')
+  const [prorationBasis, setProrationBasis] = useState<'calendar_days' | 'working_days'>('calendar_days')
+  const [abscondedThreshold, setAbscondedThreshold] = useState('15')
+  const [abscondedAutoFlag, setAbscondedAutoFlag] = useState(false)
+  const [overtimeMultiplier, setOvertimeMultiplier] = useState('1.5')
   const [slabs, setSlabs] = useState<{ min_gross: string; max_gross: string; amount: string }[]>([])
   const [initialized, setInitialized] = useState(false)
 
   if (data && !initialized) {
     setGraceDays(String(data.lop_grace_days ?? 0))
     setFormula(data.lop_per_day_formula === 'working_days' ? 'working_days' : 'gross_30')
+    setSuspensionPolicy(['exclude', 'full', 'partial'].includes(data.suspension_pay_policy) ? data.suspension_pay_policy : 'exclude')
+    setSuspensionPercent(String(data.suspension_pay_percent ?? 0))
+    setProrationBasis(data.segment_proration_basis === 'working_days' ? 'working_days' : 'calendar_days')
+    setAbscondedThreshold(String(data.absconded_threshold_days ?? 15))
+    setAbscondedAutoFlag(!!data.absconded_auto_flag)
+    setOvertimeMultiplier(String(data.overtime_rate_multiplier ?? 1.5))
     setSlabs((data.professional_tax_slabs ?? []).map((s: any) => ({
       min_gross: String(s.min_gross ?? 0), max_gross: s.max_gross != null ? String(s.max_gross) : '', amount: String(s.amount ?? 0),
     })))
@@ -368,6 +531,12 @@ function PayrollSettingsModal({ onClose }: { onClose: () => void }) {
     mutationFn: () => hrmsApi.payroll.settings.update({
       lop_grace_days: Number(graceDays) || 0,
       lop_per_day_formula: formula,
+      suspension_pay_policy: suspensionPolicy,
+      suspension_pay_percent: suspensionPolicy === 'partial' ? Number(suspensionPercent) || 0 : 0,
+      segment_proration_basis: prorationBasis,
+      absconded_threshold_days: Number(abscondedThreshold) || 15,
+      absconded_auto_flag: abscondedAutoFlag,
+      overtime_rate_multiplier: Number(overtimeMultiplier) || 1.5,
       professional_tax_slabs: slabs
         .filter(s => s.min_gross !== '' && s.amount !== '')
         .map(s => ({ min_gross: Number(s.min_gross), max_gross: s.max_gross === '' ? null : Number(s.max_gross), amount: Number(s.amount) })),
@@ -418,6 +587,92 @@ function PayrollSettingsModal({ onClose }: { onClose: () => void }) {
             </div>
 
             <div>
+              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Mid-Month Salary Changes</p>
+              <div className="space-y-1.5">
+                <Label>Proration Basis</Label>
+                <Select value={prorationBasis} onValueChange={(v: any) => setProrationBasis(v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="calendar_days">Calendar days</SelectItem>
+                    <SelectItem value="working_days">Working days</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                When a promotion or salary update takes effect mid-month, the payslip splits into segments — one per
+                salary structure, each earning its share of the month by {prorationBasis === 'working_days' ? 'working days' : 'calendar days'} covered.
+              </p>
+            </div>
+
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Suspended Staff</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Pay Policy</Label>
+                  <Select value={suspensionPolicy} onValueChange={(v: any) => setSuspensionPolicy(v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="exclude">Exclude from payroll</SelectItem>
+                      <SelectItem value="full">Pay in full</SelectItem>
+                      <SelectItem value="partial">Pay a percentage</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {suspensionPolicy === 'partial' && (
+                  <div className="space-y-1.5">
+                    <Label>Percent of Gross</Label>
+                    <Input type="number" min="0" max="100" value={suspensionPercent} onChange={e => setSuspensionPercent(e.target.value)} />
+                  </div>
+                )}
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {suspensionPolicy === 'exclude'
+                  ? 'A suspended staff member is skipped when Generate runs, same as resigned/terminated.'
+                  : suspensionPolicy === 'full'
+                  ? 'A suspended staff member is paid exactly like anyone else.'
+                  : 'A suspended staff member\'s gross is scaled to this percentage before deductions are computed.'}
+              </p>
+            </div>
+
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Overtime</p>
+              <div className="space-y-1.5">
+                <Label>Overtime Rate Multiplier</Label>
+                <Input type="number" min="1" step="0.1" className="w-32" value={overtimeMultiplier} onChange={e => setOvertimeMultiplier(e.target.value)} />
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Overtime hours are paid at this multiple of the regular hourly rate — for hourly staff, their own rate;
+                for fixed-monthly staff with a shift assigned, an effective rate derived from gross ÷ working days ÷ shift hours.
+              </p>
+            </div>
+
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Absconded Detection</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Consecutive Unmarked Days</Label>
+                  <Input type="number" min="1" value={abscondedThreshold} onChange={e => setAbscondedThreshold(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>On Threshold Crossed</Label>
+                  <Select value={abscondedAutoFlag ? 'auto' : 'review'} onValueChange={(v: any) => setAbscondedAutoFlag(v === 'auto')}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="review">Notify HR for review</SelectItem>
+                      <SelectItem value="auto">Auto-set to Absconded</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                A daily sweep checks for staff with this many consecutive unmarked/absent working days, excluding days
+                covered by approved leave or a pending regularization request. {abscondedAutoFlag
+                  ? 'Their employment status is set to Absconded automatically and they stop generating payslips.'
+                  : 'HR is notified to review — nothing changes automatically until someone acts on it.'}
+              </p>
+            </div>
+
+            <div>
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase text-muted-foreground">Professional Tax Slabs</p>
                 <Button size="sm" variant="ghost" onClick={addSlab}><Plus className="h-3.5 w-3.5" /> Add Slab</Button>
@@ -442,6 +697,8 @@ function PayrollSettingsModal({ onClose }: { onClose: () => void }) {
                 </div>
               )}
             </div>
+
+            <TaxDeclarationWindowSection />
           </div>
         )}
 
@@ -453,6 +710,54 @@ function PayrollSettingsModal({ onClose }: { onClose: () => void }) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ── Stage 6: the per-year cutoff after which staff can no longer edit
+// their own investment declaration — saved separately from the rest of
+// Payroll Settings since it's keyed by academic year, not the school.
+function TaxDeclarationWindowSection() {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['tax-declaration-window'],
+    queryFn: () => hrmsApi.taxDeclarations.window.get().then(r => r.data),
+  })
+  const [lockDate, setLockDate] = useState('')
+  const [initialized, setInitialized] = useState(false)
+
+  if (data && !initialized) {
+    setLockDate(data.lock_date ?? '')
+    setInitialized(true)
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () => hrmsApi.taxDeclarations.window.save({ lock_date: lockDate, academic_year_id: data?.academic_year?.id }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tax-declaration-window'] })
+      toast.success('Declaration lock date saved')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to save'),
+  })
+
+  if (isLoading || !data?.academic_year) return null
+
+  return (
+    <div>
+      <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Investment Declaration Lock — {data.academic_year.name}</p>
+      <div className="flex items-end gap-3">
+        <div className="space-y-1.5">
+          <Label>Lock Date</Label>
+          <Input type="date" value={lockDate} onChange={e => setLockDate(e.target.value)} className="w-44" />
+        </div>
+        <Button size="sm" variant="outline" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !lockDate}>
+          {saveMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save
+        </Button>
+      </div>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        After this date, staff can no longer edit their own 80C/HRA/exemption declaration for {data.academic_year.name} —
+        leave blank for no lock.
+      </p>
+    </div>
   )
 }
 
@@ -599,155 +904,457 @@ function BonusesModal({ month, year, onClose }: { month: number; year: number; o
   )
 }
 
-const ATTENDANCE_STATUS_LABEL: Record<string, string> = { present: 'Present', absent: 'Absent', half_day: 'Half Day', on_leave: 'On Leave' }
-const ATTENDANCE_STATUS_COLOR: Record<string, string> = {
-  present: 'bg-success/10 text-success', absent: 'bg-destructive/10 text-destructive',
-  half_day: 'bg-warning/10 text-warning', on_leave: 'bg-info/10 text-info',
-}
+// ── Stage 7: salary arrears — back-pay the school owes the employee.
+// Raise a manual record here; auto-staged ones (from a backdated
+// promotion) show up in the same pending list below, already reasoned
+// about. Both go through the same approve/reject decide() — self-decide
+// is blocked server-side, so whoever raises one needs a second person.
+function ArrearsModal({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient()
+  const [userId, setUserId] = useState('')
+  const [fromMonth, setFromMonth] = useState(String(new Date().getMonth() + 1))
+  const [fromYear, setFromYear] = useState(String(new Date().getFullYear()))
+  const [toMonth, setToMonth] = useState(String(new Date().getMonth() + 1))
+  const [toYear, setToYear] = useState(String(new Date().getFullYear()))
+  const [amount, setAmount] = useState('')
+  const [reason, setReason] = useState('')
 
-// Line-item breakdown of what actually built this payslip's numbers —
-// every figure below is read straight off the payslip row itself
-// (generation already computed and stored each of these; this just
-// makes them visible instead of only the collapsed Gross/Deductions/Net
-// columns in the table). The attendance and leave sections underneath
-// answer "which days" for the LOP figure, since the payslip itself only
-// stores the day COUNT, not which dates — those come from the same
-// staff_attendance/leave_requests data the LOP calculation itself reads.
-function PayslipBreakdownModal({ payslip: p, onClose }: { payslip: any; onClose: () => void }) {
-  const { data: attendance, isLoading: attendanceLoading } = useQuery({
-    queryKey: ['payslip-attendance', p.user_id, p.month, p.year],
-    queryFn: () => hrmsApi.attendance.list({ user_id: p.user_id, month: p.month, year: p.year }).then(r => r.data),
+  const { data: staffData, isLoading: staffLoading } = useQuery({
+    queryKey: ['hr-staff-all'],
+    queryFn: () => hrmsApi.staff.list({ limit: 100 }).then(r => r.data),
+  })
+  const staff = (staffData ?? []).filter((s: any) => !['resigned', 'terminated'].includes(s.staff_profile?.employment_status))
+
+  const { data: arrears, isLoading: arrearsLoading } = useQuery({
+    queryKey: ['salary-arrears', 'all'],
+    queryFn: () => hrmsApi.salaryArrears.list({}).then(r => r.data as any[]),
+  })
+  const pending = (arrears ?? []).filter((a: any) => a.status === 'pending')
+  const others = (arrears ?? []).filter((a: any) => a.status !== 'pending').slice(0, 10)
+
+  const raiseMutation = useMutation({
+    mutationFn: () => hrmsApi.salaryArrears.create({
+      user_id: userId, from_month: Number(fromMonth), from_year: Number(fromYear),
+      to_month: Number(toMonth), to_year: Number(toYear), amount: Number(amount), reason: reason.trim(),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['salary-arrears'] })
+      toast.success('Arrears raised — needs a second person to approve')
+      setUserId(''); setAmount(''); setReason('')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to raise arrears'),
   })
 
-  const { data: leaveRequests, isLoading: leaveLoading } = useQuery({
-    queryKey: ['payslip-leave-requests', p.user_id, p.month, p.year],
-    queryFn: () => hrmsApi.leaveRequests.list({ user_id: p.user_id, status: 'approved', limit: 50 }).then(r => r.data),
+  const decideMutation = useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) => hrmsApi.salaryArrears.decide(id, decision),
+    onSuccess: (_res, { decision }) => {
+      qc.invalidateQueries({ queryKey: ['salary-arrears'] })
+      toast.success(decision === 'approved' ? 'Arrears approved — staged for the next payslip' : 'Arrears rejected')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Could not record the decision'),
   })
 
-  const monthStart = `${p.year}-${String(p.month).padStart(2, '0')}-01`
-  const monthEnd = `${p.year}-${String(p.month).padStart(2, '0')}-31`
-  const leavesThisMonth = (leaveRequests ?? []).filter((lr: any) => lr.from_date <= monthEnd && lr.to_date >= monthStart)
-
-  // Only the days that actually explain the deductions/pace — present
-  // days aren't interesting here, so they're excluded from the list
-  // (still counted in the "Present" tally above it).
-  const nonPresentDays = (attendance ?? []).filter((a: any) => a.status !== 'present').sort((a: any, b: any) => a.date.localeCompare(b.date))
-  const presentCount = (attendance ?? []).filter((a: any) => a.status === 'present').length
-
-  const earnings = [
-    ['Basic Salary', p.basic_salary], ['HRA', p.hra], ['DA', p.da],
-    ['Conveyance', p.conveyance_allowance], ['Medical Allowance', p.medical_allowance],
-    ['Other Allowances', p.other_allowances], ['Leave Encashment', p.leave_encashment],
-    [p.bonus_reason ? `Bonus (${p.bonus_reason})` : 'Bonus', p.bonus_amount],
-  ].filter(([, v]) => Number(v) > 0) as [string, number][]
-
-  const deductions = [
-    ['PF (Employee)', p.pf_deduction],
-    ['Professional Tax', p.professional_tax],
-    ['TDS', p.tds],
-    ['Loan Recovery', p.loan_deduction],
-    ['Other Deductions', p.other_deductions],
-  ].filter(([, v]) => Number(v) > 0) as [string, number][]
+  const canRaise = userId && amount && Number(amount) !== 0 && reason.trim().length >= 3
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2.5">
-            <StaffAvatar photoUrl={staffPhotoUrl(p.users?.staff_profiles)} fullName={p.users?.full_name} className="h-7 w-7 text-[11px]" />
-            {p.users?.full_name} — {MONTHS[p.month - 1]} {p.year}
-          </DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><History className="h-4 w-4 text-primary" /> Salary Arrears</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-5">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="rounded-xl bg-muted/50 p-3">
-              <p className="mb-1.5 text-xs font-semibold uppercase text-muted-foreground">Earnings</p>
-              <div className="space-y-1 text-sm">
-                {earnings.map(([label, value]) => (
-                  <div key={label} className="flex justify-between text-foreground">
-                    <span className="text-muted-foreground">{label}</span>
-                    <span className="tabular-nums">{formatCurrency(Number(value))}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 flex justify-between border-t border-border pt-1.5 text-sm font-semibold text-foreground">
-                <span>Gross</span>
-                <span className="tabular-nums">{formatCurrency(Number(p.gross_salary))}</span>
-              </div>
+        <div className="max-h-[70vh] space-y-5 overflow-y-auto pr-1">
+          <div className="space-y-3 rounded-xl border border-border p-4">
+            <p className="text-xs font-semibold uppercase text-muted-foreground">Raise Manual Arrears</p>
+            <div className="space-y-1.5">
+              <Label>Staff Member</Label>
+              <Select value={userId} onValueChange={setUserId} disabled={staffLoading}>
+                <SelectTrigger><SelectValue placeholder="Select staff member" /></SelectTrigger>
+                <SelectContent>
+                  {staff.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.full_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
-
-            <div className="rounded-xl bg-muted/50 p-3">
-              <p className="mb-1.5 text-xs font-semibold uppercase text-muted-foreground">Deductions</p>
-              <div className="space-y-1 text-sm">
-                {Number(p.lop_days) > 0 && (
-                  <div className="flex justify-between text-foreground">
-                    <span className="text-muted-foreground">LOP ({p.lop_days} day{Number(p.lop_days) === 1 ? '' : 's'})</span>
-                    <span className="tabular-nums text-destructive">{formatCurrency(Number(p.lop_amount))}</span>
-                  </div>
-                )}
-                {deductions.map(([label, value]) => (
-                  <div key={label} className="flex justify-between text-foreground">
-                    <span className="text-muted-foreground">{label}</span>
-                    <span className="tabular-nums">{formatCurrency(Number(value))}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 flex justify-between border-t border-border pt-1.5 text-sm font-semibold text-foreground">
-                <span>Total</span>
-                <span className="tabular-nums">{formatCurrency(Number(p.total_deductions))}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
-            <span className="text-sm font-semibold text-foreground">Net Pay</span>
-            <span className="text-lg font-bold tabular-nums text-primary">{formatCurrency(Number(p.net_salary))}</span>
-          </div>
-
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
-              Attendance this month {!attendanceLoading && <span className="font-normal normal-case">· {presentCount} present</span>}
-            </p>
-            {attendanceLoading ? (
-              <Skeleton className="h-16 w-full" />
-            ) : nonPresentDays.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No absences, half-days, or leave marked this month.</p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {nonPresentDays.map((a: any) => (
-                  <span key={a.id} className={cn('rounded-full px-2 py-1 text-xs font-medium', ATTENDANCE_STATUS_COLOR[a.status] ?? 'bg-muted text-muted-foreground')}>
-                    {formatDate(a.date)} · {ATTENDANCE_STATUS_LABEL[a.status] ?? a.status}
-                  </span>
-                ))}
-              </div>
-            )}
-            {Number(p.lop_days) > (attendance ?? []).filter((a: any) => a.status === 'absent').length && (
-              <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
-                <CalendarX2 className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                The LOP count also includes days with no attendance record marked at all (unmarked) — those don't show as a badge above since there's no record to display, only a gap in the calendar.
-              </p>
-            )}
-          </div>
-
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Leave taken this month</p>
-            {leaveLoading ? (
-              <Skeleton className="h-10 w-full" />
-            ) : leavesThisMonth.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No approved leave overlapping this month.</p>
-            ) : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="space-y-1.5">
-                {leavesThisMonth.map((lr: any) => (
-                  <div key={lr.id} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-1.5 text-xs">
-                    <span className="text-foreground">{lr.leave_types?.name ?? 'Leave'} · {formatDate(lr.from_date)}–{formatDate(lr.to_date)} · {lr.total_days}d</span>
-                    <Badge variant={lr.leave_types?.is_paid ? 'success' : 'destructive'}>{lr.leave_types?.is_paid ? 'Paid' : 'Unpaid'}</Badge>
+                <Label>From Month</Label>
+                <Input type="number" min="1" max="12" value={fromMonth} onChange={e => setFromMonth(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>From Year</Label>
+                <Input type="number" value={fromYear} onChange={e => setFromYear(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>To Month</Label>
+                <Input type="number" min="1" max="12" value={toMonth} onChange={e => setToMonth(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>To Year</Label>
+                <Input type="number" value={toYear} onChange={e => setToYear(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Amount (₹)</Label>
+                <Input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 5000" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Reason</Label>
+                <Input value={reason} onChange={e => setReason(e.target.value)} placeholder="Backdated pay-scale revision" />
+              </div>
+            </div>
+            <Button onClick={() => raiseMutation.mutate()} disabled={!canRaise || raiseMutation.isPending}>
+              {raiseMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              Raise Arrears
+            </Button>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Pending Review</p>
+            {arrearsLoading ? (
+              <Skeleton className="h-16 w-full" />
+            ) : pending.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Nothing pending.</p>
+            ) : (
+              <div className="space-y-2">
+                {pending.map((a: any) => (
+                  <div key={a.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3">
+                    <div className="min-w-0 text-sm">
+                      <p className="font-medium text-foreground">
+                        {a.users?.full_name} — {MONTHS[a.from_month - 1]} {a.from_year}
+                        {(a.from_month !== a.to_month || a.from_year !== a.to_year) && ` to ${MONTHS[a.to_month - 1]} ${a.to_year}`}
+                        <span className={cn('ml-1.5 tabular-nums', Number(a.amount) >= 0 ? 'text-success' : 'text-destructive')}>
+                          {Number(a.amount) >= 0 ? '+' : ''}{formatCurrency(Number(a.amount))}
+                        </span>
+                        {a.source === 'auto_promotion' && <Badge variant="info" className="ml-1.5">auto-staged</Badge>}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{a.reason} · raised by {a.requester?.full_name}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => decideMutation.mutate({ id: a.id, decision: 'approved' })} disabled={decideMutation.isPending}
+                        className="bg-success/10 text-success shadow-none hover:bg-success/20">
+                        <Check className="h-3.5 w-3.5" /> Approve
+                      </Button>
+                      <Button size="sm" onClick={() => decideMutation.mutate({ id: a.id, decision: 'rejected' })} disabled={decideMutation.isPending}
+                        className="bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20">
+                        Reject
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
           </div>
+
+          {others.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Recent History</p>
+              <div className="space-y-1.5">
+                {others.map((a: any) => (
+                  <div key={a.id} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-xs">
+                    <span className="text-foreground">
+                      {a.users?.full_name} — {MONTHS[a.from_month - 1]} {a.from_year} · {formatCurrency(Number(a.amount))}
+                    </span>
+                    <Badge variant={a.status === 'applied' ? 'success' : a.status === 'staged' ? 'info' : 'secondary'} className="capitalize">{a.status}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── Stage 9: per-session staff have no fixed pay at all — earnings come
+// entirely from approved entries here, summed by Generate into one
+// Session Pay line. Unapproved entries are never picked up.
+function DutyLogModal({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient()
+  const [userId, setUserId] = useState('')
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [sessionType, setSessionType] = useState('')
+  const [description, setDescription] = useState('')
+  const [rate, setRate] = useState('')
+
+  const { data: staffData, isLoading: staffLoading } = useQuery({
+    queryKey: ['hr-staff-all'],
+    queryFn: () => hrmsApi.staff.list({ limit: 100 }).then(r => r.data),
+  })
+  const staff = (staffData ?? []).filter((s: any) => !['resigned', 'terminated'].includes(s.staff_profile?.employment_status))
+
+  const { data: entries, isLoading: entriesLoading } = useQuery({
+    queryKey: ['duty-log', 'all'],
+    queryFn: () => hrmsApi.dutyLog.list({}).then(r => r.data as any[]),
+  })
+  const pending = (entries ?? []).filter((d: any) => !d.approved_by).slice(0, 30)
+  const approved = (entries ?? []).filter((d: any) => d.approved_by).slice(0, 10)
+
+  const createMutation = useMutation({
+    mutationFn: () => hrmsApi.dutyLog.create({ user_id: userId, date, session_type: sessionType.trim(), description: description.trim() || undefined, rate: Number(rate) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['duty-log'] })
+      toast.success('Session logged — needs approval before it counts toward pay')
+      setSessionType(''); setDescription(''); setRate('')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to log session'),
+  })
+
+  const approveMutation = useMutation({
+    mutationFn: (id: string) => hrmsApi.dutyLog.approve(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['duty-log'] })
+      toast.success('Session approved')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to approve'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => hrmsApi.dutyLog.delete(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['duty-log'] })
+      toast.success('Entry removed')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to remove'),
+  })
+
+  const canLog = userId && date && sessionType.trim() && Number(rate) > 0
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><ClipboardList className="h-4 w-4 text-primary" /> Duty Log</DialogTitle>
+        </DialogHeader>
+
+        <div className="max-h-[70vh] space-y-5 overflow-y-auto pr-1">
+          <div className="space-y-3 rounded-xl border border-border p-4">
+            <p className="text-xs font-semibold uppercase text-muted-foreground">Log a Session</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Staff Member</Label>
+                <Select value={userId} onValueChange={setUserId} disabled={staffLoading}>
+                  <SelectTrigger><SelectValue placeholder="Select staff member" /></SelectTrigger>
+                  <SelectContent>
+                    {staff.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.full_name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Date</Label>
+                <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Session Type</Label>
+                <Input value={sessionType} onChange={e => setSessionType(e.target.value)} placeholder="e.g. Exam Invigilation" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Rate (₹)</Label>
+                <Input type="number" value={rate} onChange={e => setRate(e.target.value)} placeholder="e.g. 500" />
+              </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label>Description (optional)</Label>
+                <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Class X Mid-Term, Hall 3" />
+              </div>
+            </div>
+            <Button onClick={() => createMutation.mutate()} disabled={!canLog || createMutation.isPending}>
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              Log Session
+            </Button>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Pending Approval</p>
+            {entriesLoading ? (
+              <Skeleton className="h-16 w-full" />
+            ) : pending.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Nothing pending.</p>
+            ) : (
+              <div className="space-y-2">
+                {pending.map((d: any) => (
+                  <div key={d.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3">
+                    <div className="min-w-0 text-sm">
+                      <p className="font-medium text-foreground">
+                        {d.users?.full_name} — {d.session_type} · {formatDate(d.date)}
+                        <span className="ml-1.5 tabular-nums text-foreground">{formatCurrency(Number(d.rate))}</span>
+                      </p>
+                      {d.description && <p className="text-xs text-muted-foreground">{d.description}</p>}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => approveMutation.mutate(d.id)} disabled={approveMutation.isPending}
+                        className="bg-success/10 text-success shadow-none hover:bg-success/20">
+                        <Check className="h-3.5 w-3.5" /> Approve
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => deleteMutation.mutate(d.id)} disabled={deleteMutation.isPending}
+                        className="text-destructive hover:bg-destructive/10">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {approved.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Recently Approved</p>
+              <div className="space-y-1.5">
+                {approved.map((d: any) => (
+                  <div key={d.id} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-xs">
+                    <span className="text-foreground">{d.users?.full_name} — {d.session_type} · {formatDate(d.date)} · {formatCurrency(Number(d.rate))}</span>
+                    <Badge variant="success">approved</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── Stage 4: the correction approval queue — one open request per
+// payslip at a time (the DB enforces that), each either voiding and
+// replacing an unpaid payslip in place, or an adjustment that rides
+// along on whoever's NEXT payslip once approved.
+function PendingCorrections() {
+  const qc = useQueryClient()
+  const { data: corrections, isLoading } = useQuery({
+    queryKey: ['payslip-corrections', 'pending'],
+    queryFn: () => hrmsApi.payslipCorrections.list({ decision: 'pending' }).then(r => r.data as any[]),
+  })
+
+  const decideMutation = useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) => hrmsApi.payslipCorrections.decide(id, decision),
+    onSuccess: (_res, { decision }) => {
+      qc.invalidateQueries({ queryKey: ['payslip-corrections'] })
+      qc.invalidateQueries({ queryKey: ['payslips'] })
+      toast.success(decision === 'approved' ? 'Correction approved' : 'Correction rejected')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Could not record the decision'),
+  })
+
+  if (isLoading || !corrections?.length) return null
+
+  return (
+    <Card>
+      <CardContent className="space-y-2 p-4">
+        <p className="flex items-center gap-1.5 text-xs font-semibold uppercase text-muted-foreground">
+          <ShieldAlert className="h-3.5 w-3.5" /> Pending payslip corrections
+        </p>
+        {corrections.map((c: any) => (
+          <div key={c.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3">
+            <div className="min-w-0 text-sm">
+              <p className="font-medium text-foreground">
+                {c.users?.full_name} — {c.kind === 'adjustment' ? 'Adjustment on a future payslip' : 'Correct this payslip'}
+                {c.kind === 'adjustment' && (
+                  <span className={cn('ml-1.5 tabular-nums', Number(c.adjustment_amount) >= 0 ? 'text-success' : 'text-destructive')}>
+                    {Number(c.adjustment_amount) >= 0 ? '+' : ''}{formatCurrency(Number(c.adjustment_amount))}
+                  </span>
+                )}
+              </p>
+              <p className="text-xs text-muted-foreground">{c.reason} · requested by {c.requester?.full_name}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => decideMutation.mutate({ id: c.id, decision: 'approved' })} disabled={decideMutation.isPending}
+                className="bg-success/10 text-success shadow-none hover:bg-success/20">
+                <Check className="h-3.5 w-3.5" /> Approve
+              </Button>
+              <Button size="sm" onClick={() => decideMutation.mutate({ id: c.id, decision: 'rejected' })} disabled={decideMutation.isPending}
+                className="bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20">
+                Reject
+              </Button>
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ── Stage 8: mark a 'paid' payslip as failed (bounced/rejected by the
+// bank). payment_exported resets to false server-side — the money is
+// treated as never having arrived, so the next bank export and the
+// failed-payments banner both pick it back up automatically.
+function MarkFailedModal({ payslip, onClose }: { payslip: any; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [reason, setReason] = useState('')
+  const [bankRef, setBankRef] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [done, setDone] = useState(false)
+
+  const submit = async () => {
+    if (reason.trim().length < 3) return toast.error('Give a reason — what did the bank say?')
+    setLoading(true)
+    try {
+      await hrmsApi.payslips.markFailed(payslip.id, { reason: reason.trim(), bank_reference: bankRef.trim() || undefined })
+      qc.invalidateQueries({ queryKey: ['payslips'] })
+      setDone(true)
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Could not mark as failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        {done ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-destructive"><XCircle className="h-5 w-5" /> Marked Failed</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-foreground">
+              {payslip.users?.full_name}'s payslip is back to an actionable state and will be picked up in the next bank export.
+              The most common cause of a bounced transfer is a wrong or outdated bank detail — worth checking now.
+            </p>
+            <DialogFooter>
+              <Button variant="ghost" onClick={onClose}>Close</Button>
+              <Button asChild>
+                <Link href={`/hr/staff/${payslip.user_id}`}>Go to Bank & Tax Details</Link>
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-destructive"><XCircle className="h-5 w-5" /> Mark Payment Failed — {payslip.users?.full_name}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-xs text-muted-foreground">
+                For a payslip that was marked paid but the bank transfer bounced or was rejected. It goes back to an
+                actionable, re-exportable state — nothing here reverses PF/TDS/other figures, only the payment outcome.
+              </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="fail-reason">Reason *</Label>
+                <Textarea id="fail-reason" rows={2} className="resize-none" value={reason} onChange={e => setReason(e.target.value)}
+                  placeholder="e.g. Account number invalid — bounced back from bank" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="fail-ref">Bank Reference (optional)</Label>
+                <Input id="fail-ref" value={bankRef} onChange={e => setBankRef(e.target.value)} placeholder="Bank's own rejection reference, if any" />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={onClose}>Cancel</Button>
+              <Button onClick={submit} disabled={loading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />} Mark Failed
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   )

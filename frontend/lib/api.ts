@@ -597,7 +597,7 @@ export const complaintsApi = {
 }
 
 export const notificationsApi = {
-  list: (params?: { page?: number; limit?: number; unread_only?: boolean }) =>
+  list: (params?: { page?: number; limit?: number; unread_only?: boolean; type?: string }) =>
     api.get('/notifications', { params }).then(r => r.data),
   unreadCount: () => api.get('/notifications/unread-count').then(r => r.data),
   markRead: (id: string) => api.patch(`/notifications/${id}/read`).then(r => r.data),
@@ -648,6 +648,7 @@ export const hrmsApi = {
     },
     orgChart: () => api.get('/hrms/staff/org-chart').then(r => r.data),
   },
+  documentsExpiring: () => api.get('/hrms/documents/expiring').then(r => r.data),
   exit: {
     get: (userId: string) => api.get(`/hrms/staff/${userId}/exit`).then(r => r.data),
     initiate: (userId: string, data: any) => api.post(`/hrms/staff/${userId}/exit`, data).then(r => r.data),
@@ -690,6 +691,45 @@ export const hrmsApi = {
     generate: (data: any) => api.post('/hrms/payslips/generate', data).then(r => r.data),
     update: (id: string, data: any) => api.patch(`/hrms/payslips/${id}`, data).then(r => r.data),
     approve: (id: string) => api.post(`/hrms/payslips/${id}/approve`).then(r => r.data),
+    requestCorrection: (id: string, data: { reason: string; corrected?: Record<string, any>; adjustment_amount?: number }) =>
+      api.post(`/hrms/payslips/${id}/corrections`, data).then(r => r.data),
+    markFailed: (id: string, data: { reason: string; bank_reference?: string }) =>
+      api.post(`/hrms/payslips/${id}/mark-failed`, data).then(r => r.data),
+  },
+  taxDeclarations: {
+    get: (params?: { user_id?: string; academic_year_id?: string }) =>
+      api.get('/hrms/tax-declarations', { params }).then(r => r.data),
+    save: (data: { section_80c: number; hra_exemption: number; other_exemptions: number; academic_year_id?: string }) =>
+      api.put('/hrms/tax-declarations', data).then(r => r.data),
+    window: {
+      get: (params?: { academic_year_id?: string }) => api.get('/hrms/tax-declaration-window', { params }).then(r => r.data),
+      save: (data: { lock_date: string; academic_year_id?: string }) => api.put('/hrms/tax-declaration-window', data).then(r => r.data),
+    },
+  },
+  taxReconciliation: {
+    get: (params?: { user_id?: string; academic_year_id?: string }) =>
+      api.get('/hrms/tax-reconciliation', { params }).then(r => r.data),
+  },
+  dutyLog: {
+    list: (params?: { user_id?: string; month?: number; year?: number; approved_only?: boolean }) =>
+      api.get('/hrms/duty-log', { params }).then(r => r.data),
+    create: (data: { user_id: string; date: string; session_type: string; description?: string; rate: number }) =>
+      api.post('/hrms/duty-log', data).then(r => r.data),
+    approve: (id: string) => api.patch(`/hrms/duty-log/${id}/approve`).then(r => r.data),
+    delete: (id: string) => api.delete(`/hrms/duty-log/${id}`).then(r => r.data),
+  },
+  salaryArrears: {
+    list: (params?: { user_id?: string; status?: string; applied_to_payslip_id?: string }) =>
+      api.get('/hrms/salary-arrears', { params }).then(r => r.data),
+    create: (data: { user_id: string; from_month: number; from_year: number; to_month: number; to_year: number; amount: number; reason: string }) =>
+      api.post('/hrms/salary-arrears', data).then(r => r.data),
+    decide: (id: string, decision: 'approved' | 'rejected', note?: string) =>
+      api.post(`/hrms/salary-arrears/${id}/decide`, { decision, note }).then(r => r.data),
+  },
+  payslipCorrections: {
+    list: (params?: any) => api.get('/hrms/payslip-corrections', { params }).then(r => r.data),
+    decide: (id: string, decision: 'approved' | 'rejected', note?: string) =>
+      api.post(`/hrms/payslip-corrections/${id}/decide`, { decision, note }).then(r => r.data),
   },
   payroll: {
     summary: (params?: any) => api.get('/hrms/payroll/summary', { params }).then(r => r.data),
@@ -716,7 +756,9 @@ export const hrmsApi = {
   loans: {
     list: (userId?: string) => api.get('/hrms/loans', { params: { user_id: userId } }).then(r => r.data),
     create: (data: any) => api.post('/hrms/loans', data).then(r => r.data),
-    update: (id: string, status: string) => api.patch(`/hrms/loans/${id}`, { status }).then(r => r.data),
+    payoff: (id: string, note?: string) => api.post(`/hrms/loans/${id}/payoff`, { note }).then(r => r.data),
+    writeOff: (id: string, note: string) => api.post(`/hrms/loans/${id}/write-off`, { note }).then(r => r.data),
+    cancel: (id: string) => api.post(`/hrms/loans/${id}/cancel`).then(r => r.data),
   },
   bonuses: {
     list: (month: number, year: number) => api.get('/hrms/bonuses', { params: { month, year } }).then(r => r.data),
@@ -777,10 +819,12 @@ export const teamApi = {
   update: (id: string, data: any) => api.patch(`/team/${id}`, data).then(r => r.data),
   deactivate: (id: string) => api.delete(`/team/${id}`).then(r => r.data),
   extraRoles: () => api.get('/team/extra-roles').then(r => r.data),
-  assignRole: (userId: string, roleId: string, departmentScope?: string) =>
-    api.post(`/team/${userId}/roles`, { role_id: roleId, department_scope: departmentScope || undefined }).then(r => r.data),
+  assignRole: (userId: string, roleId: string, departmentScope?: string, stipendAmount?: number) =>
+    api.post(`/team/${userId}/roles`, { role_id: roleId, department_scope: departmentScope || undefined, stipend_amount: stipendAmount || undefined }).then(r => r.data),
   removeRole: (userId: string, roleId: string) =>
     api.delete(`/team/${userId}/roles/${roleId}`).then(r => r.data),
+  setRoleStipend: (userId: string, roleId: string, stipendAmount: number | null) =>
+    api.patch(`/team/${userId}/roles/${roleId}/stipend`, { stipend_amount: stipendAmount }).then(r => r.data),
 }
 
 

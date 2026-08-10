@@ -139,7 +139,7 @@ router.get('/users/:user_id/roles', requirePermissionV2('role.view'),
 
     const { data, error } = await supabase
       .from('user_roles')
-      .select('id, role_id, assigned_at, roles ( id, name, description, is_system_role )')
+      .select('id, role_id, assigned_at, stipend_amount, roles ( id, name, description, is_system_role )')
       .eq('user_id', user_id)
       .eq('school_id', school_id)
 

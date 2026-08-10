@@ -21,6 +21,7 @@ export type NotificationType =
   | 'fee_due_soon' | 'fee_overdue'
   | 'payslip_generated'
   | 'probation_ending' | 'document_expiring' | 'contract_review_due' | 'work_anniversary'
+  | 'payslip_regen_needed' | 'absconded_review_needed'
 
 interface CreateNotificationParams {
   schoolId: string

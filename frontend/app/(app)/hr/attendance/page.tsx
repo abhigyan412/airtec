@@ -437,9 +437,14 @@ function RequestsTab() {
 
   const actionMutation = useMutation({
     mutationFn: ({ id, status }: any) => hrmsApi.regularizations.workflowAction(id, status),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['attendance-regularizations'] })
-      toast.success('Request updated')
+      // Stage 10.2a: an approval that lands on an already-approved/paid
+      // payslip won't auto-apply — the backend says so explicitly rather
+      // than the correction silently going nowhere.
+      const note = res?.data?.payslip_note
+      if (note) toast.warning(note, { duration: 8000 })
+      else toast.success('Request updated')
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
   })

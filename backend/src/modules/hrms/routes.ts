@@ -3,15 +3,16 @@ import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, AuthRequest, invalidateUserProfile } from '../../shared/middleware/auth'
-import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
+import { requirePermissionV2, getPermissionsForUser, getUserIdsWithPermission } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, getPagination, NON_STAFF_ROLES } from '../../shared/utils/helpers'
 import { getPermissionsForRole } from '../../shared/middleware/permissions'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { assignDefaultUserRole, ensureExitWorkflowDefinition, ensureRegularizationWorkflowDefinition, ensureCompOffWorkflowDefinition, ensureLeaveApprovalWorkflowDefinition } from '../rbac/seed'
-import { getNonWorkingDaySets, countWorkingDays, isWorkingDate, dateRangeStrings, toLocalDateStr } from '../../shared/utils/academicCalendar'
+import { getNonWorkingDaySets, countWorkingDays, isWorkingDate, dateRangeStrings, toLocalDateStr, NonWorkingDaySets } from '../../shared/utils/academicCalendar'
 import { createNotification, createNotifications } from '../../shared/utils/notifications'
 import { runLeaveAccrual, runLeaveYearEnd } from '../../shared/utils/leavePolicy'
 import { runHrAlerts } from '../../shared/utils/hrAlerts'
+import { runAbscondedSweep } from '../../shared/utils/absconded'
 
 const router = Router()
 router.use(authenticate)
@@ -123,6 +124,12 @@ const SalaryStructureSchema = z.object({
   professional_tax: z.number().optional(),
   other_deductions: z.number().optional(),
   effective_from: z.string().optional(),
+  // Stage 9: z.object().parse() strips unknown keys by default — these
+  // two silently vanished the first time this schema was hit with them
+  // before being added here (a real bug caught live: PUT saved
+  // type='fixed_monthly' regardless of what was actually sent).
+  type: z.enum(['fixed_monthly', 'hourly', 'per_session']).optional(),
+  hourly_rate: z.number().nullable().optional(),
 })
 
 // Same earnings/deductions shape as SalaryStructureSchema minus user_id
@@ -145,6 +152,8 @@ const PromoteTransferSchema = z.object({
     pf_deduction: z.number().optional(),
     professional_tax: z.number().optional(),
     other_deductions: z.number().optional(),
+    type: z.enum(['fixed_monthly', 'hourly', 'per_session']).optional(),
+    hourly_rate: z.number().nullable().optional(),
   }).optional(),
 })
 
@@ -247,6 +256,30 @@ router.get('/staff/org-chart', requirePermissionV2('staff.view'), asyncHandler(a
 router.post('/hr-alerts/run', requirePermissionV2('staff.edit'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const result = await runHrAlerts(req.user!.school_id)
   res.json({ success: true, data: result })
+}))
+
+// POST /hrms/absconded/run — manual trigger for the daily absconded
+// sweep (index.ts runs it unattended every morning). Same reasoning as
+// the HR alerts manual trigger above.
+router.post('/absconded/run', requirePermissionV2('staff.edit'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const result = await runAbscondedSweep(req.user!.school_id)
+  res.json({ success: true, data: result })
+}))
+
+// GET /hrms/documents/expiring — the actual rows behind Staff Directory's
+// "Documents Expiring" tile (GET /staff/stats only returns the count) so
+// the tile can drill into something instead of being a dead-end number.
+// Same 30-day window and query shape as that count, so the two numbers
+// can never disagree.
+router.get('/documents/expiring', requirePermissionV2('staff.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const thirtyDaysOut = toLocalDateStr(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
+  const { data, error } = await supabase.from('staff_documents')
+    .select('id, user_id, document_name, document_type, expiry_date, users:user_id(full_name)')
+    .eq('school_id', school_id).not('expiry_date', 'is', null).lte('expiry_date', thirtyDaysOut)
+    .order('expiry_date', { ascending: true })
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data })
 }))
 
 // GET /hrms/staff/stats - dashboard stats
@@ -502,7 +535,12 @@ router.post('/staff/:user_id/promote', requirePermissionV2('staff.promote'),
 
     let salaryStructureId: string | null = null
     if (body.salary) {
-      await supabase.from('salary_structures').update({ is_active: false }).eq('user_id', user_id).eq('is_active', true)
+      // Same range-closing this endpoint already does for position
+      // history — without it, Generate's period-overlap lookup would
+      // see the old and new structure both still claiming today.
+      await supabase.from('salary_structures')
+        .update({ is_active: false, effective_to: effectiveToForPrevious })
+        .eq('user_id', user_id).eq('is_active', true)
       const { data: newSalary, error: salaryErr } = await supabase
         .from('salary_structures')
         .insert({ ...body.salary, user_id, school_id, effective_from: body.effective_from, created_by: req.user!.id, is_active: true })
@@ -536,7 +574,278 @@ router.post('/staff/:user_id/promote', requirePermissionV2('staff.promote'),
       await supabase.from('staff_profiles').update(profileUpdate).eq('user_id', user_id).eq('school_id', school_id)
     }
 
-    res.status(201).json({ success: true, data: history })
+    // ── Stage 7: auto-stage arrears for a backdated salary change ──
+    //
+    // Only relevant when the effective date is in the past relative to
+    // the CURRENT open payroll period — a promotion effective within the
+    // still-open current month is Stage 5's job (segmentation at the
+    // next Generate run), not arrears'. Excluding it here is the whole
+    // point: staging arrears for the current month too would double-pay
+    // the difference, once via segmentation and once via arrears.
+    const autoStagedArrears: any[] = []
+    const arrearsGaps: { month: number; year: number }[] = []
+    if (body.salary && salaryStructureId) {
+      const now = new Date()
+      const currentMonth = now.getMonth() + 1
+      const currentYear = now.getFullYear()
+      const effFromMonth = Number(body.effective_from.slice(5, 7))
+      const effFromYear = Number(body.effective_from.slice(0, 4))
+
+      const interveningPeriods: { month: number; year: number }[] = []
+      {
+        let m = effFromMonth, y = effFromYear
+        while (y < currentYear || (y === currentYear && m < currentMonth)) {
+          interveningPeriods.push({ month: m, year: y })
+          m++
+          if (m > 12) { m = 1; y++ }
+        }
+      }
+
+      if (interveningPeriods.length) {
+        // "Now" — any payslip found below for an intervening period was
+        // necessarily generated before this exact request (the new
+        // structure row is only created a few lines up, in this same
+        // transaction), so it definitively used the old rate. Captured
+        // explicitly rather than left implicit, per the plan's own
+        // stated condition (payslip.created_at < promotion's recording
+        // time) — it's a no-op filter here by construction, but it's
+        // the correctness argument made checkable, not assumed.
+        const promotionRecordedAt = new Date().toISOString()
+
+        const [{ data: allStructures }, { data: joinRow }, { data: exitRowsForUser }, { data: schoolRow }, { data: existingPayslipsRaw }] = await Promise.all([
+          supabase.from('salary_structures').select('*').eq('school_id', school_id).eq('user_id', user_id).order('effective_from', { ascending: true }),
+          supabase.from('staff_profiles').select('date_of_joining').eq('user_id', user_id).eq('school_id', school_id).maybeSingle(),
+          supabase.from('staff_exits').select('last_working_day').eq('school_id', school_id).eq('user_id', user_id),
+          supabase.from('schools').select('segment_proration_basis').eq('id', school_id).single(),
+          supabase.from('payslips').select('id, month, year, gross_salary, created_at')
+            .eq('school_id', school_id).eq('user_id', user_id)
+            .in('year', [...new Set(interveningPeriods.map(p => p.year))]),
+        ])
+
+        const joinDate = joinRow?.date_of_joining ?? undefined
+        const exitDate = (exitRowsForUser ?? []).reduce((latest: string | undefined, r: any) =>
+          !r.last_working_day ? latest : (!latest || r.last_working_day > latest ? r.last_working_day : latest), undefined as string | undefined)
+        const prorationBasis: 'calendar_days' | 'working_days' = (schoolRow as any)?.segment_proration_basis === 'working_days' ? 'working_days' : 'calendar_days'
+
+        const payslipByPeriod = new Map<string, any>()
+        for (const p of (existingPayslipsRaw ?? []) as any[]) {
+          if (interveningPeriods.some(ip => ip.month === p.month && ip.year === p.year)) payslipByPeriod.set(`${p.year}-${p.month}`, p)
+        }
+
+        for (const period of interveningPeriods) {
+          const payslip = payslipByPeriod.get(`${period.year}-${period.month}`)
+          if (!payslip) {
+            // Critical boundary: nothing to diff against — surfaced as
+            // an explicit gap, never a silent skip.
+            arrearsGaps.push(period)
+            continue
+          }
+          if (!(payslip.created_at < promotionRecordedAt)) continue
+
+          const mStr = String(period.month).padStart(2, '0')
+          const periodFrom = `${period.year}-${mStr}-01`
+          const periodTo = `${period.year}-${mStr}-${String(new Date(period.year, period.month, 0).getDate()).padStart(2, '0')}`
+
+          const overlapping = (allStructures ?? []).filter((st: any) => st.effective_from <= periodTo && (!st.effective_to || st.effective_to >= periodFrom))
+          const periodNonWorkingSets = await getNonWorkingDaySets(school_id, periodFrom, periodTo)
+          const { segments, totalBasisDays } = buildPayslipSegments(overlapping, periodFrom, periodTo, joinDate, exitDate, prorationBasis, periodNonWorkingSets)
+          if (!segments.length) continue // not employed at all that period — nothing to correct
+
+          const { fullGross: correctGross } = computeSegmentGross(segments, totalBasisDays)
+          const diff = Math.round(correctGross - Number(payslip.gross_salary))
+          if (diff === 0) continue // already correct (e.g. effective date lands exactly on a month boundary)
+
+          const { data: arrearsRow } = await supabase.from('salary_arrears').insert({
+            school_id, user_id, from_month: period.month, from_year: period.year, to_month: period.month, to_year: period.year,
+            amount: diff,
+            reason: `Auto-staged: salary structure change effective ${body.effective_from} applied retroactively to ${period.month}/${period.year}`,
+            source: 'auto_promotion', source_ref_id: history.id, created_by: req.user!.id,
+          }).select().single()
+          if (arrearsRow) autoStagedArrears.push(arrearsRow)
+        }
+      }
+    }
+
+    res.status(201).json({
+      success: true, data: history,
+      auto_staged_arrears: autoStagedArrears,
+      arrears_gaps: arrearsGaps,
+    })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// SALARY ARREARS (Stage 7) — back-pay the school owes the employee, the
+// inverse of Fees' arrears. Auto-staged rows come from promote() above;
+// manual ones from POST below — both land in the same table and go
+// through the same pending -> staged/cancelled -> applied lifecycle.
+// ═══════════════════════════════════════════════════════════════
+
+// POST /hrms/salary-arrears — raise a manual arrears record. Nothing
+// changes yet; it needs an approver, same "approval performs the
+// action" idiom as payslip_corrections.
+router.post('/salary-arrears', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { user_id, from_month, from_year, to_month, to_year, amount, reason } = req.body
+    const school_id = req.user!.school_id
+
+    if (!user_id || !from_month || !from_year || !to_month || !to_year || !amount) {
+      return res.status(400).json({ success: false, error: 'user_id, from_month, from_year, to_month, to_year, and amount are required' })
+    }
+    if (!reason || String(reason).trim().length < 3) {
+      return res.status(400).json({ success: false, error: 'Give a reason — it is what the approver decides on' })
+    }
+
+    const { data, error } = await supabase.from('salary_arrears').insert({
+      school_id, user_id, from_month, from_year, to_month, to_year, amount, reason: String(reason).trim(),
+      source: 'manual', created_by: req.user!.id,
+    }).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+// GET /hrms/salary-arrears?user_id=&status= — self-or-staff.payroll_manage,
+// same isAdmin-branch shape as GET /payslip-corrections, so a staff
+// member's own payslip breakdown can show which arrears records were
+// applied without holding payroll_manage themselves. The review queue
+// (raising/approving on anyone) still needs it via the isAdmin branch.
+router.get('/salary-arrears', asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { user_id, status, applied_to_payslip_id } = req.query
+    const school_id = req.user!.school_id
+    const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+    const isAdmin = isSuperRole || permissionCodes.has('staff.payroll_manage')
+
+    let q = supabase.from('salary_arrears')
+      .select('*, users:user_id(full_name), requester:created_by(full_name)')
+      .eq('school_id', school_id).order('created_at', { ascending: false })
+    if (!isAdmin) q = q.eq('user_id', req.user!.id)
+    else if (user_id) q = q.eq('user_id', user_id as string)
+    if (status) q = q.eq('status', status as string)
+    if (applied_to_payslip_id) q = q.eq('applied_to_payslip_id', applied_to_payslip_id as string)
+    const { data, error } = await q
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// POST /hrms/salary-arrears/:id/decide — approve moves pending -> staged
+// (ready for Generate to pick up); reject moves pending -> cancelled.
+// Self-decide guard: whoever raised it — auto-staged or manual — cannot
+// be the one who approves it.
+router.post('/salary-arrears/:id/decide', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const { decision, note } = req.body
+    const school_id = req.user!.school_id
+    if (!['approved', 'rejected'].includes(decision)) {
+      return res.status(400).json({ success: false, error: 'decision must be approved or rejected' })
+    }
+
+    const { data: arrears } = await supabase.from('salary_arrears').select('*').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!arrears) return res.status(404).json({ success: false, error: 'Arrears record not found' })
+    if (arrears.status !== 'pending') return res.status(400).json({ success: false, error: `Already ${arrears.status}` })
+    if (arrears.created_by === req.user!.id) {
+      return res.status(403).json({ success: false, error: 'You raised this — someone else has to decide it.' })
+    }
+
+    const { data, error } = await supabase.from('salary_arrears').update({
+      status: decision === 'approved' ? 'staged' : 'cancelled',
+      decided_by: req.user!.id, decided_at: new Date().toISOString(), decision_note: note ?? null,
+    }).eq('id', id).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+
+    await supabase.from('audit_logs').insert({
+      school_id, user_id: req.user!.id, action: `SALARY_ARREARS_${decision.toUpperCase()}`,
+      entity_type: 'salary_arrears', entity_id: id,
+      new_values: { user_id: arrears.user_id, amount: arrears.amount, note: note ?? null },
+    })
+
+    res.json({ success: true, data })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// DUTY LOG (Stage 9) — per-session staff earnings. Only APPROVED
+// entries (approved_by set) are ever picked up by Generate — same
+// "approval performs the action" posture as arrears/corrections above.
+// ═══════════════════════════════════════════════════════════════
+
+// POST /hrms/duty-log — log a session. Not yet picked up by anything
+// until approved.
+router.post('/duty-log', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { user_id, date, session_type, description, rate } = req.body
+    const school_id = req.user!.school_id
+    if (!user_id || !date || !session_type || !rate) {
+      return res.status(400).json({ success: false, error: 'user_id, date, session_type, and rate are required' })
+    }
+    const { data, error } = await supabase.from('staff_duty_log').insert({
+      school_id, user_id, date, session_type, description: description ?? null, rate, created_by: req.user!.id,
+    }).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+// GET /hrms/duty-log?user_id=&month=&year=&approved_only= — self-or-
+// staff.payroll_manage, same isAdmin-branch shape as GET /payslips, so
+// a staff member's own payslip breakdown can show their session count
+// without needing payroll_manage themselves.
+router.get('/duty-log', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { user_id, month, year, approved_only } = req.query
+  const school_id = req.user!.school_id
+  const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+  const isAdmin = isSuperRole || permissionCodes.has('staff.payroll_manage')
+
+  let q = supabase.from('staff_duty_log')
+    .select('*, users:user_id(full_name), creator:created_by(full_name), approver:approved_by(full_name)')
+    .eq('school_id', school_id).order('date', { ascending: false })
+  if (!isAdmin) q = q.eq('user_id', req.user!.id)
+  else if (user_id) q = q.eq('user_id', user_id as string)
+  if (month && year) {
+    const m = String(month).padStart(2, '0')
+    q = q.gte('date', `${year}-${m}-01`).lte('date', `${year}-${m}-31`)
+  }
+  if (approved_only === 'true') q = q.not('approved_by', 'is', null)
+  if (approved_only === 'false') q = q.is('approved_by', null)
+  const { data, error } = await q
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data })
+}))
+
+// PATCH /hrms/duty-log/:id/approve — approval PERFORMS the pickup, same
+// idiom as everything else in this file. No self-decide guard here
+// (unlike arrears/corrections) — logging and approving a duty session
+// is normal single-person payroll admin work, not a dispute needing a
+// second reviewer.
+router.patch('/duty-log/:id/approve', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+    const { data: entry } = await supabase.from('staff_duty_log').select('approved_by').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!entry) return res.status(404).json({ success: false, error: 'Duty log entry not found' })
+    if (entry.approved_by) return res.status(400).json({ success: false, error: 'Already approved' })
+
+    const { data, error } = await supabase.from('staff_duty_log')
+      .update({ approved_by: req.user!.id, approved_at: new Date().toISOString() }).eq('id', id).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// DELETE /hrms/duty-log/:id — only before approval; an approved entry
+// may already have fed a payslip's session pay total.
+router.delete('/duty-log/:id', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+    const { data: entry } = await supabase.from('staff_duty_log').select('approved_by').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!entry) return res.status(404).json({ success: false, error: 'Duty log entry not found' })
+    if (entry.approved_by) return res.status(400).json({ success: false, error: 'Already approved — cannot delete' })
+    const { error } = await supabase.from('staff_duty_log').delete().eq('id', id).eq('school_id', school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
   })
 )
 
@@ -764,11 +1073,22 @@ router.patch('/exit/:exit_id/checklist/:item_id', requirePermissionV2('staff.exi
 // POST /hrms/exit/:exit_id/submit-settlement — computes the full &
 // final figures and starts the one-step approval workflow.
 //
+// The convention this route and Generate now share (Stage 3): a
+// regular payslip, if one gets generated for the month containing
+// last_working_day, already covers pay UP TO that day — Stage 1.1/5's
+// join/exit clamp means its gross and LOP are already correctly
+// prorated to the partial month. Settlement's job is everything a
+// payslip doesn't do: the leave payout, and recovering outstanding
+// advances in one lump sum since there's no future payslip left to
+// keep collecting installments from. It does NOT independently
+// recompute LOP for a month a payslip has already accounted for —
+// that would deduct the same attendance gap twice. Only when no
+// payslip exists yet for that month (settlement processed before that
+// month's payroll ever ran) does it fall back to computing LOP itself,
+// so it's captured somewhere rather than lost entirely.
+//
 // Leave payout uses gross/30 as the per-day rate — a documented
-// placeholder. LOP and outstanding-advances deductions are returned as
-// 0 for now; Phase 2 (payroll LOP) and the loans/advances table wire
-// real values into these same response fields without changing this
-// route's shape.
+// placeholder.
 router.post('/exit/:exit_id/submit-settlement', requirePermissionV2('staff.exit_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { exit_id } = req.params
@@ -794,9 +1114,11 @@ router.post('/exit/:exit_id/submit-settlement', requirePermissionV2('staff.exit_
 
     if (exit.status !== 'cleared') return res.status(400).json({ success: false, error: `Clearance checklist must be complete first (current status: ${exit.status})` })
 
-    const [{ data: salary }, { data: leaveBalances }] = await Promise.all([
+    const [{ data: salary }, { data: leaveBalances }, { data: school }, { data: activeLoans }] = await Promise.all([
       supabase.from('salary_structures').select('*').eq('user_id', exit.user_id).eq('is_active', true).order('effective_from', { ascending: false }).limit(1).maybeSingle(),
       supabase.from('leave_balances').select('total_days, used_days').eq('user_id', exit.user_id).eq('year', new Date().getFullYear()),
+      supabase.from('schools').select('lop_grace_days, lop_per_day_formula').eq('id', school_id).single(),
+      supabase.from('staff_loans').select('*').eq('school_id', school_id).eq('user_id', exit.user_id).eq('status', 'active'),
     ])
 
     const gross = salary
@@ -805,9 +1127,46 @@ router.post('/exit/:exit_id/submit-settlement', requirePermissionV2('staff.exit_
     const perDayRate = gross / 30
     const pendingLeaveDays = (leaveBalances ?? []).reduce((s, b) => s + Math.max(0, Number(b.total_days) - Number(b.used_days)), 0)
     const leavePayout = Math.round(pendingLeaveDays * perDayRate)
-    const lopDeduction = 0 // wired in by Phase 2's payroll LOP work
-    const advancesDeduction = 0 // wired in once the loans/advances table exists
+
+    // LOP for the final, partial month — but only computed here as a
+    // fallback. If a regular payslip already exists for the month
+    // containing last_working_day, IT already deducted LOP for this
+    // person's actual final days (same rollup, same clamp) — settlement
+    // nets against that instead of recomputing blind and deducting it
+    // a second time. The DB trigger on staff_exits backs this up: it
+    // refuses to let a settlement go to 'settled' with a nonzero
+    // lop_deduction of its own when a payslip for that month already
+    // has one.
+    const lastDay = new Date(`${exit.last_working_day}T00:00:00`)
+    const finalMonth = lastDay.getMonth() + 1
+    const finalYear = lastDay.getFullYear()
+    const { data: finalMonthPayslip } = await supabase.from('payslips')
+      .select('id, lop_amount').eq('school_id', school_id).eq('user_id', exit.user_id)
+      .eq('month', finalMonth).eq('year', finalYear).maybeSingle()
+
+    let lopDeduction = 0
+    if (!finalMonthPayslip) {
+      const monthStart = toLocalDateStr(new Date(finalYear, lastDay.getMonth(), 1))
+      const { rollupByUser } = await computeStaffAttendanceRollup(school_id, [exit.user_id], monthStart, exit.last_working_day)
+      const finalMonthRollup = rollupByUser.get(exit.user_id)
+      const graceDays = school?.lop_grace_days ?? 0
+      const formula = school?.lop_per_day_formula ?? 'gross_30'
+      const finalMonthLopDays = finalMonthRollup ? Math.max(0, (finalMonthRollup.unmarked + finalMonthRollup.absent) - graceDays) : 0
+      const finalMonthPerDayRate = formula === 'working_days' && finalMonthRollup && finalMonthRollup.working_days > 0 ? gross / finalMonthRollup.working_days : gross / 30
+      lopDeduction = Math.round(finalMonthLopDays * finalMonthPerDayRate)
+    }
+
+    // Advances — the full remaining principal on every active loan, in
+    // one go. There's no future payslip left to keep collecting
+    // installments from, so what's outstanding is recovered here or
+    // it's simply forgiven.
+    const advancesDeduction = (activeLoans ?? []).reduce((sum, loan: any) => {
+      const remaining = Number(loan.principal_amount) - (Number(loan.installment_amount) * Number(loan.installments_paid))
+      return sum + Math.max(0, Math.round(remaining))
+    }, 0)
+
     const netSettlement = leavePayout - lopDeduction - advancesDeduction
+    const owedToSchool = netSettlement < 0
 
     await supabase.from('staff_exits').update({
       pending_leave_days: pendingLeaveDays, leave_payout: leavePayout,
@@ -829,13 +1188,24 @@ router.post('/exit/:exit_id/submit-settlement', requirePermissionV2('staff.exit_
       return res.status(400).json({ success: false, error: `Could not start settlement approval: ${wfResult.error}` })
     }
 
+    const notes = [
+      finalMonthPayslip
+        ? `A regular payslip for ${finalMonth}/${finalYear} already covers this person's pay and Loss of Pay up to their last working day — this settlement only adds leave payout and loan recovery on top.`
+        : null,
+      owedToSchool
+        ? `Outstanding loan balance exceeds what's owed to this staff member — they owe the school ₹${Math.abs(netSettlement).toLocaleString('en-IN')}. This is not collected automatically; it needs a separate conversation and recovery arrangement.`
+        : null,
+    ].filter(Boolean)
+
     res.json({
       success: true,
       data: {
         pending_leave_days: pendingLeaveDays, per_day_rate: perDayRate, leave_payout: leavePayout,
         lop_deduction: lopDeduction, advances_deduction: advancesDeduction, net_settlement: netSettlement,
+        owed_to_school: owedToSchool,
         workflow: wfResult.instance,
       },
+      meta: notes.length ? { note: notes.join(' ') } : undefined,
     })
   })
 )
@@ -880,6 +1250,18 @@ router.post('/exit/:exit_id/workflow-action', requirePermissionV2('staff.exit_ma
       await supabase.from('staff_position_history')
         .update({ effective_to: exit.last_working_day })
         .eq('user_id', exit.user_id).eq('school_id', school_id).is('effective_to', null)
+
+      // The approval is what actually performs the settlement — the
+      // outstanding balance on every active loan was recovered in
+      // full via advances_deduction at submit time, so nothing is
+      // left to keep collecting installments against. Whatever was
+      // still active when settlement was submitted is closed here;
+      // a loan issued between submission and approval (unusual, but
+      // not impossible) is deliberately left alone rather than
+      // silently written off.
+      await supabase.from('staff_loans')
+        .update({ status: 'settled', updated_at: new Date().toISOString() })
+        .eq('school_id', school_id).eq('user_id', exit.user_id).eq('status', 'active')
     }
 
     res.json({ success: true, data: { instance: result.instance, completed: result.completed } })
@@ -1443,12 +1825,24 @@ router.put('/salary-structure', requirePermissionV2('staff.payroll_manage'),
     const body = SalaryStructureSchema.parse(req.body)
     const school_id = req.user!.school_id
 
-    // Deactivate old structures
-    await supabase.from('salary_structures').update({ is_active: false }).eq('user_id', body.user_id).eq('is_active', true)
+    // The new structure's own effective_from, defaulted the same way the
+    // DB column itself would — needed here explicitly so the OLD row's
+    // effective_to can be set to the day before it, closing the range
+    // rather than leaving it open-ended. Without this, Generate's
+    // period-overlap lookup (Stage 2) would see two structures both
+    // claiming to cover the same days.
+    const newEffectiveFrom = body.effective_from || toLocalDateStr(new Date())
+    const dayBeforeNew = new Date(`${newEffectiveFrom}T00:00:00`)
+    dayBeforeNew.setDate(dayBeforeNew.getDate() - 1)
+    const effectiveToForPrevious = toLocalDateStr(dayBeforeNew)
+
+    await supabase.from('salary_structures')
+      .update({ is_active: false, effective_to: effectiveToForPrevious })
+      .eq('user_id', body.user_id).eq('is_active', true)
 
     const { data, error } = await supabase
       .from('salary_structures')
-      .insert({ ...body, school_id, created_by: req.user!.id, is_active: true })
+      .insert({ ...body, effective_from: newEffectiveFrom, school_id, created_by: req.user!.id, is_active: true })
       .select().single()
 
     if (error) return res.status(400).json({ success: false, error: error.message })
@@ -1483,19 +1877,74 @@ router.get('/payslips', asyncHandler(async (req: AuthRequest, res: Response) => 
 }))
 
 // One simple, clearly-illustrative annualized slab — deliberately not a
-// full tax engine (no regime switching, no investment declarations, no
-// Form 16). Computed on (monthly gross * 12), divided back to a monthly
-// deduction. Schools needing actual statutory accuracy should still
-// verify/override via the payslip's own `tds` field after generation.
-function computeMonthlyTDS(monthlyGross: number): number {
-  const annual = monthlyGross * 12
+// full tax engine (no regime switching, no Form 16 filing). Applied to
+// a taxable ANNUAL figure; callers annualize/de-annualize around it.
+// Schools needing actual statutory accuracy should still verify/override
+// via the payslip's own `tds` field after generation.
+function annualSlabTax(annual: number): number {
   let tax = 0
   if (annual > 1500000) tax += (annual - 1500000) * 0.30
   if (annual > 1200000) tax += (Math.min(annual, 1500000) - 1200000) * 0.20
   if (annual > 900000)  tax += (Math.min(annual, 1200000) - 900000) * 0.15
   if (annual > 600000)  tax += (Math.min(annual, 900000) - 600000) * 0.10
   if (annual > 300000)  tax += (Math.min(annual, 600000) - 300000) * 0.05
-  return Math.round(tax / 12)
+  return tax
+}
+
+const SECTION_80C_CAP = 150000
+
+// Builds the 12 (month, year) pairs of the fiscal year starting at
+// ay.start_date — this school's academic year, already April-March,
+// doubles as the fiscal year for tax purposes rather than inventing a
+// second concept of "year" alongside it.
+function fyMonthSequence(startDate: string): { month: number; year: number }[] {
+  const [y, m] = startDate.split('-').map(Number)
+  const seq: { month: number; year: number }[] = []
+  let curY = y, curM = m
+  for (let i = 0; i < 12; i++) {
+    seq.push({ month: curM, year: curY })
+    curM++
+    if (curM > 12) { curM = 1; curY++ }
+  }
+  return seq
+}
+
+// Year-to-date TDS: actual withholding for the months already run this
+// FY, plus a projection for the rest of it at the current month's rate,
+// minus what's already been withheld, spread across the months left —
+// the standard "recompute every month, self-correcting as actuals come
+// in" approach, rather than treating every month as if it were the only
+// one (which is what naive monthlyGross*12 does, and why it drifts
+// whenever gross changes mid-year). Degrades to exactly that naive
+// formula when there's no prior data and no exemptions — i.e. a
+// school with no academic year configured, or a person's first payslip
+// of the year — since projectedAnnual = 0 + gross*12 either way.
+function computeYtdTDS(params: {
+  currentMonthGross: number
+  priorGross: number
+  priorTds: number
+  remainingMonths: number
+  declaration?: { section_80c?: number; hra_exemption?: number; other_exemptions?: number } | null
+  // Stage 7: arrears is real taxable income too, but it's a ONE-TIME
+  // lump sum, not a recurring monthly rate — folding it into
+  // currentMonthGross would wrongly project it as if it repeated every
+  // remaining month of the year. Added once, un-multiplied, same
+  // treatment prior months' already-paid arrears get via priorArrears.
+  // Kept as its own bucket (not summed into priorGross/currentMonthGross
+  // by the caller) so a future Section 89 relief pass can identify
+  // exactly which rupees of this year's income were arrears without
+  // re-deriving it from payslip history.
+  arrearsThisMonth?: number
+  priorArrears?: number
+}): number {
+  const months = Math.max(1, params.remainingMonths)
+  const projectedAnnual = params.priorGross + (params.priorArrears ?? 0) + params.currentMonthGross * months + (params.arrearsThisMonth ?? 0)
+  const section80c = Math.min(Number(params.declaration?.section_80c) || 0, SECTION_80C_CAP)
+  const hraExemption = Number(params.declaration?.hra_exemption) || 0
+  const otherExemptions = Number(params.declaration?.other_exemptions) || 0
+  const taxableAnnual = Math.max(0, projectedAnnual - section80c - hraExemption - otherExemptions)
+  const remainingTax = Math.max(0, annualSlabTax(taxableAnnual) - params.priorTds)
+  return Math.round(remainingTax / months)
 }
 
 // Picks the matching professional_tax_slabs band for a school, falling
@@ -1508,6 +1957,70 @@ function computeProfessionalTax(gross: number, slabs: { min_gross: number; max_g
   return band ? Number(band.amount) : fallback
 }
 
+function basisDaysBetween(from: string, to: string, basis: 'calendar_days' | 'working_days', nonWorkingSets: NonWorkingDaySets): number {
+  if (from > to) return 0
+  return basis === 'working_days' ? countWorkingDays(from, to, nonWorkingSets) : dateRangeStrings(from, to).length
+}
+
+/**
+ * Splits one user's billing period into segments, one per salary
+ * structure whose range overlaps their employment window inside this
+ * period (join date and, if they've left, last working day both clamp
+ * it — same reasoning as the equivalent clamp in
+ * computeStaffAttendanceRollup). A month with no mid-month structure
+ * change always produces exactly one segment covering the whole
+ * clamped window — the pre-segment behavior is that single-segment
+ * case, not a separate code path.
+ */
+function buildPayslipSegments(
+  structures: any[], periodFrom: string, periodTo: string,
+  joinDate: string | undefined, exitDate: string | undefined,
+  basis: 'calendar_days' | 'working_days', nonWorkingSets: NonWorkingDaySets,
+): { segments: { structure: any; from: string; to: string; basisDays: number }[]; totalBasisDays: number } {
+  const employFrom = joinDate && joinDate > periodFrom ? joinDate : periodFrom
+  const employTo = exitDate && exitDate < periodTo ? exitDate : periodTo
+  if (employFrom > employTo || !structures.length) return { segments: [], totalBasisDays: 0 }
+
+  const totalBasisDays = basisDaysBetween(employFrom, employTo, basis, nonWorkingSets)
+  const segments: { structure: any; from: string; to: string; basisDays: number }[] = []
+  for (const st of structures) {
+    const segFrom = st.effective_from > employFrom ? st.effective_from : employFrom
+    const segTo = st.effective_to && st.effective_to < employTo ? st.effective_to : employTo
+    if (segFrom > segTo) continue
+    segments.push({ structure: st, from: segFrom, to: segTo, basisDays: basisDaysBetween(segFrom, segTo, basis, nonWorkingSets) })
+  }
+  return { segments, totalBasisDays }
+}
+
+/**
+ * Prorates each segment's earnings by its share of the period (basis
+ * days / total basis days) and sums them into a gross. Extracted so
+ * Stage 7's arrears auto-staging can re-run the EXACT same math against
+ * a past period's now-corrected structure list, rather than
+ * hand-duplicating the rounding behavior and risking drift between the
+ * two.
+ */
+function computeSegmentGross(
+  segments: { structure: any; from: string; to: string; basisDays: number }[], totalBasisDays: number,
+) {
+  const segRows = segments.map(seg => {
+    const ratio = totalBasisDays > 0 ? seg.basisDays / totalBasisDays : (segments.length === 1 ? 1 : 0)
+    const basic = Math.round(Number(seg.structure.basic_salary) * ratio)
+    const hra = Math.round(Number(seg.structure.hra ?? 0) * ratio)
+    const da = Math.round(Number(seg.structure.da ?? 0) * ratio)
+    const conveyance = Math.round(Number(seg.structure.conveyance_allowance ?? 0) * ratio)
+    const medical = Math.round(Number(seg.structure.medical_allowance ?? 0) * ratio)
+    const other = Math.round(Number(seg.structure.other_allowances ?? 0) * ratio)
+    return {
+      structure_id: seg.structure.id, from: seg.from, to: seg.to, basis_days: seg.basisDays,
+      basic_salary: basic, hra, da, conveyance_allowance: conveyance, medical_allowance: medical, other_allowances: other,
+      gross_salary: basic + hra + da + conveyance + medical + other,
+    }
+  })
+  const fullGross = segRows.reduce((sum, r) => sum + r.gross_salary, 0)
+  return { segRows, fullGross }
+}
+
 // POST /hrms/payslips/generate - generate payslips for a month for all active staff
 router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -1516,6 +2029,10 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
 
     if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' })
 
+    const mStr = String(month).padStart(2, '0')
+    const fromDate = `${year}-${mStr}-01`
+    const toDate = `${year}-${mStr}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`
+
     // Get target users (active staff with salary structures)
     let salaryQuery = supabase.from('salary_structures').select('*, users:user_id(full_name)').eq('school_id', school_id).eq('is_active', true)
     if (user_ids?.length) salaryQuery = salaryQuery.in('user_id', user_ids)
@@ -1523,36 +2040,237 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
 
     if (!salariesRaw?.length) return res.status(400).json({ success: false, error: 'No salary structures found' })
 
-    // Resigned/terminated staff are never eligible for a NEW payslip,
-    // regardless of whether they still have an active salary structure
-    // on file — a departed employee shouldn't be part of payroll going
-    // forward. This doesn't touch payslips already generated before
-    // they left; those remain exactly as they were (still legitimately
-    // owed and payable via Bank Export).
-    const { data: statusRows } = await supabase.from('staff_profiles').select('user_id, employment_status').in('user_id', salariesRaw.map(s => s.user_id))
+    const [{ data: statusRows }, { data: school }, { data: exitRows }, { data: academicYear }] = await Promise.all([
+      supabase.from('staff_profiles').select('user_id, employment_status').in('user_id', salariesRaw.map(s => s.user_id)),
+      // Fetched once here (rather than alongside the other per-run lookups
+      // below) because it decides who's even eligible before anything
+      // else runs — a suspended staff member's exclusion, not just their
+      // pay figure, depends on it.
+      supabase.from('schools')
+        .select('lop_grace_days, lop_per_day_formula, suspension_pay_policy, suspension_pay_percent, segment_proration_basis, overtime_rate_multiplier').eq('id', school_id).single(),
+      // Every exit record (any status) for every candidate — used below
+      // to decide eligibility, and again later to clamp segments/LOP to
+      // last_working_day. Fetched once, up front, so both uses agree.
+      supabase.from('staff_exits').select('user_id, status, last_working_day').in('user_id', salariesRaw.map(s => s.user_id)),
+      // Stage 6: whichever academic year's date range contains this
+      // billing period IS this run's fiscal year for YTD TDS purposes —
+      // resolved by date range, not the `is_current` flag, so a late/
+      // back-dated run for a past FY still accumulates against the right
+      // one instead of whatever's "current" today.
+      supabase.from('academic_years').select('id, start_date, end_date')
+        .eq('school_id', school_id).lte('start_date', fromDate).gte('end_date', fromDate).maybeSingle(),
+    ])
     const statusByUser = new Map((statusRows ?? []).map(p => [p.user_id, p.employment_status]))
-    const EXCLUDED_STATUSES = new Set(['resigned', 'terminated'])
-    const salaries = salariesRaw.filter(s => !EXCLUDED_STATUSES.has(statusByUser.get(s.user_id) ?? 'active'))
-    const excludedForStatus = salariesRaw
-      .filter(s => EXCLUDED_STATUSES.has(statusByUser.get(s.user_id) ?? 'active'))
-      .map(s => ({ user_id: s.user_id, full_name: (s as any).users?.full_name, reason: 'resigned' as const }))
+    const suspensionPolicy = (school as any)?.suspension_pay_policy ?? 'exclude'
+    const suspensionPercent = Number((school as any)?.suspension_pay_percent ?? 0)
+    const prorationBasis: 'calendar_days' | 'working_days' = (school as any)?.segment_proration_basis === 'working_days' ? 'working_days' : 'calendar_days'
+    const overtimeMultiplier = Number((school as any)?.overtime_rate_multiplier ?? 1.5)
 
-    if (!salaries.length) return res.status(400).json({ success: false, error: 'No eligible staff — everyone matched is resigned or terminated' })
+    // No academic year configured (or this period falls outside all of
+    // them) degrades to remainingMonths=12/no prior data below — same
+    // number computeMonthlyTDS used to produce, just via the same code
+    // path instead of a separate fallback formula.
+    const fyMonths = academicYear ? fyMonthSequence((academicYear as any).start_date) : []
+    const currentFyIndex = fyMonths.findIndex(fm => fm.month === Number(month) && fm.year === Number(year))
+    const priorFyMonths = currentFyIndex > 0 ? fyMonths.slice(0, currentFyIndex) : []
+    const remainingMonthsInFy = currentFyIndex >= 0 ? fyMonths.length - currentFyIndex : 12
+    const priorFyMonthKeys = new Set(priorFyMonths.map(fm => `${fm.year}-${fm.month}`))
+    const priorFyYears = [...new Set(priorFyMonths.map(fm => fm.year))]
+
+    // Same "latest last_working_day wins" reasoning throughout this
+    // route — a user can have more than one exit row (rehired, left
+    // again), and the most recent departure is the one that matters.
+    const exitDateByUser = new Map<string, string>()
+    // Whether this user has an exit that ISN'T settled yet, whose last
+    // working day is already behind this billing period. This is the
+    // actual gap the audit found: employment_status only becomes
+    // 'resigned' once the settlement is APPROVED, so someone who
+    // finished their notice period weeks ago but whose settlement is
+    // still sitting in an approval queue keeps generating normally.
+    const openExitEndedBeforePeriod = new Set<string>()
+    for (const row of (exitRows ?? []) as any[]) {
+      if (row.last_working_day) {
+        const existing = exitDateByUser.get(row.user_id)
+        if (!existing || row.last_working_day > existing) exitDateByUser.set(row.user_id, row.last_working_day)
+      }
+      if (row.status !== 'settled' && row.last_working_day && row.last_working_day < fromDate) {
+        openExitEndedBeforePeriod.add(row.user_id)
+      }
+    }
+
+    // Eligibility is now PERIOD-aware, not a blanket status check. The
+    // old version excluded every resigned/terminated user from every
+    // run forever, which — as a side effect nobody intended — also
+    // made it impossible to generate a legitimate LATE payslip for a
+    // month before they left (e.g. payroll run a month behind for
+    // someone who has since resigned). The rule now is: exclude only
+    // when this specific period is entirely after the person stopped
+    // working, however employment_status currently reads.
+    const reasonForExclusion = (userId: string): 'suspended' | 'resigned' | 'exited' | 'absconded' | null => {
+      const status = statusByUser.get(userId) ?? 'active'
+      if (status === 'suspended') return suspensionPolicy === 'exclude' ? 'suspended' : null
+      // Stage 10.1: no last_working_day / formal exit exists for an
+      // absconded staff member (that's the whole point — nobody decided
+      // to end their employment, they just stopped showing up), so
+      // unlike resigned/terminated above, there's no period-aware clamp
+      // to apply — always excluded until someone manually transitions
+      // them to active or terminated.
+      if (status === 'absconded') return 'absconded'
+      if (status === 'resigned' || status === 'terminated') {
+        const lastDay = exitDateByUser.get(userId)
+        // A departure date that falls inside or after this period means
+        // the period at least partially overlaps real employment — the
+        // clamp below prorates it correctly. No exit record on file at
+        // all is the historical (pre-Stage-3) case: still excluded,
+        // same as before.
+        return (lastDay && lastDay >= fromDate) ? null : 'resigned'
+      }
+      // Still 'active'/'on_leave' by status, but notice period is over
+      // and settlement just hasn't been approved yet.
+      if (openExitEndedBeforePeriod.has(userId)) return 'exited'
+      return null
+    }
+
+    const salaries = salariesRaw.filter(s => !reasonForExclusion(s.user_id))
+    const excludedRaw = salariesRaw
+      .map(s => ({ s, reason: reasonForExclusion(s.user_id) }))
+      .filter((x): x is { s: typeof salariesRaw[number]; reason: 'suspended' | 'resigned' | 'exited' | 'absconded' } => x.reason !== null)
+
+    // Stage 10.1: "linked to their profile" is already covered by
+    // full_name/user_id on every skipped entry (the frontend already
+    // links resigned/exited/suspended names to /hr/staff/:id) — the one
+    // absconded-specific addition is the last date they actually
+    // appeared, batch-fetched only for this small subset.
+    const abscondedUserIds = excludedRaw.filter(x => x.reason === 'absconded').map(x => x.s.user_id)
+    const lastSeenByUser = new Map<string, string>()
+    if (abscondedUserIds.length) {
+      const { data: lastSeenRows } = await supabase.from('staff_attendance')
+        .select('user_id, date').eq('school_id', school_id).in('user_id', abscondedUserIds)
+        .in('status', ['present', 'half_day']).order('date', { ascending: false })
+      for (const row of (lastSeenRows ?? []) as any[]) {
+        if (!lastSeenByUser.has(row.user_id)) lastSeenByUser.set(row.user_id, row.date)
+      }
+    }
+
+    const excludedForStatus = excludedRaw.map(({ s, reason }) => ({
+      user_id: s.user_id, full_name: (s as any).users?.full_name, reason,
+      ...(reason === 'absconded' ? { last_seen: lastSeenByUser.get(s.user_id) ?? null } : {}),
+    }))
+
+    if (!salaries.length) return res.status(400).json({ success: false, error: 'No eligible staff — everyone matched is resigned, terminated, exited, suspended, or absconded' })
 
     const targetUserIds = salaries.map(s => s.user_id)
-    const mStr = String(month).padStart(2, '0')
-    const fromDate = `${year}-${mStr}-01`
-    const toDate = `${year}-${mStr}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`
 
-    const [{ rollupByUser }, { data: school }, { data: ptSlabs }, { data: activeLoans }, { data: encashProfiles }, { data: bonuses }, { data: existingPayslips }] = await Promise.all([
+    const [
+      { rollupByUser }, { data: ptSlabs }, { data: activeLoans }, { data: encashProfiles }, { data: bonuses }, { data: existingPayslips },
+      { data: overlappingStructuresRaw }, { data: joinRows }, nonWorkingSets, { data: pendingAdjustments },
+      { data: priorFyPayslips }, { data: declarations }, { data: stagedArrears }, { data: roleStipends }, { data: dutyLogEntries },
+    ] = await Promise.all([
       computeStaffAttendanceRollup(school_id, targetUserIds, fromDate, toDate),
-      supabase.from('schools').select('lop_grace_days, lop_per_day_formula').eq('id', school_id).single(),
       supabase.from('professional_tax_slabs').select('min_gross, max_gross, amount').eq('school_id', school_id),
       supabase.from('staff_loans').select('*').eq('school_id', school_id).eq('status', 'active').in('user_id', targetUserIds),
       supabase.from('staff_profiles').select('user_id, pending_leave_encashment_days').in('user_id', targetUserIds).gt('pending_leave_encashment_days', 0),
       supabase.from('staff_bonuses').select('user_id, amount, reason').eq('school_id', school_id).eq('month', month).eq('year', year).in('user_id', targetUserIds),
-      supabase.from('payslips').select('user_id, payment_status, loan_deduction, leave_encashment').eq('school_id', school_id).eq('month', month).eq('year', year).in('user_id', targetUserIds),
+      supabase.from('payslips').select('user_id, payment_status, loan_deduction, leave_encashment, correction_adjustment, arrears_amount').eq('school_id', school_id).eq('month', month).eq('year', year).in('user_id', targetUserIds),
+      // Stage 2/5: every salary structure whose range overlaps this
+      // billing period at all — not just whichever is is_active right
+      // now. A promotion mid-month means two rows both legitimately
+      // apply, one to each part of the month.
+      supabase.from('salary_structures').select('*').eq('school_id', school_id).in('user_id', targetUserIds)
+        .lte('effective_from', toDate).or(`effective_to.is.null,effective_to.gte.${fromDate}`)
+        .order('effective_from', { ascending: true }),
+      // Stage 9: shift is fetched alongside join date since both are the
+      // same kind of per-user override — this one drives fixed-monthly
+      // overtime's effective-hourly-rate denominator below.
+      supabase.from('staff_profiles').select('user_id, date_of_joining, staff_shifts(start_time, end_time)').in('user_id', targetUserIds),
+      getNonWorkingDaySets(school_id, fromDate, toDate),
+      // Stage 4: an approved correction on a PAID payslip doesn't touch
+      // that payslip — it rides along on whichever payslip this person
+      // gets NEXT, consumed exactly once, same idiom as loans/bonuses.
+      supabase.from('payslip_corrections').select('id, user_id, adjustment_amount, reason')
+        .eq('school_id', school_id).eq('kind', 'adjustment').eq('decision', 'approved').is('applied_to_payslip_id', null)
+        .in('user_id', targetUserIds),
+      // Stage 6: this FY's already-run months, fetched by calendar year
+      // (an FY can span two) and narrowed to the actual prior-month set
+      // in JS below — same "batch fetch, match in JS" idiom as the rest
+      // of this route, since payslips has no single fiscal-year column
+      // to filter on directly.
+      priorFyYears.length
+        ? supabase.from('payslips').select('user_id, month, year, gross_salary, tds, arrears_amount').eq('school_id', school_id).in('user_id', targetUserIds).in('year', priorFyYears)
+        : Promise.resolve({ data: [] as any[] }),
+      academicYear
+        ? supabase.from('staff_tax_declarations').select('user_id, section_80c, hra_exemption, other_exemptions')
+            .eq('school_id', school_id).eq('academic_year_id', (academicYear as any).id).in('user_id', targetUserIds)
+        : Promise.resolve({ data: [] as any[] }),
+      // Stage 7: back-pay owed rides along on whichever payslip this
+      // person gets NEXT (same idiom as Stage 4's adjustment above) — a
+      // user can have several staged rows at once (e.g. 3 intervening
+      // months auto-staged from one backdated promotion), all consumed
+      // together into a single arrears line.
+      supabase.from('salary_arrears').select('id, user_id, from_month, from_year, to_month, to_year, amount, reason')
+        .eq('school_id', school_id).eq('status', 'staged').in('user_id', targetUserIds),
+      // Stage 9: extra-responsibility stipends — additive on top of
+      // whatever gross the existing fixed_monthly path already produces,
+      // for EVERY role assignment that carries one (a person could hold
+      // more than one stipend-bearing role at once).
+      supabase.from('user_roles').select('user_id, stipend_amount, roles(name)')
+        .eq('school_id', school_id).in('user_id', targetUserIds).not('stipend_amount', 'is', null).gt('stipend_amount', 0),
+      // Stage 9: approved duty log entries for per-session staff — only
+      // approved ones (approved_by not null) are ever picked up, same
+      // "approval performs the action" posture as everything else.
+      supabase.from('staff_duty_log').select('id, user_id, date, session_type, rate')
+        .eq('school_id', school_id).in('user_id', targetUserIds).not('approved_by', 'is', null)
+        .gte('date', fromDate).lte('date', toDate),
     ])
+
+    const priorGrossByUser = new Map<string, number>()
+    const priorTdsByUser = new Map<string, number>()
+    const priorArrearsByUser = new Map<string, number>()
+    for (const p of (priorFyPayslips ?? []) as any[]) {
+      if (!priorFyMonthKeys.has(`${p.year}-${p.month}`)) continue
+      priorGrossByUser.set(p.user_id, (priorGrossByUser.get(p.user_id) ?? 0) + Number(p.gross_salary))
+      priorTdsByUser.set(p.user_id, (priorTdsByUser.get(p.user_id) ?? 0) + Number(p.tds))
+      priorArrearsByUser.set(p.user_id, (priorArrearsByUser.get(p.user_id) ?? 0) + Number(p.arrears_amount ?? 0))
+    }
+    const declarationByUser = new Map((declarations ?? []).map((d: any) => [d.user_id, d]))
+    const arrearsByUser = new Map<string, any[]>()
+    for (const a of (stagedArrears ?? []) as any[]) {
+      if (!arrearsByUser.has(a.user_id)) arrearsByUser.set(a.user_id, [])
+      arrearsByUser.get(a.user_id)!.push(a)
+    }
+
+    const structuresByUser = new Map<string, any[]>()
+    for (const st of overlappingStructuresRaw ?? []) {
+      if (!structuresByUser.has(st.user_id)) structuresByUser.set(st.user_id, [])
+      structuresByUser.get(st.user_id)!.push(st)
+    }
+    const joinDateByUser = new Map((joinRows ?? []).filter(r => r.date_of_joining).map(r => [r.user_id, r.date_of_joining as string]))
+    const adjustmentByUser = new Map((pendingAdjustments ?? []).map((a: any) => [a.user_id, a]))
+
+    // Stage 9: fixed-monthly overtime's effective-hourly-rate denominator
+    // — undefined when no shift is assigned, which is the "skip overtime
+    // for this person, don't error the run" signal downstream.
+    const shiftHoursByUser = new Map<string, number>()
+    for (const row of (joinRows ?? []) as any[]) {
+      const shift = Array.isArray(row.staff_shifts) ? row.staff_shifts[0] : row.staff_shifts
+      if (!shift?.start_time || !shift?.end_time) continue
+      const [sh, sm] = String(shift.start_time).split(':').map(Number)
+      const [eh, em] = String(shift.end_time).split(':').map(Number)
+      let hours = (eh + em / 60) - (sh + sm / 60)
+      if (hours <= 0) hours += 24 // overnight shift
+      shiftHoursByUser.set(row.user_id, hours)
+    }
+
+    const stipendsByUser = new Map<string, { amount: number; roleName: string }[]>()
+    for (const r of (roleStipends ?? []) as any[]) {
+      if (!stipendsByUser.has(r.user_id)) stipendsByUser.set(r.user_id, [])
+      stipendsByUser.get(r.user_id)!.push({ amount: Number(r.stipend_amount), roleName: r.roles?.name ?? 'Role' })
+    }
+    const dutyLogByUser = new Map<string, any[]>()
+    for (const d of (dutyLogEntries ?? []) as any[]) {
+      if (!dutyLogByUser.has(d.user_id)) dutyLogByUser.set(d.user_id, [])
+      dutyLogByUser.get(d.user_id)!.push(d)
+    }
 
     const graceDays = school?.lop_grace_days ?? 0
     const formula = school?.lop_per_day_formula ?? 'gross_30'
@@ -1575,11 +2293,71 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
     // "everyone gets docked for it." If most of the elapsed working days
     // across the target staff have no attendance record at all, require
     // an explicit confirm=true rather than generating straight away.
-    const totalWorkingDays = targetUserIds.reduce((sum, uid) => sum + (rollupByUser.get(uid)?.working_days ?? 0), 0)
-    const totalUnmarked = targetUserIds.reduce((sum, uid) => sum + (rollupByUser.get(uid)?.unmarked ?? 0), 0)
+    let totalWorkingDays = targetUserIds.reduce((sum, uid) => sum + (rollupByUser.get(uid)?.working_days ?? 0), 0)
+    let totalUnmarked = targetUserIds.reduce((sum, uid) => sum + (rollupByUser.get(uid)?.unmarked ?? 0), 0)
+
+    // Stage 10.2b: rollupByUser's own working_days already excludes
+    // dates strictly after today — but TODAY itself is still counted as
+    // elapsed even though its attendance is routinely marked at end of
+    // day, not the moment it starts. Running Generate on the month's own
+    // last calendar day (a common real workflow — "generate payroll for
+    // August" run ON August 31st) would otherwise count everyone's
+    // not-yet-marked TODAY as a gap and false-positive the warning. Only
+    // fully elapsed days (strictly before today) count toward "should
+    // have been marked by now."
+    const todayStr = toLocalDateStr(new Date())
+    if (todayStr >= fromDate && todayStr <= toDate && isWorkingDate(todayStr, nonWorkingSets)) {
+      const { data: todaysRecords } = await supabase.from('staff_attendance').select('user_id')
+        .eq('school_id', school_id).eq('date', todayStr).in('user_id', targetUserIds)
+      const markedToday = new Set((todaysRecords ?? []).map((r: any) => r.user_id))
+      // Cohort-level approximation, not a per-user payroll figure — this
+      // only decides whether to show a confirmation dialog. A user whose
+      // OWN employment window already ended before today (working_days
+      // of 0) has nothing to subtract; everyone else is assumed to have
+      // had today counted, same coarse-but-safe tradeoff already made
+      // for the unmarked-dates list below.
+      const stillCounted = targetUserIds.filter(uid => (rollupByUser.get(uid)?.working_days ?? 0) > 0)
+      totalWorkingDays = Math.max(0, totalWorkingDays - stillCounted.length)
+      totalUnmarked = Math.max(0, totalUnmarked - stillCounted.filter(uid => !markedToday.has(uid)).length)
+    }
+
     const unmarkedRatio = totalWorkingDays > 0 ? totalUnmarked / totalWorkingDays : 0
 
     if (!confirm && unmarkedRatio > 0.5) {
+      // Stage 10.2c: which specific days, not just what percentage — so
+      // the confirmation dialog is something to act on, not just a
+      // number. Cohort-level (a date counts if ANY target user lacks a
+      // record for it and isn't on approved leave) — a hint to go check,
+      // not a per-user payroll figure, same tradeoff as the today-
+      // exclusion above. Only computed here, on the path that's about to
+      // show the dialog — never on the common/no-warning path.
+      const effectiveToDate = todayStr < toDate ? todayStr : toDate
+      const candidateDates = dateRangeStrings(fromDate, effectiveToDate).filter(d => d < todayStr && isWorkingDate(d, nonWorkingSets))
+
+      const [{ data: periodRecords }, { data: periodLeaves }] = await Promise.all([
+        supabase.from('staff_attendance').select('user_id, date').eq('school_id', school_id)
+          .in('user_id', targetUserIds).gte('date', fromDate).lte('date', effectiveToDate),
+        supabase.from('leave_requests').select('user_id, from_date, to_date').eq('school_id', school_id)
+          .eq('status', 'approved').in('user_id', targetUserIds).lte('from_date', effectiveToDate).gte('to_date', fromDate),
+      ])
+      const recordedByDate = new Map<string, Set<string>>()
+      for (const r of (periodRecords ?? []) as any[]) {
+        if (!recordedByDate.has(r.date)) recordedByDate.set(r.date, new Set())
+        recordedByDate.get(r.date)!.add(r.user_id)
+      }
+      for (const lr of (periodLeaves ?? []) as any[]) {
+        const start = lr.from_date < fromDate ? fromDate : lr.from_date
+        const end = lr.to_date > effectiveToDate ? effectiveToDate : lr.to_date
+        for (const d of dateRangeStrings(start, end)) {
+          if (!recordedByDate.has(d)) recordedByDate.set(d, new Set())
+          recordedByDate.get(d)!.add(lr.user_id)
+        }
+      }
+      const unmarkedDatesAll = candidateDates.filter(d => {
+        const recorded = recordedByDate.get(d)
+        return !recorded || targetUserIds.some(uid => !recorded.has(uid))
+      })
+
       return res.status(409).json({
         success: false,
         needs_confirmation: true,
@@ -1587,11 +2365,16 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
         coverage_pct: Math.round((1 - unmarkedRatio) * 100),
         unmarked_days: totalUnmarked,
         working_days: totalWorkingDays,
+        unmarked_dates: unmarkedDatesAll.slice(0, 10),
+        unmarked_dates_more: Math.max(0, unmarkedDatesAll.length - 10),
       })
     }
 
     const generated = []
     const alreadyFinalized: { user_id: string; full_name: any; reason: 'already_finalized'; payment_status: string }[] = []
+    // Stage 9: hourly/per-session staff with nothing to compute pay
+    // from — surfaced explicitly, never silently generated as ₹0.
+    const insufficientDataSkips: { user_id: string; full_name: any; reason: 'insufficient_attendance_data' | 'no_approved_sessions' }[] = []
     for (const s of salaries) {
       const existingStatus = finalizedStatusByUser.get(s.user_id)
       if (existingStatus === 'approved' || existingStatus === 'paid') {
@@ -1599,31 +2382,136 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
         continue
       }
 
-      const gross = s.basic_salary + (s.hra ?? 0) + (s.da ?? 0) + (s.conveyance_allowance ?? 0) + (s.medical_allowance ?? 0) + (s.other_allowances ?? 0)
+      const joinDate = joinDateByUser.get(s.user_id)
+      const exitDate = exitDateByUser.get(s.user_id)
+      let { segments, totalBasisDays } = buildPayslipSegments(
+        structuresByUser.get(s.user_id) ?? [], fromDate, toDate, joinDate, exitDate, prorationBasis, nonWorkingSets,
+      )
+      // Safety net: nobody should reach this loop with zero overlapping
+      // structures (they were selected via an is_active row), but a
+      // future-dated promotion already marked active could produce
+      // exactly that. Fall back to the one structure Generate already
+      // knows about, spanning the clamped employment window — a single
+      // segment, same shape as before Stage 5.
+      if (!segments.length) {
+        const employFrom = joinDate && joinDate > fromDate ? joinDate : fromDate
+        const employTo = exitDate && exitDate < toDate ? exitDate : toDate
+        if (employFrom > employTo) continue // not employed at all this period — nothing to pay
+        const basisDays = basisDaysBetween(employFrom, employTo, prorationBasis, nonWorkingSets)
+        segments = [{ structure: s, from: employFrom, to: employTo, basisDays }]
+        totalBasisDays = basisDays
+      }
+
+      const { segRows, fullGross: segmentedGross } = computeSegmentGross(segments, totalBasisDays)
+      // Flat, non-prorated figures (PF, other deductions) come from
+      // whichever structure is in effect LAST in the period — "current
+      // standing deduction," not something that makes sense to split
+      // across a mid-month change the way earnings are split above.
+      const latestStructure = segments[segments.length - 1].structure
+      const rollup = rollupByUser.get(s.user_id)
+
+      // Stage 9 — hourly/per-session bypass segmentation's fixed
+      // components entirely (an hourly/per-session structure has no
+      // basic_salary/hra/... to prorate, so segmentedGross is correctly
+      // 0 for them) and derive regular pay from attendance/duty-log
+      // instead. Not forced through a synthetic salary_structure row —
+      // this is the parallel resolver branch the architecture check
+      // called for.
+      const structureType = latestStructure.type ?? 'fixed_monthly'
+      let variablePay = 0
+      let sessionPayAmount = 0
+      if (structureType === 'hourly') {
+        const presentEquivalent = (rollup?.present ?? 0) + (rollup?.half_day ?? 0) * 0.5
+        if ((rollup?.present ?? 0) + (rollup?.half_day ?? 0) === 0) {
+          insufficientDataSkips.push({ user_id: s.user_id, full_name: (s as any).users?.full_name, reason: 'insufficient_attendance_data' })
+          continue
+        }
+        const standardHoursPerDay = shiftHoursByUser.get(s.user_id) ?? 8
+        variablePay = Math.round(presentEquivalent * standardHoursPerDay * Number(latestStructure.hourly_rate ?? 0))
+      } else if (structureType === 'per_session') {
+        const sessions = dutyLogByUser.get(s.user_id) ?? []
+        if (!sessions.length) {
+          insufficientDataSkips.push({ user_id: s.user_id, full_name: (s as any).users?.full_name, reason: 'no_approved_sessions' })
+          continue
+        }
+        sessionPayAmount = sessions.reduce((sum, d) => sum + Number(d.rate), 0)
+        variablePay = sessionPayAmount
+      }
+      const fullGross = segmentedGross + variablePay
+
+      // 'exclude' never reaches this loop at all (filtered out above).
+      // 'full' pays a suspended staff member exactly like anyone else —
+      // a school's explicit choice, not this code's. 'partial' scales
+      // the whole month's gross by the configured percentage before
+      // anything downstream (PF/PT/TDS/LOP rate) is computed from it,
+      // same as if that were simply this person's salary this month.
+      const isSuspended = statusByUser.get(s.user_id) === 'suspended'
+      const gross = isSuspended && suspensionPolicy === 'partial'
+        ? Math.round(fullGross * (suspensionPercent / 100))
+        : fullGross
+
+      // Stage 9 — extra-responsibility stipends, additive on top of
+      // whatever gross ended up being, same "doesn't feed PF/PT/TDS"
+      // treatment as bonus_amount (not part of `gross`, added at `net`
+      // below instead).
+      const roleStipendRows = stipendsByUser.get(s.user_id) ?? []
+      const stipendAmount = roleStipendRows.reduce((sum, r) => sum + r.amount, 0)
+
+      // Stage 9 — overtime. Hourly staff already have a per-hour rate to
+      // multiply directly; fixed-monthly staff need an effective hourly
+      // rate derived from gross/working-days/shift-hours, and if no
+      // shift is assigned there's nothing to derive it from — skipped
+      // for THIS person only (noted in remarks below), not an error for
+      // the whole run. Per-session has no overtime concept.
+      const overtimeHours = Number(rollup?.overtime_hours ?? 0)
+      let overtimeAmount = 0
+      let overtimeSkippedNoShift = false
+      if (overtimeHours > 0 && structureType === 'hourly') {
+        overtimeAmount = Math.round(overtimeHours * Number(latestStructure.hourly_rate ?? 0) * overtimeMultiplier)
+      } else if (overtimeHours > 0 && structureType === 'fixed_monthly') {
+        const shiftHours = shiftHoursByUser.get(s.user_id)
+        if (shiftHours && rollup && rollup.working_days > 0) {
+          const effectiveHourlyRate = gross / rollup.working_days / shiftHours
+          overtimeAmount = Math.round(overtimeHours * effectiveHourlyRate * overtimeMultiplier)
+        } else {
+          overtimeSkippedNoShift = true
+        }
+      }
 
       // LOP — the actual point of this rewrite. Previously hardcoded to
       // 0 at generation time; now computed from the same unmarked/absent
       // attendance data the Attendance Report already surfaces.
-      const rollup = rollupByUser.get(s.user_id)
       const lopDays = rollup ? Math.max(0, (rollup.unmarked + rollup.absent) - graceDays) : 0
       const perDayRate = formula === 'working_days' && rollup && rollup.working_days > 0 ? gross / rollup.working_days : gross / 30
       const lopAmount = Math.round(lopDays * perDayRate)
 
-      const tds = computeMonthlyTDS(gross)
-      const professionalTax = computeProfessionalTax(gross, ptSlabs ?? [], s.professional_tax ?? 0)
-
       // A pending payslip already existing for this exact month means
       // this is a RE-generate (e.g. attendance got corrected, Generate
       // was run again before anyone approved it) — not a first-time
-      // creation. Loan installments and leave-encashment days are each
-      // consumed exactly once, at first-generation time; re-deriving
-      // them here would either advance the loan an extra installment it
-      // never actually collected, or — since the source days get zeroed
-      // the first time — silently compute 0 the second time and drop
-      // the encashment amount the employee already earned. Both are
-      // carried forward unchanged from the existing pending row instead.
+      // creation. Loan installments, leave-encashment days, the
+      // correction adjustment, and staged arrears are each consumed
+      // exactly once, at first-generation time; re-deriving them here
+      // would either advance the loan an extra installment it never
+      // actually collected, or — since the source days/rows get zeroed
+      // or marked applied the first time — silently compute 0 (or pick
+      // up a DIFFERENT now-staged set) the second time. All are carried
+      // forward unchanged from the existing pending row instead.
       const existingSlip = existingPayslipByUser.get(s.user_id)
       const isRegenerate = !!existingSlip
+
+      const arrearsRows = isRegenerate ? [] : (arrearsByUser.get(s.user_id) ?? [])
+      const arrearsAmount = isRegenerate ? Number(existingSlip!.arrears_amount ?? 0) : arrearsRows.reduce((sum, a) => sum + Number(a.amount), 0)
+
+      const tds = computeYtdTDS({
+        currentMonthGross: gross,
+        priorGross: priorGrossByUser.get(s.user_id) ?? 0,
+        priorTds: priorTdsByUser.get(s.user_id) ?? 0,
+        remainingMonths: remainingMonthsInFy,
+        declaration: declarationByUser.get(s.user_id),
+        arrearsThisMonth: arrearsAmount,
+        priorArrears: priorArrearsByUser.get(s.user_id) ?? 0,
+      })
+      const professionalTax = computeProfessionalTax(gross, ptSlabs ?? [], latestStructure.professional_tax ?? 0)
 
       // Loan recovery — deduct the installment (or whatever remains, if
       // less), advance the loan's own progress, and settle it once paid off.
@@ -1645,7 +2533,7 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
         }
       }
 
-      const totalDeductions = (s.pf_deduction ?? 0) + professionalTax + (s.other_deductions ?? 0) + lopAmount + tds + loanDeduction
+      const totalDeductions = (latestStructure.pf_deduction ?? 0) + professionalTax + (latestStructure.other_deductions ?? 0) + lopAmount + tds + loanDeduction
 
       // Leave encashment — a distinct earnings line credited by the
       // year-end sweep (runLeaveYearEnd), picked up and cleared here
@@ -1661,25 +2549,77 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
       // rather than folded into it, so it never feeds PF/PT/TDS.
       const bonus = bonusByUser.get(s.user_id)
       const bonusAmount = Number(bonus?.amount ?? 0)
-      const net = gross - totalDeductions + leaveEncashment + bonusAmount
+
+      // Stage 4 — a correction approved against an earlier (paid or
+      // bank-exported) payslip rides along on whichever payslip this
+      // person gets NEXT: positive = top-up owed to them, negative = a
+      // recovery owed back. Consumed exactly once, at first-generation
+      // time, same as the loan/encashment carry-forward above — a
+      // regenerate must not re-apply it a second time.
+      const adjustment = isRegenerate ? null : adjustmentByUser.get(s.user_id)
+      const adjustmentAmount = isRegenerate ? Number(existingSlip!.correction_adjustment ?? 0) : Number(adjustment?.adjustment_amount ?? 0)
+
+      const net = gross - totalDeductions + leaveEncashment + bonusAmount + adjustmentAmount + arrearsAmount + stipendAmount + overtimeAmount
 
       const payslipData = {
         school_id, user_id: s.user_id, month, year,
-        basic_salary: s.basic_salary, hra: s.hra, da: s.da,
-        conveyance_allowance: s.conveyance_allowance, medical_allowance: s.medical_allowance,
-        other_allowances: s.other_allowances, gross_salary: gross,
-        pf_deduction: s.pf_deduction, pf_employer: s.pf_employer ?? 0, professional_tax: professionalTax,
-        other_deductions: s.other_deductions, tds, loan_deduction: loanDeduction, leave_encashment: leaveEncashment,
+        // Sums of the (possibly prorated, possibly single) segments —
+        // for the common one-segment case these equal that segment's
+        // own figures exactly, same as the pre-Stage-5 values.
+        basic_salary: segRows.reduce((a, r) => a + r.basic_salary, 0),
+        hra: segRows.reduce((a, r) => a + r.hra, 0),
+        da: segRows.reduce((a, r) => a + r.da, 0),
+        conveyance_allowance: segRows.reduce((a, r) => a + r.conveyance_allowance, 0),
+        medical_allowance: segRows.reduce((a, r) => a + r.medical_allowance, 0),
+        other_allowances: segRows.reduce((a, r) => a + r.other_allowances, 0),
+        gross_salary: gross,
+        pf_deduction: latestStructure.pf_deduction, pf_employer: latestStructure.pf_employer ?? 0, professional_tax: professionalTax,
+        other_deductions: latestStructure.other_deductions, tds, loan_deduction: loanDeduction, leave_encashment: leaveEncashment,
         bonus_amount: bonusAmount, bonus_reason: bonus?.reason ?? null,
         lop_days: lopDays, lop_amount: lopAmount, total_deductions: totalDeductions, net_salary: net,
+        correction_adjustment: adjustmentAmount,
+        arrears_amount: arrearsAmount,
+        stipend_amount: stipendAmount, overtime_amount: overtimeAmount, session_pay_amount: sessionPayAmount,
         payment_status: 'pending', generated_by: req.user!.id,
+        remarks: [
+          isSuspended && suspensionPolicy === 'partial' ? `Suspended — ${suspensionPercent}% pay policy applied` : null,
+          segments.length > 1 ? `Segmented — ${segments.length} salary structures applied this month` : null,
+          adjustment ? `Correction ${adjustmentAmount >= 0 ? 'top-up' : 'recovery'} from a prior payslip — ${adjustment.reason}` : null,
+          arrearsRows.length ? `Salary arrears applied — ${arrearsRows.length} record${arrearsRows.length > 1 ? 's' : ''}` : null,
+          roleStipendRows.length ? `Stipend — ${roleStipendRows.map(r => r.roleName).join(', ')}` : null,
+          structureType === 'hourly' ? `Hourly pay — ${latestStructure.hourly_rate ?? 0}/hr` : null,
+          structureType === 'per_session' ? `Session pay — ${(dutyLogByUser.get(s.user_id) ?? []).length} session(s)` : null,
+          overtimeAmount > 0 ? `Overtime — ${overtimeHours}h at ${overtimeMultiplier}x` : null,
+          overtimeSkippedNoShift ? `Overtime not computed — no shift assigned` : null,
+        ].filter(Boolean).join(' · ') || null,
       }
 
       const { data, error } = await supabase.from('payslips').upsert(payslipData, { onConflict: 'user_id,month,year' }).select().single()
       if (!error) {
         generated.push(data)
+        // Segments are replaced wholesale on every (re)computation of a
+        // still-pending payslip — simpler than diffing, and safe since
+        // this branch never runs for an approved/paid one.
+        await supabase.from('payslip_segments').delete().eq('payslip_id', data.id)
+        if (segRows.length) {
+          const { error: segErr } = await supabase.from('payslip_segments').insert(segRows.map((r, i) => ({
+            school_id, payslip_id: data.id, user_id: s.user_id, salary_structure_id: r.structure_id,
+            segment_from: r.from, segment_to: r.to, basis_days: r.basis_days, total_basis_days: totalBasisDays,
+            basic_salary: r.basic_salary, hra: r.hra, da: r.da, conveyance_allowance: r.conveyance_allowance,
+            medical_allowance: r.medical_allowance, other_allowances: r.other_allowances, gross_salary: r.gross_salary,
+            sort_order: i,
+          })))
+          if (segErr) console.error('Failed to write payslip segments:', segErr.message)
+        }
         if (encashDays > 0) {
           await supabase.from('staff_profiles').update({ pending_leave_encashment_days: 0 }).eq('user_id', s.user_id)
+        }
+        if (adjustment) {
+          await supabase.from('payslip_corrections').update({ applied_to_payslip_id: data.id }).eq('id', adjustment.id)
+        }
+        if (arrearsRows.length) {
+          await supabase.from('salary_arrears').update({ applied_to_payslip_id: data.id, status: 'applied' })
+            .in('id', arrearsRows.map(a => a.id))
         }
       }
     }
@@ -1697,7 +2637,7 @@ router.post('/payslips/generate', requirePermissionV2('staff.payroll_manage'),
     const missingStructure = (allStaff ?? [])
       .filter(u => !coveredIds.has(u.id) && !excludedIds.has(u.id))
       .map(u => ({ user_id: u.id, full_name: u.full_name, role: u.role, reason: 'no_salary_structure' as const }))
-    const skipped = [...missingStructure, ...excludedForStatus, ...alreadyFinalized]
+    const skipped = [...missingStructure, ...excludedForStatus, ...alreadyFinalized, ...insufficientDataSkips]
 
     // Best-effort — a notification failure shouldn't turn an already-
     // generated payroll run into an error for the caller.
@@ -1752,15 +2692,36 @@ router.patch('/payslips/:id', requirePermissionV2('staff.payroll_manage'),
     const { payment_status, payment_date, payment_mode, remarks, lop_days, lop_amount } = req.body
     const school_id = req.user!.school_id
 
-    if (payment_status === 'paid') {
+    const editingFigures = lop_days !== undefined || lop_amount !== undefined
+    const needsCurrentStatus = payment_status === 'paid' || editingFigures
+    let currentStatus: string | undefined
+    if (needsCurrentStatus) {
       const { data: existing } = await supabase.from('payslips').select('payment_status').eq('id', id).eq('school_id', school_id).single()
       if (!existing) return res.status(404).json({ success: false, error: 'Payslip not found' })
-      if (existing.payment_status !== 'approved') {
-        return res.status(400).json({
-          success: false,
-          error: `Payslip must be approved by Principal before marking as paid (current status: '${existing.payment_status}')`,
-        })
-      }
+      currentStatus = existing.payment_status
+    }
+
+    // Stage 8: a payslip that previously failed can be marked paid again
+    // once the retry actually succeeds — this is the only other status
+    // 'paid' is reachable from, alongside the normal 'approved' path.
+    if (payment_status === 'paid' && !['approved', 'failed'].includes(currentStatus ?? '')) {
+      return res.status(400).json({
+        success: false,
+        error: `Payslip must be approved by Principal before marking as paid (current status: '${currentStatus}')`,
+      })
+    }
+
+    // Once approved or paid this is a finalized, real-world record —
+    // someone may already have been paid against these exact figures.
+    // Silently rewriting lop_days/lop_amount here left no trace that
+    // anything changed and needed no re-approval. A correction to a
+    // finalized payslip has to go through a real correction path
+    // instead, not a raw field edit.
+    if (editingFigures && (currentStatus === 'approved' || currentStatus === 'paid')) {
+      return res.status(400).json({
+        success: false,
+        error: `This payslip is already ${currentStatus} — its figures are locked. Record a correction on a future payslip instead of editing this one directly.`,
+      })
     }
 
     const update: any = {}
@@ -1770,6 +2731,13 @@ router.patch('/payslips/:id', requirePermissionV2('staff.payroll_manage'),
     if (remarks !== undefined) update.remarks = remarks
     if (lop_days !== undefined) update.lop_days = lop_days
     if (lop_amount !== undefined) update.lop_amount = lop_amount
+    // A successful retry clears the failure — it's no longer the
+    // reason anything is unpaid.
+    if (payment_status === 'paid' && currentStatus === 'failed') {
+      update.failure_reason = null
+      update.bank_rejection_reference = null
+      update.failed_at = null
+    }
 
     // total_deductions must include lop_amount, not just net_salary — a
     // manual LOP edit used to leave the two out of sync (net_salary
@@ -1792,6 +2760,392 @@ router.patch('/payslips/:id', requirePermissionV2('staff.payroll_manage'),
     res.json({ success: true, data })
   })
 )
+
+// POST /hrms/payslips/:id/mark-failed — Stage 8. The bank rejected a
+// transfer the school already marked 'paid'. This is a DIFFERENT event
+// from a correction (Stage 4): nothing about what was OWED was wrong,
+// the money just never arrived — so it doesn't touch net_salary or any
+// earnings/deduction figure, only the payment state. 'failed' is its
+// own status rather than reverting to 'approved', specifically so the
+// bank-export list (and the payroll page) can tell "never attempted"
+// apart from "attempted and bounced back."
+router.post('/payslips/:id/mark-failed', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const { reason, bank_reference } = req.body
+    const school_id = req.user!.school_id
+
+    if (!reason || String(reason).trim().length < 3) {
+      return res.status(400).json({ success: false, error: 'Give a reason — what did the bank say?' })
+    }
+
+    const { data: existing } = await supabase.from('payslips').select('payment_status').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!existing) return res.status(404).json({ success: false, error: 'Payslip not found' })
+    if (existing.payment_status !== 'paid') {
+      return res.status(400).json({ success: false, error: `Only a payslip marked 'paid' can be marked failed (current status: '${existing.payment_status}')` })
+    }
+
+    const { data, error } = await supabase.from('payslips').update({
+      payment_status: 'failed',
+      failure_reason: String(reason).trim(),
+      bank_rejection_reference: bank_reference ? String(bank_reference).trim() : null,
+      failed_at: new Date().toISOString(),
+      // The export that led to this 'paid' status didn't actually
+      // deliver the money — a failed payslip is back to "not yet
+      // successfully exported" for every purpose that flag drives,
+      // Stage 4's correction routing included.
+      payment_exported: false,
+    }).eq('id', id).eq('school_id', school_id).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+
+    await supabase.from('audit_logs').insert({
+      school_id, user_id: req.user!.id, action: 'PAYSLIP_MARKED_FAILED',
+      entity_type: 'payslip', entity_id: id,
+      new_values: { reason: String(reason).trim(), bank_reference: bank_reference ?? null },
+    })
+
+    res.json({ success: true, data })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// PAYSLIP CORRECTIONS (Stage 4) — the sanctioned path for an
+// approved/paid payslip that PATCH now refuses to touch directly.
+//
+// Which of the two shapes a request takes is decided by the payslip's
+// OWN state, not by what the caller asks for:
+//   - Not yet paid or bank-exported: void + replace. Nothing has left
+//     the school yet, so the payslip is simply corrected in place and
+//     sent back through approval — no separate "old" row needs to
+//     exist, since the correction record itself keeps the original
+//     figures on file.
+//   - Already paid or bank-exported: an adjustment. The original
+//     payslip stands as historically accurate (that's what was
+//     actually paid); the difference rides along on whichever payslip
+//     this person gets NEXT.
+// ═══════════════════════════════════════════════════════════════
+
+const CORRECTABLE_PAYSLIP_FIELDS = [
+  'basic_salary', 'hra', 'da', 'conveyance_allowance', 'medical_allowance', 'other_allowances',
+  'pf_deduction', 'professional_tax', 'other_deductions', 'tds', 'bonus_amount', 'bonus_reason',
+  'lop_days', 'lop_amount',
+] as const
+
+// POST /hrms/payslips/:id/corrections — raise a correction request.
+// Nothing changes yet; it needs an approver, and it can't be the same
+// person who raised it.
+router.post('/payslips/:id/corrections', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const { reason, corrected, adjustment_amount } = req.body
+    const school_id = req.user!.school_id
+
+    if (!reason || String(reason).trim().length < 3) {
+      return res.status(400).json({ success: false, error: 'Give a reason — it is what the approver decides on' })
+    }
+
+    const { data: payslip } = await supabase.from('payslips').select('*').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!payslip) return res.status(404).json({ success: false, error: 'Payslip not found' })
+    if (!['approved', 'paid'].includes(payslip.payment_status)) {
+      return res.status(400).json({
+        success: false,
+        error: `Only an approved or paid payslip goes through a correction request — this one is '${payslip.payment_status}', edit and regenerate it directly instead.`,
+      })
+    }
+
+    // The FLAG decides the path, not payment_status alone — a payslip
+    // can be marked 'paid' by hand (cash already handed over) without
+    // ever going through a bank export, and either one means real
+    // money has already moved and can't just be silently rewritten.
+    const moneyHasLeft = payslip.payment_status === 'paid' || payslip.payment_exported
+
+    let insertData: any
+    if (moneyHasLeft) {
+      const amount = Number(adjustment_amount)
+      if (!Number.isFinite(amount) || amount === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'adjustment_amount is required and must be nonzero — money already moved on this payslip, so it can only be corrected by an adjustment applied to a future one.',
+        })
+      }
+      insertData = {
+        school_id, payslip_id: id, user_id: payslip.user_id, kind: 'adjustment', reason: String(reason).trim(),
+        adjustment_amount: amount, requested_by: req.user!.id,
+      }
+    } else {
+      const fields: Record<string, any> = {}
+      for (const f of CORRECTABLE_PAYSLIP_FIELDS) if (corrected?.[f] !== undefined) fields[f] = corrected[f]
+      if (!Object.keys(fields).length) {
+        return res.status(400).json({ success: false, error: 'Nothing to correct — provide at least one changed field' })
+      }
+      const original: Record<string, any> = {}
+      for (const f of CORRECTABLE_PAYSLIP_FIELDS) original[f] = (payslip as any)[f]
+      insertData = {
+        school_id, payslip_id: id, user_id: payslip.user_id, kind: 'void_replace', reason: String(reason).trim(),
+        original_values: original, corrected_values: fields, requested_by: req.user!.id,
+      }
+    }
+
+    const { data, error } = await supabase.from('payslip_corrections').insert(insertData).select().single()
+    if (error) {
+      // The partial unique index on one open correction per payslip.
+      if (error.code === '23505') return res.status(409).json({ success: false, error: 'There is already a pending correction request on this payslip.' })
+      return res.status(400).json({ success: false, error: error.message })
+    }
+    res.status(201).json({ success: true, data })
+  })
+)
+
+// GET /hrms/payslip-corrections — the approval queue.
+// Self-or-staff.payroll_manage — a staff member's own payslip breakdown
+// needs to show the correction back-reference on their own corrections
+// without holding payroll_manage themselves; the approval queue (which
+// needs to see everyone's) still requires it via the isAdmin branch.
+router.get('/payslip-corrections', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { decision, payslip_id, applied_to_payslip_id } = req.query
+  const school_id = req.user!.school_id
+  const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+  const isAdmin = isSuperRole || permissionCodes.has('staff.payroll_manage')
+
+  let q = supabase.from('payslip_corrections')
+    .select('*, users:user_id(full_name), requester:requested_by(full_name), decider:decided_by(full_name)')
+    .eq('school_id', school_id).order('requested_at', { ascending: false })
+  if (!isAdmin) q = q.eq('user_id', req.user!.id)
+  if (decision) q = q.eq('decision', decision as string)
+  if (payslip_id) q = q.eq('payslip_id', payslip_id as string)
+  if (applied_to_payslip_id) q = q.eq('applied_to_payslip_id', applied_to_payslip_id as string)
+  const { data, error } = await q
+  if (error) return res.status(500).json({ success: false, error: error.message })
+  res.json({ success: true, data })
+}))
+
+// POST /hrms/payslip-corrections/:id/decide — the approval PERFORMS
+// the action, same idiom as fee_action_requests: a pending request
+// changes nothing, a rejected one leaves no trace.
+router.post('/payslip-corrections/:id/decide', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const { decision, note } = req.body
+    const school_id = req.user!.school_id
+    if (!['approved', 'rejected'].includes(decision)) {
+      return res.status(400).json({ success: false, error: 'decision must be approved or rejected' })
+    }
+
+    const { data: correction } = await supabase.from('payslip_corrections').select('*').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!correction) return res.status(404).json({ success: false, error: 'Correction not found' })
+    if (correction.decision !== 'pending') return res.status(400).json({ success: false, error: `Already ${correction.decision}` })
+    if (correction.requested_by === req.user!.id) {
+      return res.status(403).json({ success: false, error: 'You raised this — someone else has to decide it.' })
+    }
+
+    if (decision === 'approved' && correction.kind === 'void_replace') {
+      const { data: payslip } = await supabase.from('payslips').select('*').eq('id', correction.payslip_id).eq('school_id', school_id).maybeSingle()
+      if (!payslip) return res.status(404).json({ success: false, error: 'The payslip no longer exists' })
+
+      const merged: Record<string, any> = { ...payslip, ...(correction.corrected_values ?? {}) }
+      const grossSalary = Number(merged.basic_salary) + Number(merged.hra ?? 0) + Number(merged.da ?? 0)
+        + Number(merged.conveyance_allowance ?? 0) + Number(merged.medical_allowance ?? 0) + Number(merged.other_allowances ?? 0)
+      const totalDeductions = Number(merged.pf_deduction ?? 0) + Number(merged.professional_tax ?? 0) + Number(merged.other_deductions ?? 0)
+        + Number(merged.lop_amount ?? 0) + Number(merged.tds ?? 0) + Number(payslip.loan_deduction ?? 0)
+      const netSalary = grossSalary - totalDeductions + Number(payslip.leave_encashment ?? 0) + Number(merged.bonus_amount ?? 0) + Number(payslip.correction_adjustment ?? 0)
+
+      const { error: updErr } = await supabase.from('payslips').update({
+        basic_salary: merged.basic_salary, hra: merged.hra, da: merged.da,
+        conveyance_allowance: merged.conveyance_allowance, medical_allowance: merged.medical_allowance, other_allowances: merged.other_allowances,
+        gross_salary: grossSalary,
+        pf_deduction: merged.pf_deduction, professional_tax: merged.professional_tax, other_deductions: merged.other_deductions,
+        tds: merged.tds, bonus_amount: merged.bonus_amount, bonus_reason: merged.bonus_reason,
+        lop_days: merged.lop_days, lop_amount: merged.lop_amount,
+        total_deductions: totalDeductions, net_salary: netSalary,
+        // Voided back to pending: nothing has been paid out under the
+        // wrong figures, so this re-enters the normal approve -> paid
+        // pipeline instead of silently staying 'approved' with new
+        // numbers nobody has actually signed off on.
+        payment_status: 'pending', approved_by: null, approved_at: null,
+        payment_date: null, payment_mode: null, payment_exported: false,
+      }).eq('id', correction.payslip_id).eq('school_id', school_id)
+      if (updErr) return res.status(400).json({ success: false, error: updErr.message })
+    }
+    // kind === 'adjustment': nothing to touch on the payslip now — it
+    // stands as paid. Approving just marks the adjustment ready; the
+    // next Generate run for this person consumes it (see
+    // POST /payslips/generate).
+
+    const { data, error } = await supabase.from('payslip_corrections').update({
+      decision, decided_by: req.user!.id, decided_at: new Date().toISOString(), decision_note: note ?? null,
+    }).eq('id', id).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+
+    await supabase.from('audit_logs').insert({
+      school_id, user_id: req.user!.id, action: `PAYSLIP_CORRECTION_${decision.toUpperCase()}`,
+      entity_type: 'payslip_correction', entity_id: id,
+      new_values: { kind: correction.kind, payslip_id: correction.payslip_id, user_id: correction.user_id, note: note ?? null },
+    })
+
+    res.json({ success: true, data })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// TAX DECLARATIONS (Stage 6) — self-service investment declaration
+// that feeds the YTD TDS projection above, plus the per-year lock date
+// and the reconciliation view (the Form 16 source data).
+// ═══════════════════════════════════════════════════════════════
+
+async function resolveAcademicYear(school_id: string, academic_year_id?: string) {
+  if (academic_year_id) {
+    const { data } = await supabase.from('academic_years').select('id, name, start_date, end_date')
+      .eq('id', academic_year_id).eq('school_id', school_id).maybeSingle()
+    return data
+  }
+  const { data } = await supabase.from('academic_years').select('id, name, start_date, end_date')
+    .eq('school_id', school_id).eq('is_current', true).maybeSingle()
+  return data
+}
+
+// GET /hrms/tax-declarations?user_id=&academic_year_id= — self always
+// allowed for their own declaration; anyone else's needs payroll_view,
+// same self-or-permission split as the payslips list above.
+router.get('/tax-declarations', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const requestedUserId = (req.query.user_id as string) || req.user!.id
+  if (requestedUserId !== req.user!.id) {
+    const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+    if (!isSuperRole && !permissionCodes.has('staff.payroll_view')) {
+      return res.status(403).json({ success: false, error: 'Not permitted to view another staff member\'s tax declaration' })
+    }
+  }
+
+  const ay = await resolveAcademicYear(school_id, req.query.academic_year_id as string)
+  if (!ay) return res.status(400).json({ success: false, error: 'No academic year on file — set one up under Academics first.' })
+
+  const [{ data: declaration }, { data: window } ] = await Promise.all([
+    supabase.from('staff_tax_declarations').select('*').eq('school_id', school_id).eq('user_id', requestedUserId).eq('academic_year_id', ay.id).maybeSingle(),
+    supabase.from('tax_declaration_windows').select('lock_date').eq('school_id', school_id).eq('academic_year_id', ay.id).maybeSingle(),
+  ])
+  const lockDate = window?.lock_date ?? null
+  const isLocked = !!lockDate && new Date().toISOString().slice(0, 10) > lockDate
+
+  res.json({ success: true, data: { declaration: declaration ?? null, academic_year: ay, lock_date: lockDate, is_locked: isLocked } })
+}))
+
+// PUT /hrms/tax-declarations — self-only; a staff member declares only
+// for themselves (no user_id in the body — always req.user!.id), same
+// posture as the correction-requester self-decide guard elsewhere in
+// this file being about not deciding your OWN request, mirrored here as
+// not editing anyone ELSE's declaration.
+router.put('/tax-declarations', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const user_id = req.user!.id
+  const { section_80c, hra_exemption, other_exemptions, academic_year_id } = req.body
+
+  const ay = await resolveAcademicYear(school_id, academic_year_id)
+  if (!ay) return res.status(400).json({ success: false, error: 'No academic year on file — set one up under Academics first.' })
+
+  const { data: window } = await supabase.from('tax_declaration_windows').select('lock_date').eq('school_id', school_id).eq('academic_year_id', ay.id).maybeSingle()
+  if (window?.lock_date && new Date().toISOString().slice(0, 10) > window.lock_date) {
+    return res.status(400).json({ success: false, error: `Declarations for ${ay.name} locked on ${window.lock_date} — contact payroll for a correction.` })
+  }
+
+  const row = {
+    school_id, user_id, academic_year_id: ay.id,
+    section_80c: Number(section_80c) || 0,
+    hra_exemption: Number(hra_exemption) || 0,
+    other_exemptions: Number(other_exemptions) || 0,
+    submitted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }
+  const { data, error } = await supabase.from('staff_tax_declarations').upsert(row, { onConflict: 'user_id,academic_year_id' }).select().single()
+  if (error) return res.status(400).json({ success: false, error: error.message })
+  res.json({ success: true, data })
+}))
+
+// GET/PUT /hrms/tax-declaration-window — the lock date payroll sets per
+// academic year. Unset means no lock — schools that never touch this
+// feature see identical (unrestricted) behavior to before.
+router.get('/tax-declaration-window', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const ay = await resolveAcademicYear(school_id, req.query.academic_year_id as string)
+    if (!ay) return res.status(400).json({ success: false, error: 'No academic year on file' })
+    const { data } = await supabase.from('tax_declaration_windows').select('*').eq('school_id', school_id).eq('academic_year_id', ay.id).maybeSingle()
+    res.json({ success: true, data: { academic_year: ay, lock_date: data?.lock_date ?? null } })
+  })
+)
+
+router.put('/tax-declaration-window', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const { lock_date, academic_year_id } = req.body
+    const ay = await resolveAcademicYear(school_id, academic_year_id)
+    if (!ay) return res.status(400).json({ success: false, error: 'No academic year on file' })
+    if (!lock_date) return res.status(400).json({ success: false, error: 'lock_date is required' })
+
+    const { data, error } = await supabase.from('tax_declaration_windows')
+      .upsert({ school_id, academic_year_id: ay.id, lock_date }, { onConflict: 'school_id,academic_year_id' }).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// GET /hrms/tax-reconciliation?user_id=&academic_year_id= — the Form 16
+// source data: what's actually accumulated on real payslips this FY,
+// against the declared exemptions, so anyone can see the running
+// shortfall/excess before the year closes rather than only finding out
+// in March. Self-or-payroll_view, same split as the declaration GET.
+router.get('/tax-reconciliation', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const requestedUserId = (req.query.user_id as string) || req.user!.id
+  if (requestedUserId !== req.user!.id) {
+    const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+    if (!isSuperRole && !permissionCodes.has('staff.payroll_view')) {
+      return res.status(403).json({ success: false, error: 'Not permitted to view another staff member\'s tax reconciliation' })
+    }
+  }
+
+  const ay = await resolveAcademicYear(school_id, req.query.academic_year_id as string)
+  if (!ay) return res.status(400).json({ success: false, error: 'No academic year on file' })
+
+  const fyMonths = fyMonthSequence(ay.start_date)
+  const fyYears = [...new Set(fyMonths.map(fm => fm.year))]
+  const fyMonthKeys = new Set(fyMonths.map(fm => `${fm.year}-${fm.month}`))
+
+  const [{ data: payslipsRaw }, { data: declaration }] = await Promise.all([
+    supabase.from('payslips').select('month, year, gross_salary, tds').eq('school_id', school_id).eq('user_id', requestedUserId).in('year', fyYears),
+    supabase.from('staff_tax_declarations').select('*').eq('school_id', school_id).eq('user_id', requestedUserId).eq('academic_year_id', ay.id).maybeSingle(),
+  ])
+  const thisFyPayslips = (payslipsRaw ?? []).filter((p: any) => fyMonthKeys.has(`${p.year}-${p.month}`))
+
+  const grossIncomeYtd = thisFyPayslips.reduce((sum: number, p: any) => sum + Number(p.gross_salary), 0)
+  const tdsWithheldYtd = thisFyPayslips.reduce((sum: number, p: any) => sum + Number(p.tds), 0)
+  const section80c = Math.min(Number(declaration?.section_80c) || 0, SECTION_80C_CAP)
+  const hraExemption = Number(declaration?.hra_exemption) || 0
+  const otherExemptions = Number(declaration?.other_exemptions) || 0
+  const taxableIncomeYtd = Math.max(0, grossIncomeYtd - section80c - hraExemption - otherExemptions)
+  // Tax owed on what's actually been earned so far — not annualized,
+  // since by year end this accumulated total IS the annual total; mid-
+  // year it's a snapshot of "if nothing else changed," which is exactly
+  // what a running shortfall/excess needs to be measured against.
+  const taxOnIncomeSoFar = Math.round(annualSlabTax(taxableIncomeYtd))
+
+  res.json({
+    success: true,
+    data: {
+      academic_year: ay,
+      months_covered: thisFyPayslips.length,
+      gross_income_ytd: grossIncomeYtd,
+      section_80c_claimed: Number(declaration?.section_80c) || 0,
+      section_80c_applied: section80c,
+      hra_exemption: hraExemption,
+      other_exemptions: otherExemptions,
+      taxable_income_ytd: taxableIncomeYtd,
+      tds_withheld_ytd: tdsWithheldYtd,
+      tax_on_income_so_far: taxOnIncomeSoFar,
+      // Positive = more withheld than owed so far (refund direction).
+      // Negative = a shortfall still owed if nothing else changes.
+      shortfall_or_excess: tdsWithheldYtd - taxOnIncomeSoFar,
+    },
+  })
+}))
 
 // GET /hrms/payroll/summary - month-wise summary
 router.get('/payroll/summary', requirePermissionV2('staff.payroll_view'),
@@ -1829,8 +3183,17 @@ router.get('/payslips/:id', asyncHandler(async (req: AuthRequest, res: Response)
   const school_id = req.user!.school_id
 
   const { data: payslip, error } = await supabase
-    .from('payslips').select('*, users:user_id(full_name, role)').eq('id', id).eq('school_id', school_id).single()
+    .from('payslips')
+    .select(`*, users:user_id(full_name, role),
+      payslip_segments(salary_structure_id, segment_from, segment_to, basis_days, total_basis_days,
+        basic_salary, hra, da, conveyance_allowance, medical_allowance, other_allowances, gross_salary, sort_order)`)
+    .eq('id', id).eq('school_id', school_id).single()
   if (error || !payslip) return res.status(404).json({ success: false, error: 'Payslip not found' })
+
+  // Embedded as an unordered array by PostgREST — sorted here so a
+  // segmented payslip's breakdown always reads chronologically.
+  ;(payslip as any).payslip_segments = ((payslip as any).payslip_segments ?? [])
+    .slice().sort((a: any, b: any) => a.sort_order - b.sort_order)
 
   if (payslip.user_id !== req.user!.id) {
     const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
@@ -1849,6 +3212,11 @@ router.get('/payslips/:id', asyncHandler(async (req: AuthRequest, res: Response)
 // GET /hrms/payroll/bank-export — CSV of approved-but-unpaid payslips
 // for a month, for the bank disbursement file. First CSV route in this
 // codebase — hand-rolled with Express's own headers, no new dependency.
+//
+// Stage 8: any FAILED payslip, from ANY month, rides along on whatever
+// the next export run is — a bounced transfer is unpaid debt that
+// needs to go out with the next batch, not sit waiting for its
+// original month to come around for "re-export" again specifically.
 router.get('/payroll/bank-export', requirePermissionV2('staff.payroll_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { month, year } = req.query
@@ -1862,21 +3230,25 @@ router.get('/payroll/bank-export', requirePermissionV2('staff.payroll_manage'),
     // resolved to users' own columns instead (users_1.bank_account_number
     // does not exist), so this is a separate lookup joined in JS, same
     // shape as the leave-balance batch lookups elsewhere in this file.
-    const { data, error } = await supabase
-      .from('payslips')
-      .select('user_id, net_salary, users:user_id(full_name)')
-      .eq('school_id', school_id).eq('month', m).eq('year', y).eq('payment_status', 'approved')
-    if (error) return res.status(500).json({ success: false, error: error.message })
+    const SELECT = 'id, user_id, net_salary, month, year, payment_status, users:user_id(full_name)'
+    const [{ data: dueThisMonth, error: err1 }, { data: failedAnyMonth, error: err2 }] = await Promise.all([
+      supabase.from('payslips').select(SELECT).eq('school_id', school_id).eq('month', m).eq('year', y).eq('payment_status', 'approved'),
+      supabase.from('payslips').select(SELECT).eq('school_id', school_id).eq('payment_status', 'failed'),
+    ])
+    if (err1) return res.status(500).json({ success: false, error: err1.message })
+    if (err2) return res.status(500).json({ success: false, error: err2.message })
+    const data = [...(dueThisMonth ?? []), ...(failedAnyMonth ?? [])]
 
-    const userIds = [...new Set((data ?? []).map(p => p.user_id))]
+    const userIds = [...new Set(data.map(p => p.user_id))]
     const { data: profiles } = userIds.length
       ? await supabase.from('staff_profiles').select('user_id, bank_account_number, bank_ifsc, bank_name').in('user_id', userIds)
       : { data: [] }
     const profileByUser = new Map((profiles ?? []).map(p => [p.user_id, p]))
 
-    const rows = (data ?? []).map((p: any) => {
+    const rows = data.map((p: any) => {
       const profile = profileByUser.get(p.user_id)
-      return [p.users?.full_name ?? '', profile?.bank_name ?? '', profile?.bank_account_number ?? '', profile?.bank_ifsc ?? '', p.net_salary]
+      const label = p.payment_status === 'failed' ? `${p.users?.full_name ?? ''} (retry — previously failed)` : (p.users?.full_name ?? '')
+      return [label, profile?.bank_name ?? '', profile?.bank_account_number ?? '', profile?.bank_ifsc ?? '', p.net_salary]
     })
 
     const escapeCsv = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`
@@ -1887,8 +3259,21 @@ router.get('/payroll/bank-export', requirePermissionV2('staff.payroll_manage'),
     // unlike the single-record routes above where a self-view is exempt.
     supabase.from('audit_logs').insert({
       school_id, user_id: req.user!.id, action: 'VIEW', entity_type: 'payroll_bank_export',
-      new_values: { month: m, year: y, row_count: rows.length }, ip_address: req.ip ?? null,
+      new_values: { month: m, year: y, row_count: rows.length, retried_failures: (failedAnyMonth ?? []).length }, ip_address: req.ip ?? null,
     }).then(({ error: auditErr }) => { if (auditErr) console.error('Failed to write audit log:', auditErr.message) })
+
+    // Stage 4: this is the moment money is considered to have left —
+    // a correction against any of these payslips from here on is an
+    // adjustment on a future one, never a direct rewrite, regardless
+    // of whether payment_status ever gets manually flipped to 'paid'.
+    // A retried failure stays 'failed' until someone confirms the
+    // retry actually landed (PATCH ...payment_status=paid) or fails
+    // again — exporting it is an attempt, not a confirmation.
+    const payslipIds = data.map(p => p.id)
+    if (payslipIds.length) {
+      await supabase.from('payslips').update({ payment_exported: true })
+        .eq('school_id', school_id).in('id', payslipIds)
+    }
 
     res.setHeader('Content-Type', 'text/csv')
     res.setHeader('Content-Disposition', `attachment; filename="bank-disbursement-${y}-${String(m).padStart(2, '0')}.csv"`)
@@ -1936,12 +3321,58 @@ router.get('/loans', asyncHandler(async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data })
 }))
 
-router.patch('/loans/:id', requirePermissionV2('staff.payroll_manage'),
+// Three distinct closure actions, not one ambiguous status PATCH — each
+// means something different for what actually happened to the money:
+//   - payoff:    fully recovered, just not via the remaining installment
+//                schedule (they paid the rest in one go).
+//   - write-off: the school is forgiving whatever's left uncollected.
+//   - cancel:    the loan never actually disbursed — only valid before
+//                a single installment has been recovered; a loan with
+//                money already collected against it can't be "cancelled"
+//                without contradicting its own history.
+router.post('/loans/:id/payoff', requirePermissionV2('staff.payroll_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
-    const { status } = req.body
-    if (!['active', 'settled', 'cancelled'].includes(status)) return res.status(400).json({ success: false, error: 'Invalid status' })
-    const { data, error } = await supabase.from('staff_loans').update({ status, updated_at: new Date().toISOString() }).eq('id', id).eq('school_id', req.user!.school_id).select().single()
+    const { note } = req.body
+    const { data: loan } = await supabase.from('staff_loans').select('status').eq('id', id).eq('school_id', req.user!.school_id).maybeSingle()
+    if (!loan) return res.status(404).json({ success: false, error: 'Loan not found' })
+    if (loan.status !== 'active') return res.status(400).json({ success: false, error: `Only an active loan can be paid off (current status: '${loan.status}')` })
+    const { data, error } = await supabase.from('staff_loans').update({
+      status: 'settled', closure_note: note ? String(note).trim() : null, closed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }).eq('id', id).eq('school_id', req.user!.school_id).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.post('/loans/:id/write-off', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const { note } = req.body
+    if (!note || String(note).trim().length < 3) return res.status(400).json({ success: false, error: 'Give a reason — a write-off forgives money the school is owed' })
+    const { data: loan } = await supabase.from('staff_loans').select('status').eq('id', id).eq('school_id', req.user!.school_id).maybeSingle()
+    if (!loan) return res.status(404).json({ success: false, error: 'Loan not found' })
+    if (loan.status !== 'active') return res.status(400).json({ success: false, error: `Only an active loan can be written off (current status: '${loan.status}')` })
+    const { data, error } = await supabase.from('staff_loans').update({
+      status: 'written_off', closure_note: String(note).trim(), closed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }).eq('id', id).eq('school_id', req.user!.school_id).select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.post('/loans/:id/cancel', requirePermissionV2('staff.payroll_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const { data: loan } = await supabase.from('staff_loans').select('status, installments_paid').eq('id', id).eq('school_id', req.user!.school_id).maybeSingle()
+    if (!loan) return res.status(404).json({ success: false, error: 'Loan not found' })
+    if (loan.status !== 'active') return res.status(400).json({ success: false, error: `Only an active loan can be cancelled (current status: '${loan.status}')` })
+    if (loan.installments_paid > 0) {
+      return res.status(400).json({ success: false, error: 'This loan already has installments recovered — cancel only applies before any money has been collected. Use payoff or write-off instead.' })
+    }
+    const { data, error } = await supabase.from('staff_loans').update({
+      status: 'cancelled', closed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }).eq('id', id).eq('school_id', req.user!.school_id).select().single()
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true, data })
   })
@@ -2018,7 +3449,7 @@ router.get('/payroll/settings', requirePermissionV2('staff.payroll_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
     const [{ data: school }, { data: slabs }] = await Promise.all([
-      supabase.from('schools').select('lop_grace_days, lop_per_day_formula').eq('id', school_id).single(),
+      supabase.from('schools').select('lop_grace_days, lop_per_day_formula, suspension_pay_policy, suspension_pay_percent, segment_proration_basis, absconded_threshold_days, absconded_auto_flag, overtime_rate_multiplier').eq('id', school_id).single(),
       supabase.from('professional_tax_slabs').select('*').eq('school_id', school_id).order('min_gross'),
     ])
     res.json({ success: true, data: { ...school, professional_tax_slabs: slabs ?? [] } })
@@ -2027,13 +3458,19 @@ router.get('/payroll/settings', requirePermissionV2('staff.payroll_manage'),
 
 router.put('/payroll/settings', requirePermissionV2('staff.payroll_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
-    const { lop_grace_days, lop_per_day_formula, professional_tax_slabs } = req.body
+    const { lop_grace_days, lop_per_day_formula, suspension_pay_policy, suspension_pay_percent, segment_proration_basis, professional_tax_slabs, absconded_threshold_days, absconded_auto_flag, overtime_rate_multiplier } = req.body
     const school_id = req.user!.school_id
 
-    if (lop_grace_days !== undefined || lop_per_day_formula !== undefined) {
+    if (lop_grace_days !== undefined || lop_per_day_formula !== undefined || suspension_pay_policy !== undefined || suspension_pay_percent !== undefined || segment_proration_basis !== undefined || absconded_threshold_days !== undefined || absconded_auto_flag !== undefined || overtime_rate_multiplier !== undefined) {
       const update: any = {}
       if (lop_grace_days !== undefined) update.lop_grace_days = lop_grace_days
       if (lop_per_day_formula !== undefined) update.lop_per_day_formula = lop_per_day_formula
+      if (suspension_pay_policy !== undefined) update.suspension_pay_policy = suspension_pay_policy
+      if (suspension_pay_percent !== undefined) update.suspension_pay_percent = suspension_pay_percent
+      if (segment_proration_basis !== undefined) update.segment_proration_basis = segment_proration_basis
+      if (absconded_threshold_days !== undefined) update.absconded_threshold_days = absconded_threshold_days
+      if (absconded_auto_flag !== undefined) update.absconded_auto_flag = absconded_auto_flag
+      if (overtime_rate_multiplier !== undefined) update.overtime_rate_multiplier = overtime_rate_multiplier
       const { error } = await supabase.from('schools').update(update).eq('id', school_id)
       if (error) return res.status(400).json({ success: false, error: error.message })
     }
@@ -2115,7 +3552,7 @@ async function computeStaffAttendanceRollup(schoolId: string, userIds: string[],
   const effectiveToDate = toDate > today ? today : toDate
   const workingDays = countWorkingDays(fromDate, effectiveToDate, nonWorkingSets)
 
-  const [{ data: rawRecords, error: attErr }, { data: approvedLeaves, error: leaveErr }, { data: shiftAssignments }] = await Promise.all([
+  const [{ data: rawRecords, error: attErr }, { data: approvedLeaves, error: leaveErr }, { data: profileRows }, { data: exitRows }] = await Promise.all([
     userIds.length
       ? supabase.from('staff_attendance').select('user_id, date, status, overtime_hours')
           .eq('school_id', schoolId).in('user_id', userIds).gte('date', fromDate).lte('date', toDate)
@@ -2125,19 +3562,37 @@ async function computeStaffAttendanceRollup(schoolId: string, userIds: string[],
           .eq('school_id', schoolId).eq('status', 'approved').in('user_id', userIds)
           .lte('from_date', toDate).gte('to_date', fromDate)
       : Promise.resolve({ data: [], error: null }),
-    // Per-user shift override — see the comment on rollupByUser below for
-    // why this only forks the calculation for users who actually have one.
+    // Per-user shift override AND date_of_joining in one query — both are
+    // per-user overrides to the shared working-days figure, so they're
+    // resolved together below.
     userIds.length
-      ? supabase.from('staff_profiles').select('user_id, staff_shifts(off_days)').eq('school_id', schoolId).in('user_id', userIds).not('shift_id', 'is', null)
+      ? supabase.from('staff_profiles').select('user_id, date_of_joining, staff_shifts(off_days)').eq('school_id', schoolId).in('user_id', userIds)
+      : Promise.resolve({ data: [] }),
+    // A staff member who left mid-period must not be charged LOP for
+    // days after they stopped working — nobody was ever going to mark
+    // their attendance for those days, so without this clamp every day
+    // from last_working_day to the end of the period silently became
+    // "unmarked" and fed straight into LOP. Multiple exit rows (rehired,
+    // left again) are possible; the latest last_working_day wins.
+    userIds.length
+      ? supabase.from('staff_exits').select('user_id, last_working_day').eq('school_id', schoolId).in('user_id', userIds)
       : Promise.resolve({ data: [] }),
   ])
   if (attErr) throw new Error(attErr.message)
   if (leaveErr) throw new Error(leaveErr.message)
 
   const shiftOffDaysByUser = new Map<string, Set<number>>()
-  for (const row of shiftAssignments ?? []) {
+  const joinDateByUser = new Map<string, string>()
+  for (const row of profileRows ?? []) {
     const shift = Array.isArray((row as any).staff_shifts) ? (row as any).staff_shifts[0] : (row as any).staff_shifts
     if (shift?.off_days) shiftOffDaysByUser.set((row as any).user_id, new Set(shift.off_days))
+    if ((row as any).date_of_joining) joinDateByUser.set((row as any).user_id, (row as any).date_of_joining)
+  }
+  const exitDateByUser = new Map<string, string>()
+  for (const row of (exitRows ?? []) as any[]) {
+    if (!row.last_working_day) continue
+    const existing = exitDateByUser.get(row.user_id)
+    if (!existing || row.last_working_day > existing) exitDateByUser.set(row.user_id, row.last_working_day)
   }
 
   const records = (rawRecords ?? []).filter(r => isWorkingDate(r.date, nonWorkingSets))
@@ -2173,15 +3628,27 @@ async function computeStaffAttendanceRollup(schoolId: string, userIds: string[],
     const leaveDates = leaveDatesByUser.get(userId) ?? new Set<string>()
     const on_leave = leaveDates.size
 
-    // Users with no shift (the overwhelming majority) keep the cheap
-    // shared `workingDays` figure. A user with a shift whose off-days
-    // differ from the school-wide pattern gets their own count instead
-    // — holidays still apply to everyone, only the weekly-off check
-    // becomes per-user.
+    // Clamp this user's own employment window into the period — joining
+    // partway through or leaving partway through must shrink the working-
+    // days denominator, not just leave the attendance numerator sparse.
+    const joinDate = joinDateByUser.get(userId)
+    const exitDate = exitDateByUser.get(userId)
+    const userFromDate = joinDate && joinDate > fromDate ? joinDate : fromDate
+    const userToDate = exitDate && exitDate < effectiveToDate ? exitDate : effectiveToDate
+    const employedThisPeriod = userFromDate <= userToDate
+
     const shiftOffDays = shiftOffDaysByUser.get(userId)
-    const userWorkingDays = shiftOffDays
-      ? dateRangeStrings(fromDate, effectiveToDate).filter(d => !nonWorkingSets.holidays.has(d) && !shiftOffDays.has(new Date(`${d}T00:00:00`).getDay())).length
-      : workingDays
+    // Users with no clamp and no shift (the overwhelming majority) keep
+    // the cheap shared `workingDays` figure. Anyone whose employment
+    // window or shift off-days differ from the school-wide default gets
+    // their own count instead — holidays still apply to everyone, only
+    // the weekly-off check and the date range become per-user.
+    const userWorkingDays = !employedThisPeriod ? 0
+      : (shiftOffDays || userFromDate !== fromDate || userToDate !== effectiveToDate)
+        ? dateRangeStrings(userFromDate, userToDate)
+            .filter(d => !nonWorkingSets.holidays.has(d) && !(shiftOffDays ?? nonWorkingSets.weeklyOff).has(new Date(`${d}T00:00:00`).getDay()))
+            .length
+        : workingDays
 
     const effectiveWorkingDays = Math.max(0, userWorkingDays - on_leave)
     const unmarked = Math.max(0, effectiveWorkingDays - (counts.present + counts.absent + counts.half_day))
@@ -2300,7 +3767,8 @@ router.post('/attendance/regularizations/:id/workflow-action', requirePermission
 
     if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ success: false, error: 'Invalid status' })
 
-    const { data: reg } = await supabase.from('staff_attendance_regularizations').select('*').eq('id', id).eq('school_id', school_id).maybeSingle()
+    const { data: reg } = await supabase.from('staff_attendance_regularizations')
+      .select('*, users:user_id(full_name)').eq('id', id).eq('school_id', school_id).maybeSingle()
     if (!reg) return res.status(404).json({ success: false, error: 'Regularization request not found' })
 
     const { data: instance, error: instErr } = await supabase
@@ -2320,6 +3788,7 @@ router.post('/attendance/regularizations/:id/workflow-action', requirePermission
 
       // On approval, actually apply the correction — same upsert-on-
       // conflict call POST /attendance itself uses.
+      let payslipNote: string | null = null
       if (result.instance.status === 'approved') {
         const { data: existingAtt } = await supabase
           .from('staff_attendance').select('status').eq('school_id', school_id).eq('user_id', reg.user_id).eq('date', reg.date).maybeSingle()
@@ -2330,7 +3799,37 @@ router.post('/attendance/regularizations/:id/workflow-action', requirePermission
         }, { onConflict: 'user_id,date' })
 
         await syncUnpaidLeaveOnAttendanceChange(school_id, reg.user_id, reg.date, existingAtt?.status ?? null, reg.requested_status)
+
+        // Stage 10.2a: the corrected attendance already changes LOP the
+        // NEXT time Generate runs for this period (recomputed fresh, not
+        // behind the isRegenerate guard) — but nobody is told a re-run is
+        // needed. A still-'pending' payslip can just be regenerated; an
+        // already-approved/paid one needs Stage 4's adjustment path
+        // instead, so the approver is told which applies right here
+        // rather than finding out only when Generate is re-run.
+        const regMonth = Number(reg.date.slice(5, 7))
+        const regYear = Number(reg.date.slice(0, 4))
+        const { data: affectedPayslip } = await supabase.from('payslips')
+          .select('id, payment_status').eq('school_id', school_id).eq('user_id', reg.user_id)
+          .eq('month', regMonth).eq('year', regYear).maybeSingle()
+
+        if (affectedPayslip?.payment_status === 'pending') {
+          const recipients = await getUserIdsWithPermission(school_id, 'staff.payroll_manage')
+          if (recipients.length) {
+            await createNotifications(recipients, {
+              schoolId: school_id, type: 'payslip_regen_needed',
+              title: 'Attendance corrected — payslip needs regenerating',
+              message: `${reg.users?.full_name ?? 'A staff member'}'s attendance for ${reg.date} was corrected via regularization — the ${regMonth}/${regYear} payslip should be regenerated to reflect it.`,
+              link: '/hr/payroll', relatedEntityType: 'payslip', relatedEntityId: affectedPayslip.id,
+            })
+          }
+        } else if (affectedPayslip && ['approved', 'paid'].includes(affectedPayslip.payment_status)) {
+          payslipNote = `This period's payslip is already ${affectedPayslip.payment_status} — the corrected attendance won't apply automatically. Raise a payslip correction (adjustment) for the difference instead.`
+        }
       }
+
+      res.json({ success: true, data: { instance: result.instance, completed: result.completed, payslip_note: payslipNote } })
+      return
     }
 
     res.json({ success: true, data: { instance: result.instance, completed: result.completed } })

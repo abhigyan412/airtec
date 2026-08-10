@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation'
 import { hrmsApi, documentsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, User, Users, Calendar, IndianRupee, Loader2, Check, X, Edit3, History, LogOut, ShieldAlert, FileText, ArrowRight, Trash2, Eye, Plus, Camera } from 'lucide-react'
+import { ArrowLeft, User, Users, Calendar, IndianRupee, Loader2, Check, X, Edit3, History, LogOut, ShieldAlert, FileText, ArrowRight, Trash2, Eye, Plus, Camera, AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -215,7 +215,8 @@ function ProbationBadge({ staffId, daysLeft }: { staffId: string; daysLeft: numb
   return (
     <>
       <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset',
-        daysLeft <= 30 ? 'bg-warning/10 text-warning ring-warning/20' : 'bg-muted text-muted-foreground ring-border')}>
+        daysLeft < 0 ? 'bg-destructive/10 text-destructive ring-destructive/20'
+          : daysLeft <= 30 ? 'bg-warning/10 text-warning ring-warning/20' : 'bg-muted text-muted-foreground ring-border')}>
         <ShieldAlert className="h-3 w-3" />
         {daysLeft < 0 ? 'Probation overdue' : `Probation ends in ${daysLeft}d`}
       </span>
@@ -415,7 +416,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }
               {value:'full_time',label:'Full Time'},{value:'part_time',label:'Part Time'},{value:'contract',label:'Contract'},{value:'probation',label:'Probation'}
             ]} />
             <Field label="Employment Status" name="employment_status" options={[
-              {value:'active',label:'Active'},{value:'suspended',label:'Suspended'},{value:'resigned',label:'Resigned'},{value:'terminated',label:'Terminated'}
+              {value:'active',label:'Active'},{value:'suspended',label:'Suspended'},{value:'absconded',label:'Absconded'},{value:'resigned',label:'Resigned'},{value:'terminated',label:'Terminated'}
             ]} />
             <Field label="Shift" name="shift_id" options={[
               { value: '', label: 'School default schedule' },
@@ -657,6 +658,9 @@ function PayrollTab({ data, staffId, userName }: any) {
         </CardContent>
       </Card>
 
+      {/* Tax reconciliation (Form 16 source data) */}
+      <TaxReconciliationSection staffId={staffId} />
+
       {/* Loans / advances */}
       <LoansSection staffId={staffId} userName={userName} />
 
@@ -670,6 +674,43 @@ function PayrollTab({ data, staffId, userName }: any) {
   )
 }
 
+// ── Admin-side view of the same Form 16 source data staff see for
+// themselves on My Payslips — total income, exemptions claimed, TDS
+// withheld, shortfall/excess — so payroll doesn't have to ask someone
+// to screenshot their own self-service page to answer a question about it.
+function TaxReconciliationSection({ staffId }: { staffId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['tax-reconciliation', staffId],
+    queryFn: () => hrmsApi.taxReconciliation.get({ user_id: staffId }).then(r => r.data),
+  })
+
+  if (isLoading) return <Card><CardContent className="p-6"><Skeleton className="h-24 w-full" /></CardContent></Card>
+  if (!data?.academic_year || data.months_covered === 0) return null
+
+  const excess = data.shortfall_or_excess >= 0
+
+  return (
+    <Card>
+      <CardHeader className="border-b border-border">
+        <CardTitle className="flex items-center gap-2"><IndianRupee className="h-4 w-4 text-muted-foreground" /> Tax Reconciliation — {data.academic_year.name}</CardTitle>
+      </CardHeader>
+      <CardContent className="p-6">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 text-sm">
+          <div><p className="text-xs text-muted-foreground">Gross Income (YTD)</p><p className="font-semibold text-foreground">₹{Number(data.gross_income_ytd).toLocaleString('en-IN')}</p></div>
+          <div><p className="text-xs text-muted-foreground">Exemptions Applied</p><p className="font-semibold text-foreground">₹{(Number(data.section_80c_applied) + Number(data.hra_exemption) + Number(data.other_exemptions)).toLocaleString('en-IN')}</p></div>
+          <div><p className="text-xs text-muted-foreground">Taxable Income (YTD)</p><p className="font-semibold text-foreground">₹{Number(data.taxable_income_ytd).toLocaleString('en-IN')}</p></div>
+          <div><p className="text-xs text-muted-foreground">TDS Withheld (YTD)</p><p className="font-semibold text-foreground">₹{Number(data.tds_withheld_ytd).toLocaleString('en-IN')}</p></div>
+        </div>
+        <div className={cn('mt-4 flex items-center justify-between rounded-xl px-4 py-3', excess ? 'bg-success/10' : 'bg-warning/10')}>
+          <span className="text-sm font-medium text-foreground">{excess ? 'Excess withheld so far' : 'Shortfall so far'}</span>
+          <span className={cn('text-lg font-bold', excess ? 'text-success' : 'text-warning')}>₹{Math.abs(Number(data.shortfall_or_excess)).toLocaleString('en-IN')}</span>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">Based on {data.months_covered} payslip{data.months_covered !== 1 ? 's' : ''} so far this year — not a final figure until the year closes.</p>
+      </CardContent>
+    </Card>
+  )
+}
+
 function LoansSection({ staffId, userName }: { staffId: string; userName: string }) {
   const qc = useQueryClient()
   const [showIssueModal, setShowIssueModal] = useState(false)
@@ -679,15 +720,30 @@ function LoansSection({ staffId, userName }: { staffId: string; userName: string
     queryFn: () => hrmsApi.loans.list(staffId).then(r => r.data),
   })
 
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['staff-loans', staffId] })
+
+  const payoffMutation = useMutation({
+    mutationFn: (loanId: string) => hrmsApi.loans.payoff(loanId),
+    onSuccess: () => { invalidate(); toast.success('Loan marked paid off') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
+  })
+
+  const writeOffMutation = useMutation({
+    mutationFn: ({ loanId, note }: { loanId: string; note: string }) => hrmsApi.loans.writeOff(loanId, note),
+    onSuccess: () => { invalidate(); toast.success('Loan written off') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
+  })
+
   const cancelMutation = useMutation({
-    mutationFn: (loanId: string) => hrmsApi.loans.update(loanId, 'cancelled'),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['staff-loans', staffId] }); toast.success('Loan cancelled') },
+    mutationFn: (loanId: string) => hrmsApi.loans.cancel(loanId),
+    onSuccess: () => { invalidate(); toast.success('Loan cancelled') },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
   })
 
   const LOAN_STATUS_COLORS: Record<string, string> = {
     active: 'bg-info/10 text-info ring-1 ring-inset ring-info/20',
     settled: 'bg-success/10 text-success ring-1 ring-inset ring-success/20',
+    written_off: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/20',
     cancelled: 'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
   }
 
@@ -712,17 +768,34 @@ function LoansSection({ staffId, userName }: { staffId: string; userName: string
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-foreground">₹{Number(l.principal_amount).toLocaleString('en-IN')}</span>
-                    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium capitalize', LOAN_STATUS_COLORS[l.status])}>{l.status}</span>
+                    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium capitalize', LOAN_STATUS_COLORS[l.status])}>{l.status.replace('_', ' ')}</span>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     ₹{Number(l.installment_amount).toLocaleString('en-IN')}/month · {l.installments_paid}/{l.installments_total} installments paid
                     {l.reason && ` · ${l.reason}`}
                   </p>
+                  {l.closure_note && <p className="mt-1 text-xs text-muted-foreground">{l.status === 'written_off' ? 'Write-off reason' : 'Note'}: {l.closure_note}</p>}
                 </div>
                 {l.status === 'active' && (
-                  <Button variant="ghost" size="sm" onClick={() => cancelMutation.mutate(l.id)} disabled={cancelMutation.isPending} className="text-muted-foreground hover:text-destructive">
-                    Cancel
-                  </Button>
+                  <div className="flex flex-shrink-0 gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => { if (confirm('Mark this loan as fully paid off (recovered outside the normal installment schedule)?')) payoffMutation.mutate(l.id) }}
+                      disabled={payoffMutation.isPending} className="text-muted-foreground hover:text-success">
+                      Payoff
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => {
+                      const note = prompt('Reason for writing off the remaining balance:')
+                      if (note && note.trim().length >= 3) writeOffMutation.mutate({ loanId: l.id, note: note.trim() })
+                      else if (note !== null) toast.error('Give a reason — at least a few words')
+                    }} disabled={writeOffMutation.isPending} className="text-muted-foreground hover:text-warning">
+                      Write Off
+                    </Button>
+                    {l.installments_paid === 0 && (
+                      <Button variant="ghost" size="sm" onClick={() => { if (confirm('Cancel this loan? Only use this if nothing was ever disbursed/recovered.')) cancelMutation.mutate(l.id) }}
+                        disabled={cancelMutation.isPending} className="text-muted-foreground hover:text-destructive">
+                        Cancel
+                      </Button>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
@@ -798,6 +871,8 @@ function IssueLoanModal({ staffId, userName, onClose }: { staffId: string; userN
 }
 
 function SalaryModal({ staffId, userName, existing, onClose }: any) {
+  const [type, setType] = useState<'fixed_monthly' | 'hourly' | 'per_session'>(existing?.type ?? 'fixed_monthly')
+  const [hourlyRate, setHourlyRate] = useState(existing?.hourly_rate ?? '')
   const [form, setForm] = useState({
     basic_salary: existing?.basic_salary ?? '',
     hra: existing?.hra ?? '',
@@ -812,13 +887,22 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
   const [loading, setLoading] = useState(false)
 
   const handleSave = async () => {
-    if (!form.basic_salary) return toast.error('Basic salary is required')
+    if (type === 'fixed_monthly' && !form.basic_salary) return toast.error('Basic salary is required')
+    if (type === 'hourly' && !hourlyRate) return toast.error('Hourly rate is required')
     setLoading(true)
     try {
       await hrmsApi.salaryStructure.set({
         user_id: staffId,
-        ...Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v === '' ? 0 : Number(v)])),
-        basic_salary: Number(form.basic_salary),
+        type,
+        hourly_rate: type === 'hourly' ? Number(hourlyRate) : null,
+        // Hourly/per-session have no fixed components — zeroed rather
+        // than left as whatever was on file for the PREVIOUS type, so a
+        // structure switched from fixed_monthly doesn't keep contributing
+        // stale basic/hra/etc through segmentation.
+        ...(type === 'fixed_monthly'
+          ? Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v === '' ? 0 : Number(v)]))
+          : { basic_salary: 0, hra: 0, da: 0, conveyance_allowance: 0, medical_allowance: 0, other_allowances: 0,
+              pf_deduction: Number(form.pf_deduction) || 0, professional_tax: Number(form.professional_tax) || 0, other_deductions: Number(form.other_deductions) || 0 }),
       })
       toast.success('Salary structure saved')
       onClose()
@@ -842,17 +926,43 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
         </DialogHeader>
 
         <div className="space-y-4">
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Earnings</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <Field label="Basic Salary *" name="basic_salary" />
-              <Field label="HRA" name="hra" />
-              <Field label="DA" name="da" />
-              <Field label="Conveyance" name="conveyance_allowance" />
-              <Field label="Medical Allowance" name="medical_allowance" />
-              <Field label="Other Allowances" name="other_allowances" />
-            </div>
+          <div className="space-y-1.5">
+            <Label>Pay Type</Label>
+            <Select value={type} onValueChange={(v: any) => setType(v)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fixed_monthly">Fixed Monthly</SelectItem>
+                <SelectItem value="hourly">Hourly</SelectItem>
+                <SelectItem value="per_session">Per-Session (no fixed pay)</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
+
+          {type === 'fixed_monthly' && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Earnings</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <Field label="Basic Salary *" name="basic_salary" />
+                <Field label="HRA" name="hra" />
+                <Field label="DA" name="da" />
+                <Field label="Conveyance" name="conveyance_allowance" />
+                <Field label="Medical Allowance" name="medical_allowance" />
+                <Field label="Other Allowances" name="other_allowances" />
+              </div>
+            </div>
+          )}
+          {type === 'hourly' && (
+            <div className="space-y-1.5">
+              <Label>Hourly Rate (₹) *</Label>
+              <Input type="number" value={hourlyRate} onChange={e => setHourlyRate(e.target.value)} placeholder="e.g. 300" />
+              <p className="text-xs text-muted-foreground">Regular pay is standard hours worked × this rate; overtime is paid at the school's overtime multiplier on top.</p>
+            </div>
+          )}
+          {type === 'per_session' && (
+            <p className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              No fixed pay — earnings come entirely from approved sessions logged under Payroll → Duty Log, summed each period.
+            </p>
+          )}
           <div>
             <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Deductions</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -951,13 +1061,25 @@ function PromoteTransferModal({ staffId, userName, profile, onClose }: any) {
     if (alsoUpdateSalary && !salary.basic_salary) return toast.error('Basic salary is required to update salary')
     setLoading(true)
     try {
-      await hrmsApi.staff.promote(staffId, {
+      const res = await hrmsApi.staff.promote(staffId, {
         ...form,
         salary: alsoUpdateSalary
           ? Object.fromEntries(Object.entries(salary).map(([k, v]) => [k, v === '' ? 0 : Number(v)]))
           : undefined,
       })
       toast.success('Position updated')
+      // Stage 7: a backdated salary change auto-stages arrears for any
+      // intervening month that already has a payslip on record — surface
+      // it immediately rather than leaving it to be discovered later in
+      // the approval queue.
+      const staged = res?.auto_staged_arrears ?? []
+      const gaps = res?.arrears_gaps ?? []
+      if (staged.length) {
+        toast.info(`${staged.length} month${staged.length !== 1 ? 's' : ''} of arrears auto-staged for review — see Payroll → Pending Arrears.`, { duration: 8000 })
+      }
+      if (gaps.length) {
+        toast.warning(`${gaps.length} month${gaps.length !== 1 ? 's' : ''} had no payslip on record to compare against — review manually: ${gaps.map((g: any) => `${g.month}/${g.year}`).join(', ')}`, { duration: 10000 })
+      }
       onClose()
     } catch (e: any) {
       toast.error(e?.response?.data?.error ?? 'Failed')
@@ -1314,12 +1436,23 @@ function ExitTab({ staffId, userName }: { staffId: string; userName: string }) {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-sm">
                   <div><p className="text-xs text-muted-foreground">Pending Leave</p><p className="font-semibold text-foreground">{exit.pending_leave_days} days</p></div>
                   <div><p className="text-xs text-muted-foreground">Leave Payout</p><p className="font-semibold text-success">₹{Number(exit.leave_payout).toLocaleString('en-IN')}</p></div>
-                  <div><p className="text-xs text-muted-foreground">Deductions</p><p className="font-semibold text-destructive">₹{(Number(exit.lop_deduction) + Number(exit.advances_deduction)).toLocaleString('en-IN')}</p></div>
-                  <div><p className="text-xs text-muted-foreground">Net Settlement</p><p className="text-lg font-bold text-primary">₹{Number(exit.net_settlement).toLocaleString('en-IN')}</p></div>
+                  <div><p className="text-xs text-muted-foreground">LOP Deduction</p><p className="font-semibold text-destructive">₹{Number(exit.lop_deduction).toLocaleString('en-IN')}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Loan Recovery</p><p className="font-semibold text-destructive">₹{Number(exit.advances_deduction).toLocaleString('en-IN')}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Net Settlement</p><p className={cn('text-lg font-bold', Number(exit.net_settlement) < 0 ? 'text-destructive' : 'text-primary')}>₹{Number(exit.net_settlement).toLocaleString('en-IN')}</p></div>
                 </div>
+                {Number(exit.net_settlement) < 0 && (
+                  <div className="mt-4 flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                    <p>
+                      Outstanding loan balance exceeds what's owed to {userName} — they owe the school{' '}
+                      <span className="font-semibold">₹{Math.abs(Number(exit.net_settlement)).toLocaleString('en-IN')}</span>.
+                      This isn't collected automatically; it needs a separate conversation and recovery arrangement.
+                    </p>
+                  </div>
+                )}
                 {workflowInProgress && (
                   <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
                     <p className="text-xs text-muted-foreground">Awaiting settlement approval.</p>

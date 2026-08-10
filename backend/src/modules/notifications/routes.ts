@@ -13,7 +13,7 @@ router.use(authenticate)
 // newest first. Scoped to req.user.id, not school_id — a user only
 // ever sees their own notifications regardless of role.
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { page = '1', limit = '20', unread_only } = req.query
+  const { page = '1', limit = '20', unread_only, type } = req.query
   const { from, to, limit: lim, page: pg } = getPagination(Number(page), Number(limit))
 
   let query = supabase.from('notifications').select('*', { count: 'exact' })
@@ -22,6 +22,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     .range(from, to)
 
   if (unread_only === 'true') query = query.eq('is_read', false)
+  if (type) query = query.eq('type', type as string)
 
   const { data, error, count } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })

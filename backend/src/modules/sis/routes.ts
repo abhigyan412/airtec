@@ -1058,9 +1058,44 @@ router.patch('/:id', requirePermissionV2('student.edit'),
     const { data: existing } = await supabase.from('students').select().eq('id', id).eq('school_id', school_id).single()
     if (!existing) return res.status(404).json({ success: false, error: 'Student not found' })
     const { father_name, father_phone, father_email, mother_name, mother_phone, mother_email, ...studentData } = body as any
-    const { data, error } = await supabase.from('students').update(studentData).eq('id', id).eq('school_id', school_id).select().single()
-    if (error) return res.status(400).json({ success: false, error: error.message })
-    await supabase.from('audit_logs').insert({ school_id, user_id: req.user!.id, action: 'UPDATE', entity_type: 'student', entity_id: id, old_values: existing, new_values: studentData })
+
+    // An edit touching ONLY parent fields (e.g. just updating a phone
+    // number from the Parent Info tab) leaves studentData empty —
+    // .update({}) against PostgREST doesn't reliably return the row via
+    // .single(), so skip the students-table write entirely rather than
+    // send a no-op PATCH with nothing in it.
+    let data = existing
+    if (Object.keys(studentData).length) {
+      const { data: updated, error } = await supabase.from('students').update(studentData).eq('id', id).eq('school_id', school_id).select().single()
+      if (error) return res.status(400).json({ success: false, error: error.message })
+      data = updated
+    }
+
+    // These used to be accepted and silently dropped — parsed by the
+    // schema, destructured out above, never written anywhere. CREATE's
+    // own parents insert (a few routes up) was the only place this data
+    // ever actually landed. parents has no unique constraint on
+    // student_id (can't onConflict-upsert), so: update the existing row
+    // if one exists, otherwise insert one — but only touch the columns
+    // actually present in this request, not blank out the rest.
+    const parentFields: Record<string, any> = {}
+    if (father_name !== undefined) parentFields.father_name = father_name
+    if (father_phone !== undefined) parentFields.father_phone = father_phone
+    if (father_email !== undefined) parentFields.father_email = father_email
+    if (mother_name !== undefined) parentFields.mother_name = mother_name
+    if (mother_phone !== undefined) parentFields.mother_phone = mother_phone
+    if (mother_email !== undefined) parentFields.mother_email = mother_email
+
+    if (Object.keys(parentFields).length) {
+      const { data: existingParent } = await supabase.from('parents').select('id').eq('student_id', id).eq('school_id', school_id).maybeSingle()
+      if (existingParent) {
+        await supabase.from('parents').update(parentFields).eq('id', existingParent.id)
+      } else {
+        await supabase.from('parents').insert({ school_id, student_id: id, ...parentFields })
+      }
+    }
+
+    await supabase.from('audit_logs').insert({ school_id, user_id: req.user!.id, action: 'UPDATE', entity_type: 'student', entity_id: id, old_values: existing, new_values: { ...studentData, ...parentFields } })
     res.json({ success: true, data })
   })
 )

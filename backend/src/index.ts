@@ -9,6 +9,7 @@ import { runFeeReminders } from './shared/utils/feeReminders'
 import { runDeliveries } from './shared/utils/delivery'
 import { runLeaveAccrual, runLeaveYearEnd } from './shared/utils/leavePolicy'
 import { runHrAlerts } from './shared/utils/hrAlerts'
+import { runAbscondedSweep } from './shared/utils/absconded'
 
 import authRoutes from './modules/auth/routes'
 import sisRoutes from './modules/sis/routes'
@@ -169,6 +170,15 @@ cron.schedule('0 8 * * *', () => {
   runHrAlerts()
     .then(result => console.log(`[hr-alerts] probation:${result.probationNotified} documents:${result.documentsNotified} anniversaries:${result.anniversariesNotified}`))
     .catch(err => console.error('[hr-alerts] failed:', err))
+})
+
+// Daily absconded-staff sweep, 8:15 AM server time (just after HR
+// alerts), across every school. POST /hrms/absconded/run is the
+// per-school manual equivalent.
+cron.schedule('15 8 * * *', () => {
+  runAbscondedSweep()
+    .then(result => console.log(`[absconded] flagged:${result.flagged} auto-set:${result.autoSet}`))
+    .catch(err => console.error('[absconded] failed:', err))
 })
 
 app.listen(PORT, () => {
