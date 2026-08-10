@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, classesApi } from '@/lib/api'
-import { Plus, Trash2, Loader2, ArrowLeft, Clock, LayoutTemplate, BookOpen, Sparkles } from 'lucide-react'
+import { usePermissions } from '@/lib/usePermissions'
+import { Plus, Trash2, Loader2, ArrowLeft, Clock, LayoutTemplate, BookOpen, Sparkles, ShieldOff } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -25,6 +26,8 @@ const titleCase = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.to
 
 export default function ExamTemplatesPage() {
   const qc = useQueryClient()
+  const { can } = usePermissions()
+  const canManage = can('exam.schedule')
   const [showAddSlot, setShowAddSlot] = useState(false)
   const [showNewTemplate, setShowNewTemplate] = useState(false)
   const [applyTemplateId, setApplyTemplateId] = useState<string | null>(null)
@@ -38,11 +41,13 @@ export default function ExamTemplatesPage() {
   const { data: timeSlots, isLoading: slotsLoading } = useQuery({
     queryKey: ['exam-time-slots'],
     queryFn: () => api.get('/exams/time-slots').then(r => r.data.data),
+    enabled: canManage,
   })
 
   const { data: templates, isLoading: templatesLoading } = useQuery({
     queryKey: ['exam-templates'],
     queryFn: () => api.get('/exams/templates').then(r => r.data.data),
+    enabled: canManage,
   })
 
   const addSlotMutation = useMutation({
@@ -67,6 +72,18 @@ export default function ExamTemplatesPage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['exam-templates'] }); toast.success('Template removed') },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to remove'),
   })
+
+  if (!canManage) {
+    return (
+      <EmptyState
+        icon={ShieldOff}
+        title="Access Denied"
+        description="Only staff with exam scheduling permission can manage examination settings."
+        className="h-64"
+        action={<Button variant="outline" asChild><Link href="/exams">Back to Examinations</Link></Button>}
+      />
+    )
+  }
 
   return (
     <div className="max-w-3xl space-y-6">
