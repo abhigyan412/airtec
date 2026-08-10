@@ -4,10 +4,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
-import { Plus, Calendar, CalendarDays, Clock, CheckCircle, XCircle, Ban, AlertTriangle } from 'lucide-react'
+import { Plus, Calendar, CalendarDays, Clock, CheckCircle, XCircle, Ban, AlertTriangle, Sunrise } from 'lucide-react'
 import { toast } from 'sonner'
 import { ApplyLeaveModal } from '@/components/hr/ApplyLeaveModal'
+import { RequestCompOffModal } from '@/components/hr/RequestCompOffModal'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
@@ -24,6 +26,7 @@ export default function MyLeavePage() {
   const { user } = useAuth()
   const qc = useQueryClient()
   const [showApply, setShowApply] = useState(false)
+  const [showCompOff, setShowCompOff] = useState(false)
 
   const { data: balances, isLoading: balancesLoading } = useQuery({
     queryKey: ['my-leave-balances', user?.id],
@@ -34,6 +37,16 @@ export default function MyLeavePage() {
   const { data: requests, isLoading: requestsLoading } = useQuery({
     queryKey: ['my-leave-requests'],
     queryFn: () => hrmsApi.leaveRequests.list({ user_id: user?.id }).then(r => r.data),
+    enabled: !!user,
+  })
+
+  // Comp-off self-service was previously only reachable from /hr/leave,
+  // which is gated behind staff.leave_approve/staff.view — invisible to
+  // an ordinary teacher. This page has no permission gate at all, so
+  // it's where every staff member's own comp-off requests belong too.
+  const { data: compOffRequests, isLoading: compOffLoading } = useQuery({
+    queryKey: ['my-comp-off-requests'],
+    queryFn: () => hrmsApi.compOff.list({ user_id: user?.id }).then(r => r.data),
     enabled: !!user,
   })
 
@@ -54,9 +67,14 @@ export default function MyLeavePage() {
         description="Apply for leave and track your requests"
         icon={CalendarDays}
         actions={
-          <Button onClick={() => setShowApply(true)}>
-            <Plus className="h-4 w-4" /> Apply for Leave
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setShowCompOff(true)}>
+              <Sunrise className="h-4 w-4" /> Request Comp-Off
+            </Button>
+            <Button onClick={() => setShowApply(true)}>
+              <Plus className="h-4 w-4" /> Apply for Leave
+            </Button>
+          </div>
         }
       />
 
@@ -160,6 +178,55 @@ export default function MyLeavePage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Comp-off history */}
+      <Card>
+        <CardHeader className="border-b border-border">
+          <CardTitle className="flex items-center gap-2">
+            <Sunrise className="h-4 w-4 text-muted-foreground" /> Comp-Off Requests
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {compOffLoading ? (
+            <div className="space-y-3 p-6">
+              {Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+            </div>
+          ) : (compOffRequests ?? []).length === 0 ? (
+            <EmptyState
+              icon={Sunrise}
+              title="No comp-off requests yet"
+              description="Worked a holiday or weekly-off day? Request comp-off and it'll be credited once approved."
+              action={
+                <Button onClick={() => setShowCompOff(true)}>
+                  <Plus className="h-4 w-4" /> Request Comp-Off
+                </Button>
+              }
+            />
+          ) : (
+            <div className="divide-y divide-border">
+              {(compOffRequests ?? []).map((r: any) => (
+                <div key={r.id} className="flex items-center justify-between px-6 py-4">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-foreground">Worked {formatDate(r.worked_date)}</span>
+                      <Badge variant={r.status === 'approved' ? 'success' : r.status === 'rejected' ? 'destructive' : 'warning'} className="capitalize">{r.status}</Badge>
+                    </div>
+                    {r.reason && <p className="mt-1 text-xs text-muted-foreground">{r.reason}</p>}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{formatDate(r.created_at)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {showCompOff && (
+        <RequestCompOffModal onClose={() => {
+          setShowCompOff(false)
+          qc.invalidateQueries({ queryKey: ['my-comp-off-requests'] })
+        }} />
+      )}
 
       {showApply && (
         <ApplyLeaveModal onClose={() => {

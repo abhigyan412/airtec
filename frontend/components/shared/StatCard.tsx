@@ -22,13 +22,22 @@ interface StatCardProps {
   trend?: number
   hint?: string
   className?: string
+  /** When provided, the whole tile becomes a button — a drill-through
+   * into whatever produced this number, instead of a dead-end count. */
+  onClick?: () => void
 }
 
 /** Compact KPI tile: label, big value, optional icon chip and trend pill. */
-export function StatCard({ label, value, icon: Icon, accent = 'primary', trend, hint, className }: StatCardProps) {
+export function StatCard({ label, value, icon: Icon, accent = 'primary', trend, hint, className, onClick }: StatCardProps) {
   const up = (trend ?? 0) >= 0
   return (
-    <Card className={cn('overflow-hidden transition-shadow hover:shadow-md', className)}>
+    <Card
+      className={cn('overflow-hidden transition-shadow hover:shadow-md', onClick && 'cursor-pointer', className)}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}
+    >
       <CardContent className="p-5">
         <div className="flex items-start justify-between gap-3">
           <p className="text-sm font-medium text-muted-foreground">{label}</p>

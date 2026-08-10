@@ -69,6 +69,7 @@ const ACTION_LABELS: Record<string, string> = {
   result_generate: 'Generate Results', payroll_view: 'View Payroll', template_manage: 'Manage Templates',
   admit_card_generate: 'Generate Admit Cards', credentials_manage: 'Reset Login',
   homeroom_manage: 'Manage Homeroom Assignments',
+  exit_manage: 'Manage Exit',
 }
 
 export default function RolePermissionsPage() {

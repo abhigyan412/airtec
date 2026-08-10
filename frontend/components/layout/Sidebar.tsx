@@ -8,7 +8,7 @@ import {
   MessageSquare, Award, Clock, Library, Briefcase, Settings as SettingsIcon,
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
-  Network, UserCheck2, Send, Grid3X3, User, Layers, Receipt, Tag,
+  Network, UserCheck2, Send, Grid3X3, User, Layers, Receipt, Tag, FileText,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -115,6 +115,7 @@ const NAV: NavItem[] = [
       { label: 'My Attendance', href: '/hr/my-attendance', icon: Clock },
       { label: 'My Leave', href: '/hr/my-leave', icon: CalendarDays },
       { label: 'My Payslips', href: '/hr/my-payslips', icon: CreditCard },
+      { label: 'My Documents', href: '/hr/my-documents', icon: FileText },
       { label: 'Permissions', href: '/hr/permissions', icon: ShieldCheck, requireAny: ['role.manage', 'role.assign'] },
     ],
   },

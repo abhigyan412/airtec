@@ -5,7 +5,7 @@ import { hrmsApi } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
 import {
   ArrowLeft, Users, Calendar, IndianRupee, Building2, BarChart3, UserMinus,
-  UserCheck, FileWarning, Clock, Send, Printer, Download, Wallet,
+  UserCheck, FileWarning, Clock, Send, Printer, Download, Wallet, Briefcase,
 } from 'lucide-react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -15,6 +15,7 @@ import { Skeleton as UiSkeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { HrQuickNav } from '@/components/hr/HrQuickNav'
+import { StatCard } from '@/components/shared/StatCard'
 
 // Theme-aware chart palette (reads well in light + dark).
 const CHART_COLORS = [
@@ -217,6 +218,23 @@ export default function HRReportsPage() {
             </>
           }
         />
+      </div>
+
+      {/* Top KPI strip — the five headline numbers already computed by
+          analytics.kpis and used in the CSV export, surfaced here too
+          instead of only existing inside a downloaded file. */}
+      <div className="grid grid-cols-2 gap-3 no-print sm:grid-cols-5">
+        {l4 ? (
+          Array.from({ length: 5 }).map((_, i) => <UiSkeleton key={i} className="h-[124px] rounded-xl" />)
+        ) : (
+          <>
+            <StatCard label="Attrition Rate" value={`${analytics?.kpis?.attrition_rate_pct ?? 0}%`} icon={UserMinus} accent="destructive" />
+            <StatCard label="Avg Attendance" value={`${analytics?.kpis?.avg_attendance_pct ?? 0}%`} icon={UserCheck} accent="success" />
+            <StatCard label="Total Payroll YTD" value={formatCurrency(Number(analytics?.kpis?.total_payroll_ytd ?? 0))} icon={Wallet} accent="primary" />
+            <StatCard label="Open Positions" value={analytics?.kpis?.open_positions ?? 0} icon={Briefcase} accent="info" />
+            <StatCard label="Documents Expiring" value={analytics?.kpis?.documents_expiring ?? 0} icon={FileWarning} accent="warning" />
+          </>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">

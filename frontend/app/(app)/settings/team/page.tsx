@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { teamApi, rbacApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
 import { UserPlus, Key, Loader2, Copy, Check, ShieldCheck, ShieldAlert, Power, Shield, Plus, Settings as SettingsIcon } from 'lucide-react'
 import { toast } from 'sonner'
@@ -55,6 +56,7 @@ const ROLE_COLORS: Record<string, string> = {
 
 export default function TeamPage() {
   const qc = useQueryClient()
+  const { user: currentUser } = useAuth()
   const [showInvite, setShowInvite] = useState(false)
   const [resetTarget, setResetTarget] = useState<any>(null)
   const [rolesTarget, setRolesTarget] = useState<any>(null)
@@ -200,10 +202,11 @@ export default function TeamPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            disabled={u.id === currentUser?.id}
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive disabled:opacity-30 disabled:hover:text-muted-foreground"
                             onClick={() => { if (confirm(`Deactivate ${u.full_name}?`)) deactivateMutation.mutate(u.id) }}
-                            title="Deactivate"
-                            aria-label="Deactivate"
+                            title={u.id === currentUser?.id ? "You can't deactivate your own account" : 'Deactivate'}
+                            aria-label={u.id === currentUser?.id ? "You can't deactivate your own account" : 'Deactivate'}
                           >
                             <Power className="h-4 w-4" />
                           </Button>
@@ -239,6 +242,7 @@ export default function TeamPage() {
 function RoleManagerModal({ user, extraRoles, onClose }: { user: any, extraRoles: string[], onClose: () => void }) {
   const qc = useQueryClient()
   const [departmentScope, setDepartmentScope] = useState('')
+  const [stipendAmount, setStipendAmount] = useState('')
 
   const { data: allRoles, isLoading } = useQuery({
     queryKey: ['rbac-roles'],
@@ -246,10 +250,10 @@ function RoleManagerModal({ user, extraRoles, onClose }: { user: any, extraRoles
   })
 
   const assignMutation = useMutation({
-    mutationFn: (roleId: string) => teamApi.assignRole(user.id, roleId, departmentScope || undefined),
+    mutationFn: (roleId: string) => teamApi.assignRole(user.id, roleId, departmentScope || undefined, Number(stipendAmount) || undefined),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['team-extra-roles'] })
-      toast.success(departmentScope ? `Role assigned, restricted to ${departmentScope}` : 'Role assigned')
+      toast.success(stipendAmount ? `Role assigned with a ${stipendAmount}/month stipend` : 'Role assigned')
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
   })
@@ -281,6 +285,12 @@ function RoleManagerModal({ user, extraRoles, onClose }: { user: any, extraRoles
           <Input value={departmentScope} onChange={e => setDepartmentScope(e.target.value)}
             placeholder="e.g. Academics — leave blank for school-wide" />
           <p className="text-xs text-muted-foreground">Only meaningful for roles carrying Staff View/Edit — applies to whichever role you click "Assign" for below.</p>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Recurring monthly stipend (optional)</Label>
+          <Input type="number" min="0" value={stipendAmount} onChange={e => setStipendAmount(e.target.value)}
+            placeholder="e.g. 2000 — leave blank for none" />
+          <p className="text-xs text-muted-foreground">Paid as a named earnings line on every payslip while this role assignment lasts — applies to whichever role you click "Assign" for below.</p>
         </div>
         {isLoading ? (
           <Skeleton className="h-32 w-full rounded-xl" />

@@ -3,8 +3,9 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { usePermissions } from '@/lib/usePermissions'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, Plus, Calendar, Check, X, AlertTriangle, Ban, ClipboardList, ChevronDown, Settings, Gift } from 'lucide-react'
+import { ArrowLeft, Plus, Calendar, Check, X, AlertTriangle, Ban, ClipboardList, ChevronDown, Settings, Gift, RefreshCw, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { ApplyLeaveModal } from '@/components/hr/ApplyLeaveModal'
@@ -33,7 +34,12 @@ export default function LeavePage() {
   const [showManageTypes, setShowManageTypes] = useState(false)
   const [showRequestCompOff, setShowRequestCompOff] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const isAdmin = ['school_admin', 'principal'].includes(user?.role ?? '')
+  // Permission-based, not role-hardcoded — any role holding staff.leave_approve
+  // (Principal/School Admin by default, but also HR or any custom role it's
+  // assigned to) reaches the approval queue, matching what the backend
+  // actually gates this on (requirePermissionV2('staff.leave_approve')).
+  const { can } = usePermissions()
+  const isAdmin = can('staff.leave_approve')
 
   const { data: balances, isLoading: balancesLoading } = useQuery({
     queryKey: ['leave-balances', user?.id],
@@ -83,6 +89,24 @@ export default function LeavePage() {
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
   })
 
+  const accrualMutation = useMutation({
+    mutationFn: () => hrmsApi.leavePolicy.runAccrual(),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['leave-balances'] })
+      toast.success(`Accrual run — checked ${res.data.checked} leave type(s), credited ${res.data.credited} balance(s)`)
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Accrual run failed'),
+  })
+
+  const yearEndMutation = useMutation({
+    mutationFn: () => hrmsApi.leavePolicy.runYearEnd(),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['leave-balances'] })
+      toast.success(`Year-end rollover run — checked ${res.data.checked} leave type(s), processed ${res.data.processed} balance(s)`)
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Year-end rollover failed'),
+  })
+
   const compOffActionMutation = useMutation({
     mutationFn: ({ id, status }: any) => hrmsApi.compOff.workflowAction(id, status),
     onSuccess: () => {
@@ -119,6 +143,20 @@ export default function LeavePage() {
               {isAdmin && (
                 <Button variant="outline" onClick={() => setShowManageTypes(true)}>
                   <Settings className="h-4 w-4" /> Manage Leave Types
+                </Button>
+              )}
+              {isAdmin && (
+                <Button variant="outline" onClick={() => {
+                  if (confirm('Run the monthly accrual sweep now? It normally runs automatically on the 1st — this is only needed if a scheduled run was missed.')) accrualMutation.mutate()
+                }} disabled={accrualMutation.isPending}>
+                  {accrualMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Run Accrual
+                </Button>
+              )}
+              {isAdmin && (
+                <Button variant="outline" onClick={() => {
+                  if (confirm('Run year-end carry-forward/encashment for the current year now? It normally runs automatically on Jan 1st.')) yearEndMutation.mutate()
+                }} disabled={yearEndMutation.isPending}>
+                  {yearEndMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Run Year-End Rollover
                 </Button>
               )}
               {!isAdmin && (
@@ -192,6 +230,11 @@ export default function LeavePage() {
                           </div>
                           <p className="mt-1 pl-[22px] text-xs text-muted-foreground">{formatDate(lr.from_date)} → {formatDate(lr.to_date)} · {lr.total_days} day(s)</p>
                           {lr.reason && <p className="mt-1 pl-[22px] text-xs text-muted-foreground">{lr.reason}</p>}
+                          {lr.exceeds_balance && (
+                            <p className="mt-1.5 flex items-center gap-1 pl-[22px] text-xs font-medium text-warning">
+                              <Ban className="h-3 w-3" /> Approving pushes the days beyond remaining balance to Leave Without Pay.
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>

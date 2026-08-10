@@ -340,7 +340,10 @@ router.post('/:id/roles', requirePermissionV2('role.assign'),
     // — unset means this assignment grants the role school-wide, today's
     // existing behavior. Only meaningful for roles carrying staff.view/
     // staff.edit, but harmless to store against any role.
-    const { role_id, department_scope } = req.body
+    // Stage 9: an optional recurring monthly stipend for THIS assignment
+    // — the same role could carry a different stipend (or none) for a
+    // different person, so it's stored on the assignment, not the role.
+    const { role_id, department_scope, stipend_amount } = req.body
     const school_id = req.user!.school_id
 
     if (!role_id) return res.status(400).json({ success: false, error: 'role_id required' })
@@ -353,8 +356,11 @@ router.post('/:id/roles', requirePermissionV2('role.assign'),
 
     const { data, error } = await supabase
       .from('user_roles')
-      .insert({ user_id: id, role_id, school_id, department_scope: department_scope || null, assigned_at: new Date().toISOString() })
-      .select('id, role_id, roles(name)')
+      .insert({
+        user_id: id, role_id, school_id, department_scope: department_scope || null,
+        stipend_amount: stipend_amount || null, assigned_at: new Date().toISOString(),
+      })
+      .select('id, role_id, stipend_amount, roles(name)')
       .single()
 
     if (error) {
@@ -365,6 +371,24 @@ router.post('/:id/roles', requirePermissionV2('role.assign'),
     }
 
     res.status(201).json({ success: true, data })
+  })
+)
+
+// ── PATCH /team/:id/roles/:roleId/stipend - set/change the recurring
+// stipend on an existing role assignment (or clear it with null/0).
+router.patch('/:id/roles/:roleId/stipend', requirePermissionV2('role.assign'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id, roleId } = req.params
+    const { stipend_amount } = req.body
+    const school_id = req.user!.school_id
+
+    const { data, error } = await supabase.from('user_roles')
+      .update({ stipend_amount: stipend_amount || null })
+      .eq('user_id', id).eq('role_id', roleId).eq('school_id', school_id)
+      .select('id, role_id, stipend_amount, roles(name)').maybeSingle()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    if (!data) return res.status(404).json({ success: false, error: 'Role assignment not found' })
+    res.json({ success: true, data })
   })
 )
 
