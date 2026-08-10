@@ -185,7 +185,7 @@ router.delete('/subjects/:id', requirePermissionV2('exam.schedule'),
 // ── EXAM TIME SLOTS — school-wide reusable named windows (e.g. "Morning
 // Session · 9:00-12:00"), picked by name instead of re-typing the same
 // start/end time on every subject/every exam.
-router.get('/time-slots', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/time-slots', requirePermissionV2('exam.schedule'), asyncHandler(async (req: AuthRequest, res: Response) => {
     const { data, error } = await supabase
         .from('exam_time_slots').select('*').eq('school_id', req.user!.school_id).order('start_time')
     if (error) return res.status(500).json({ success: false, error: error.message })
@@ -215,7 +215,7 @@ router.delete('/time-slots/:id', requirePermissionV2('exam.schedule'),
 // calendar is structurally fixed year to year; only actual dates shift.
 // POST /templates/:id/apply below is what turns a blueprint into a real
 // exams row + its exam_subjects, in one call instead of one-at-a-time.
-router.get('/templates', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/templates', requirePermissionV2('exam.schedule'), asyncHandler(async (req: AuthRequest, res: Response) => {
     const { data, error } = await supabase
         .from('exam_templates')
         .select('*, exam_template_subjects(*, classes(name), exam_time_slots(name, start_time, end_time))')

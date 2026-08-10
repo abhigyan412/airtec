@@ -8,7 +8,7 @@ import {
   MessageSquare, Award, Clock, Library, Briefcase, Settings as SettingsIcon,
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
-  Network, UserCheck2, Send, Grid3X3, User, Layers, Receipt, Tag, FileText,
+  Network, UserCheck2, Send, Grid3X3, User, Layers, Receipt, Tag, FileText, Lock,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -35,6 +35,12 @@ interface NavItem {
    *  under "Recruitment") — the nav tree itself stays flat/one-level,
    *  this is styling only. */
   indent?: boolean
+  /** Permission required to actually open this item. Unlike `permission`
+   *  (which hides the item outright), lacking this one still shows the
+   *  entry — greyed out with a lock icon and no navigation — so a user
+   *  knows the feature exists without being able to silently hit a 403
+   *  after the page loads. */
+  lockUnless?: string
 }
 
 // Grouped navigation mapped to airtec's real routes and role_permissions_v2
@@ -82,7 +88,7 @@ const NAV: NavItem[] = [
     children: [
       { label: 'All Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
       { label: 'Results', href: '/exams/results', icon: BarChart3, permission: 'exam.view', indent: true },
-      { label: 'Examination Settings', href: '/exams/templates', icon: SettingsIcon, permission: 'exam.view', indent: true },
+      { label: 'Examination Settings', href: '/exams/templates', icon: SettingsIcon, permission: 'exam.view', lockUnless: 'exam.schedule', indent: true },
     ],
   },
   { label: 'Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true },
@@ -153,6 +159,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       return true
     },
     [can, canAny, isRole, isSuperRole, isSubjectOnlyTeacher],
+  )
+
+  const locked = React.useCallback(
+    (item: NavItem): boolean => (item.lockUnless ? !isSuperRole && !can(item.lockUnless) : false),
+    [can, isSuperRole],
   )
 
   // Only the single most-specific nav entry may be "active". Without this,
@@ -282,6 +293,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 expanded={expanded}
                 onToggle={toggle}
                 isActive={isActive}
+                isLocked={locked}
                 onClose={onClose}
               />
             )
@@ -297,6 +309,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               expanded={expanded}
               onToggle={toggle}
               isActive={isActive}
+              isLocked={locked}
               onClose={onClose}
             />
           ))}
@@ -311,18 +324,32 @@ function NavEntry({
   expanded,
   onToggle,
   isActive,
+  isLocked,
   onClose,
 }: {
   item: NavItem
   expanded: string[]
   onToggle: (label: string) => void
   isActive: (href: string) => boolean
+  isLocked: (item: NavItem) => boolean
   onClose: () => void
 }) {
   const Icon = item.icon
   const isOpen = expanded.includes(item.label)
 
   if (item.href) {
+    if (isLocked(item)) {
+      return (
+        <div
+          className="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground/50"
+          title="You don't have permission to open this"
+        >
+          <Icon className="h-4 w-4 shrink-0" />
+          <span className="flex-1">{item.label}</span>
+          <Lock className="h-3.5 w-3.5 shrink-0" />
+        </div>
+      )
+    }
     const active = isActive(item.href)
     return (
       <Link
@@ -365,6 +392,22 @@ function NavEntry({
           {item.children.map((child) => {
             const ChildIcon = child.icon
             const active = child.href ? isActive(child.href) : false
+            if (isLocked(child)) {
+              return (
+                <div
+                  key={child.label}
+                  className={cn(
+                    'flex cursor-not-allowed items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground/50',
+                    child.indent && 'ml-3 border-l border-border/60 pl-2.5 text-[13px]',
+                  )}
+                  title="You don't have permission to open this"
+                >
+                  <ChildIcon className={cn('shrink-0', child.indent ? 'h-3 w-3' : 'h-3.5 w-3.5')} />
+                  <span className="flex-1">{child.label}</span>
+                  <Lock className="h-3 w-3 shrink-0" />
+                </div>
+              )
+            }
             return (
               <Link
                 key={child.label}
