@@ -1,8 +1,8 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth'
-import { api } from '@/lib/api'
+import { api, authApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { School, Users, Shield, Bell, Loader2, CheckCircle, Settings as SettingsIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -68,7 +68,7 @@ export default function SettingsPage() {
 }
 
 function SchoolProfileTab() {
-  const { user } = useAuth()
+  const { user, refreshUser } = useAuth()
   const school = (user as any)?.schools
   const [form, setForm] = useState({
     name: school?.name ?? '',
@@ -80,13 +80,39 @@ function SchoolProfileTab() {
     affiliation_no: school?.affiliation_no ?? '',
     established_year: school?.established_year ?? '',
   })
+  const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
+  // The fetched school profile arrives asynchronously (after this
+  // component's first render, since useAuth's user starts null) — without
+  // this the form would be permanently stuck on the empty initial state
+  // it was constructed with.
+  useEffect(() => {
+    if (!school) return
+    setForm({
+      name: school.name ?? '', city: school.city ?? '', state: school.state ?? '',
+      phone: school.phone ?? '', email: school.email ?? '',
+      affiliation_board: school.affiliation_board ?? '', affiliation_no: school.affiliation_no ?? '',
+      established_year: school.established_year ?? '',
+    })
+  }, [school])
+
   const handleSave = async () => {
-    // In a real app, call PATCH /api/schools/:id
-    setSaved(true)
-    toast.success('School profile updated')
-    setTimeout(() => setSaved(false), 2000)
+    setSaving(true)
+    try {
+      await authApi.updateSchoolProfile({
+        ...form,
+        established_year: form.established_year === '' ? undefined : Number(form.established_year),
+      })
+      await refreshUser()
+      setSaved(true)
+      toast.success('School profile updated')
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Failed to update school profile')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -148,8 +174,8 @@ function SchoolProfileTab() {
         </div>
       </CardContent>
       <CardFooter className="justify-end border-t border-border pt-6">
-        <Button onClick={handleSave}>
-          {saved ? <><CheckCircle className="h-4 w-4" /> Saved!</> : 'Save Changes'}
+        <Button onClick={handleSave} disabled={saving}>
+          {saving ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving...</> : saved ? <><CheckCircle className="h-4 w-4" /> Saved!</> : 'Save Changes'}
         </Button>
       </CardFooter>
     </Card>

@@ -160,12 +160,43 @@ router.post('/refresh', asyncHandler(async (req: Request, res: Response) => {
 router.get('/me', authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase
     .from('users')
-    .select('*, schools(id, name, logo_url, affiliation_board, city, state)')
+    .select('*, schools(id, name, logo_url, affiliation_board, affiliation_no, established_year, address, city, state, pincode, phone, email, website)')
     .eq('id', req.user!.id)
     .single()
 
   if (error) return res.status(404).json({ success: false, error: 'Profile not found' })
 
+  res.json({ success: true, data })
+}))
+
+const SchoolProfileSchema = z.object({
+  name: z.string().min(2).optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  phone: z.string().optional(),
+  email: z.string().email().optional().or(z.literal('')),
+  affiliation_board: z.string().optional(),
+  affiliation_no: z.string().optional(),
+  established_year: z.coerce.number().int().optional(),
+})
+
+// ── PATCH /auth/school-profile — the "School Information" screen
+// reachable from the header's Profile menu. Was a client-side stub
+// before this (a "Save Changes" button that just flipped a checkmark
+// icon for 2 seconds and toasted success — nothing was ever sent to the
+// server, so a school admin editing their own registration details had
+// no way to actually persist them). school_admin/principal only, same
+// gate as /auth/invite-user just above.
+router.patch('/school-profile', authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (!['school_admin', 'principal'].includes(req.user!.role)) {
+    return res.status(403).json({ success: false, error: 'Not authorized to edit the school profile' })
+  }
+  const body = SchoolProfileSchema.parse(req.body)
+  const { data, error } = await supabase
+    .from('schools').update(body).eq('id', req.user!.school_id)
+    .select('id, name, logo_url, affiliation_board, affiliation_no, established_year, address, city, state, pincode, phone, email, website')
+    .single()
+  if (error) return res.status(400).json({ success: false, error: error.message })
   res.json({ success: true, data })
 }))
 

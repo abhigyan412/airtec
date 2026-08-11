@@ -13,6 +13,16 @@ interface User {
     id: string
     name: string
     logo_url?: string
+    affiliation_board?: string
+    affiliation_no?: string
+    established_year?: number
+    address?: string
+    city?: string
+    state?: string
+    pincode?: string
+    phone?: string
+    email?: string
+    website?: string
   }
 }
 
@@ -22,6 +32,10 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<User>
   logout: () => void
   isRole: (...roles: string[]) => boolean
+  // Re-pulls /auth/me and updates the in-memory user — used after
+  // editing the school profile so the header/settings page reflect what
+  // was actually saved instead of stale data from the initial page load.
+  refreshUser: () => Promise<void>
 }
 
 // Roles that get an ownership-scoped view of their own child's data
@@ -80,8 +94,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isRole = (...roles: string[]) => !!user && roles.includes(user.role)
 
+  const refreshUser = async () => {
+    const res = await authApi.me()
+    setUser(res.data)
+    localStorage.setItem('airtec_user', JSON.stringify(res.data))
+  }
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout, isRole }}>
+    <AuthContext.Provider value={{ user, isLoading, login, logout, isRole, refreshUser }}>
       {children}
     </AuthContext.Provider>
   )

@@ -101,6 +101,8 @@ export const authApi = {
     api.post('/auth/register-school', data).then(r => r.data),
   inviteUser: (data: any) =>
     api.post('/auth/invite-user', data).then(r => r.data),
+  updateSchoolProfile: (data: any) =>
+    api.patch('/auth/school-profile', data).then(r => r.data),
 }
 
 export const certificateApi = {
