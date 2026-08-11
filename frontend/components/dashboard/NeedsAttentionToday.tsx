@@ -77,7 +77,7 @@ export function NeedsAttentionToday() {
       label: 'Pending TC Requests',
       count: pendingTcCount,
       sub: pendingTcCount > 0 ? 'Awaiting approval' : 'Nothing pending',
-      href: '/students',
+      href: '/students?tc_status=pending',
     },
     canFees && {
       key: 'fees',

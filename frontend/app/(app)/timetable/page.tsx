@@ -498,7 +498,7 @@ export default function TimetablePage() {
 // already started. Cross-references the timetable against today's
 // staff check-in/out times (HR → Attendance), which otherwise never
 // talk to each other. Polls every 60s since "right now" keeps moving.
-function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (day: number, period: number) => void }) {
+function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (dayOfWeek: number, flagged: any) => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['timetable-attention-required'],
     queryFn: () => timetableApi.attentionRequired().then((r: any) => r.data),
@@ -573,7 +573,7 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (day: 
                 {f.reason_label}
               </span>
             </div>
-            <Button size="sm" onClick={() => onFindSubstitute(data.day_of_week, f.period_number)}>
+            <Button size="sm" onClick={() => onFindSubstitute(data.day_of_week, f)}>
               Find Substitute
             </Button>
           </div>
@@ -594,14 +594,21 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (day: 
 function FreeFacultyView() {
   const jsDay = new Date().getDay() // 0=Sun..6=Sat; this schema's day_of_week is 1=Mon..6=Sat
   const todayDayOfWeek = jsDay === 0 ? 1 : jsDay
+  const todayDateStr = new Date().toISOString().split('T')[0]
   const [day, setDay] = useState(todayDayOfWeek)
   const [period, setPeriod] = useState<number | ''>('')
   const [subjectFilter, setSubjectFilter] = useState('')
   const [autoPicked, setAutoPicked] = useState(false)
+  const [substituteFor, setSubstituteFor] = useState<any | null>(null)
+
+  // Attendance only tells us who's actually in today — browsing a
+  // hypothetical Wednesday from some other day has no attendance to
+  // check against, so only send it when the day being viewed IS today.
+  const attendanceDate = day === todayDayOfWeek ? todayDateStr : undefined
 
   const { data, isLoading } = useQuery({
-    queryKey: ['free-faculty', day, period],
-    queryFn: () => timetableApi.freeFaculty(day, period === '' ? undefined : period).then((r: any) => r.data),
+    queryKey: ['free-faculty', day, period, attendanceDate],
+    queryFn: () => timetableApi.freeFaculty(day, period === '' ? undefined : period, attendanceDate).then((r: any) => r.data),
   })
 
   useEffect(() => {
@@ -621,10 +628,24 @@ function FreeFacultyView() {
   const allSubjects = Array.from(new Set(freeTeachers.flatMap((t: any) => t.subjects_today as string[]))).sort()
   const shownFree = subjectFilter ? freeTeachers.filter(t => t.subjects_today.includes(subjectFilter)) : freeTeachers
   const selectedPeriodInfo = availablePeriods.find((p: any) => p.period_number === period)
+  // The day/period pickers let you browse ANY slot — yesterday's last
+  // period, next Friday, whatever — so "Teaching Right Now" is only true
+  // when the slot being shown actually contains this exact moment. Saying
+  // "right now" unconditionally is what made a 2:34pm view of a 9:40am
+  // period (school already let out for the day) read as a live, actionable
+  // substitute search when it's really just browsing history.
+  const nowStr = new Date().toTimeString().slice(0, 8)
+  const isLiveSlot = day === todayDayOfWeek && !!selectedPeriodInfo &&
+    selectedPeriodInfo.start_time <= nowStr && nowStr <= selectedPeriodInfo.end_time
+  const periodLabel = selectedPeriodInfo ? `P${selectedPeriodInfo.period_number} (${selectedPeriodInfo.start_time?.slice(0, 5)}–${selectedPeriodInfo.end_time?.slice(0, 5)})` : ''
 
   return (
     <div className="space-y-5">
-      <AttentionRequiredPanel onFindSubstitute={(d, p) => { setDay(d); setPeriod(p); setAutoPicked(true) }} />
+      <AttentionRequiredPanel onFindSubstitute={(d, f) => { setDay(d); setPeriod(f.period_number); setAutoPicked(true); setSubstituteFor({ ...f, day_of_week: d }) }} />
+
+      {substituteFor && (
+        <SubstituteModal flagged={substituteFor} onClose={() => setSubstituteFor(null)} />
+      )}
 
       <div className="bg-card rounded-2xl border border-border p-5 flex flex-wrap items-center gap-x-6 gap-y-3">
         <div className="flex items-center gap-2">
@@ -676,6 +697,15 @@ function FreeFacultyView() {
         )}
       </div>
 
+      {period !== '' && !isLiveSlot && (
+        <div className="flex items-center gap-2 rounded-xl bg-muted/50 px-4 py-2.5 text-xs text-muted-foreground">
+          <Clock className="w-3.5 h-3.5 shrink-0" />
+          {day === todayDayOfWeek
+            ? `You're viewing ${periodLabel}, not the current time — this isn't a live "who's free right now" picture.`
+            : `You're viewing ${DAYS[day - 1]} ${periodLabel} — a different day, not live attendance.`}
+        </div>
+      )}
+
       {isLoading ? (
         // Two side-by-side panels (Free / Teaching) land here.
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -698,7 +728,7 @@ function FreeFacultyView() {
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <h3 className="font-semibold text-foreground flex items-center gap-2">
                 <UserCheck className="w-4 h-4 text-success" />
-                Free {selectedPeriodInfo ? `— P${selectedPeriodInfo.period_number} (${selectedPeriodInfo.start_time?.slice(0,5)}–${selectedPeriodInfo.end_time?.slice(0,5)})` : ''}
+                Free {periodLabel ? `— ${periodLabel}` : ''}
               </h3>
               <span className="text-xs text-muted-foreground">{shownFree.length}</span>
             </div>
@@ -733,7 +763,8 @@ function FreeFacultyView() {
           <div className="bg-card rounded-2xl border border-border overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <h3 className="font-semibold text-foreground flex items-center gap-2">
-                <User className="w-4 h-4 text-muted-foreground" /> Teaching Right Now
+                <User className="w-4 h-4 text-muted-foreground" />
+                {isLiveSlot ? 'Teaching Right Now' : `Teaching ${periodLabel ? `— ${periodLabel}` : ''}`}
               </h3>
               <span className="text-xs text-muted-foreground">{busyTeachers.length}</span>
             </div>
@@ -758,6 +789,85 @@ function FreeFacultyView() {
         </div>
       )}
     </div>
+  )
+}
+
+// ── SUBSTITUTE SUGGESTIONS MODAL — the actual answer behind "Find
+// Substitute": who's present today, free this exact period, and
+// qualified (teaches this subject somewhere on their weekly timetable).
+// Falls back to "free but different subject" when no qualified match
+// exists, rather than a dead end.
+function SubstituteModal({ flagged, onClose }: { flagged: any; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['timetable-substitutes', flagged.day_of_week, flagged.period_number, flagged.subject_name, flagged.teacher_id],
+    queryFn: () => timetableApi.substitutes(flagged.day_of_week, flagged.period_number, flagged.subject_name, flagged.teacher_id).then((r: any) => r.data),
+  })
+
+  const suggestions: any[] = data?.suggestions ?? []
+  const otherFree: any[] = data?.other_free ?? []
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Find a Substitute</DialogTitle>
+        </DialogHeader>
+        <div className="mb-3 rounded-xl bg-muted/50 p-3 text-sm">
+          <p className="font-semibold text-foreground">
+            {flagged.class_name}{flagged.section_name ? ` - ${flagged.section_name}` : ''} · {flagged.subject_name}
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            P{flagged.period_number} · {flagged.start_time?.slice(0, 5)}–{flagged.end_time?.slice(0, 5)} · usually {flagged.teacher_name}
+          </p>
+        </div>
+
+        {isLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 w-full rounded-xl" />)}
+          </div>
+        ) : suggestions.length > 0 ? (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Teaches {flagged.subject_name} · free now</p>
+            {suggestions.map((t: any) => (
+              <div key={t.id} className="flex items-center justify-between rounded-xl border border-border p-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">{t.full_name}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+                    <BookOpen className="w-3 h-3" /> {t.subjects.join(', ')}
+                  </p>
+                </div>
+                <span className="text-[11px] font-semibold text-success bg-success/10 rounded-full px-2 py-0.5">Present</span>
+              </div>
+            ))}
+          </div>
+        ) : otherFree.length > 0 ? (
+          <div className="space-y-2">
+            <div className="rounded-xl bg-warning/10 text-warning text-xs px-3 py-2">
+              No one who teaches {flagged.subject_name} is free right now. Other staff free this period:
+            </div>
+            {otherFree.map((t: any) => (
+              <div key={t.id} className="flex items-center justify-between rounded-xl border border-border p-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">{t.full_name}</p>
+                  {t.subjects.length > 0 && (
+                    <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+                      <BookOpen className="w-3 h-3" /> {t.subjects.join(', ')}
+                    </p>
+                  )}
+                </div>
+                <span className="text-[11px] font-semibold text-success bg-success/10 rounded-full px-2 py-0.5">Present</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState icon={UserCheck} title="No one is available" description="Every present teacher is already teaching this period." className="py-8" />
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

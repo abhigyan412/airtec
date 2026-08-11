@@ -50,10 +50,16 @@ export default function StudentsPage() {
   const [classId, setClassId] = useState('')
   const [sectionId, setSectionId] = useState('')
   const [page, setPage] = useState(1)
+  // Seeded from ?tc_status= — the dashboard's "Pending TC Requests" tile
+  // used to just link to the unfiltered roster, leaving whoever clicked
+  // it to hunt through every student for the handful with an actual
+  // pending request.
+  const [tcStatus, setTcStatus] = useState(searchParams.get('tc_status') ?? '')
 
   useEffect(() => {
     const q = searchParams.get('search') ?? ''
     setSearch(q)
+    setTcStatus(searchParams.get('tc_status') ?? '')
     setPage(1)
   }, [searchParams])
 
@@ -69,10 +75,11 @@ export default function StudentsPage() {
   const sections = selectedClassData?.sections ?? []
 
   const { data, isLoading } = useQuery({
-    queryKey: ['students', { search, status, classId, sectionId, page }],
+    queryKey: ['students', { search, status, classId, sectionId, tcStatus, page }],
     queryFn: () => studentsApi.list({
       search: search || undefined, status: status || undefined,
       class_id: classId || undefined, section_id: sectionId || undefined,
+      tc_status: tcStatus || undefined,
       page, limit: 25,
     }),
     placeholderData: (prev: any) => prev,
@@ -113,6 +120,15 @@ export default function StudentsPage() {
           </>
         }
       />
+
+      {tcStatus && (
+        <div className="flex items-center justify-between rounded-xl border border-warning/20 bg-warning/10 px-4 py-2.5 text-sm text-warning">
+          <span>Showing only students with a {tcStatus} Transfer Certificate request.</span>
+          <Link href="/students" className="font-medium underline underline-offset-2 hover:text-warning/80">
+            Clear filter
+          </Link>
+        </div>
+      )}
 
       {/* Filters */}
       <Card className="flex flex-wrap gap-3 p-4">

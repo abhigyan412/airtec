@@ -26,6 +26,38 @@ const SECTIONS = [
   { id: 'parent', label: 'Parent Info', icon: Phone },
 ]
 
+// Module-scope, not defined inside the page component — see the same
+// fix on students/[id]/edit/page.tsx for why: a component defined inside
+// another component's function body gets a new identity every render,
+// so React remounts (and drops focus on) the input after every keystroke.
+function Input({ form, set, label, field, type = 'text', placeholder = '', required = false }: any) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}{required && <span className="ml-0.5 text-destructive">*</span>}</Label>
+      <UiInput type={type} value={form[field]} onChange={e => set(field, e.target.value)}
+        placeholder={placeholder} required={required} />
+    </div>
+  )
+}
+
+function Select({ form, set, label, field, options, required = false }: any) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}{required && <span className="ml-0.5 text-destructive">*</span>}</Label>
+      <UiSelect value={form[field] || undefined} onValueChange={v => set(field, v)}>
+        <SelectTrigger>
+          <SelectValue placeholder="Select..." />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o: any) => (
+            <SelectItem key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</SelectItem>
+          ))}
+        </SelectContent>
+      </UiSelect>
+    </div>
+  )
+}
+
 export default function NewStudentPage() {
   const router = useRouter()
   const qc = useQueryClient()
@@ -60,30 +92,6 @@ export default function NewStudentPage() {
     onError: (err: any) => toast.error(err?.response?.data?.error ?? 'Failed to add student'),
   })
 
-  const Input = ({ label, field, type = 'text', placeholder = '', required = false }: any) => (
-    <div className="space-y-1.5">
-      <Label>{label}{required && <span className="ml-0.5 text-destructive">*</span>}</Label>
-      <UiInput type={type} value={(form as any)[field]} onChange={e => set(field, e.target.value)}
-        placeholder={placeholder} required={required} />
-    </div>
-  )
-
-  const Select = ({ label, field, options, required = false }: any) => (
-    <div className="space-y-1.5">
-      <Label>{label}{required && <span className="ml-0.5 text-destructive">*</span>}</Label>
-      <UiSelect value={(form as any)[field] || undefined} onValueChange={v => set(field, v)}>
-        <SelectTrigger>
-          <SelectValue placeholder="Select..." />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((o: any) => (
-            <SelectItem key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</SelectItem>
-          ))}
-        </SelectContent>
-      </UiSelect>
-    </div>
-  )
-
   return (
     <div className="max-w-3xl space-y-6">
       <div className="flex items-start gap-3">
@@ -116,33 +124,33 @@ export default function NewStudentPage() {
         <CardContent className="p-6 sm:p-8">
           {section === 'personal' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              <Input label="First Name" field="first_name" required placeholder="Rahul" />
-              <Input label="Last Name" field="last_name" required placeholder="Sharma" />
-              <Input label="Date of Birth" field="date_of_birth" type="date" />
-              <Select label="Gender" field="gender" options={['male','female','other']} />
-              <Select label="Blood Group" field="blood_group" options={['A+','A-','B+','B-','AB+','AB-','O+','O-']} />
-              <Input label="Aadhaar Number" field="aadhaar_number" placeholder="xxxx xxxx xxxx" />
+              <Input form={form} set={set} label="First Name" field="first_name" required placeholder="Rahul" />
+              <Input form={form} set={set} label="Last Name" field="last_name" required placeholder="Sharma" />
+              <Input form={form} set={set} label="Date of Birth" field="date_of_birth" type="date" />
+              <Select form={form} set={set} label="Gender" field="gender" options={['male','female','other']} />
+              <Select form={form} set={set} label="Blood Group" field="blood_group" options={['A+','A-','B+','B-','AB+','AB-','O+','O-']} />
+              <Input form={form} set={set} label="Aadhaar Number" field="aadhaar_number" placeholder="xxxx xxxx xxxx" />
               <div className="col-span-2">
-                <Input label="Address" field="permanent_address" placeholder="House No, Street, Area" />
+                <Input form={form} set={set} label="Address" field="permanent_address" placeholder="House No, Street, Area" />
               </div>
-              <Input label="City" field="city" placeholder="Lucknow" />
-              <Input label="State" field="state" placeholder="Uttar Pradesh" />
-              <Input label="Pincode" field="pincode" placeholder="226001" />
-              <Input label="Phone" field="phone" placeholder="+91 98765 43210" />
+              <Input form={form} set={set} label="City" field="city" placeholder="Lucknow" />
+              <Input form={form} set={set} label="State" field="state" placeholder="Uttar Pradesh" />
+              <Input form={form} set={set} label="Pincode" field="pincode" placeholder="226001" />
+              <Input form={form} set={set} label="Phone" field="phone" placeholder="+91 98765 43210" />
               <div className="col-span-2">
-                <Input label="Email" field="email" type="email" placeholder="student@email.com" />
+                <Input form={form} set={set} label="Email" field="email" type="email" placeholder="student@email.com" />
               </div>
             </div>
           )}
 
           {section === 'academic' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              <Select label="Class" field="class_id" required
+              <Select form={form} set={set} label="Class" field="class_id" required
                 options={(classesData ?? []).map((c: any) => ({ value: c.id, label: c.name }))} />
-              <Select label="Section" field="section_id"
+              <Select form={form} set={set} label="Section" field="section_id"
                 options={sections.map((s: any) => ({ value: s.id, label: s.name }))} />
-              <Input label="Roll Number" field="roll_number" placeholder="01" />
-              <Select label="Stream" field="stream"
+              <Input form={form} set={set} label="Roll Number" field="roll_number" placeholder="01" />
+              <Select form={form} set={set} label="Stream" field="stream"
                 options={['Science','Commerce','Arts','General']} />
             </div>
           )}
@@ -155,10 +163,10 @@ export default function NewStudentPage() {
                   Father&apos;s Details
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Input label="Father's Name" field="father_name" placeholder="Mr. Rajesh Sharma" />
-                  <Input label="Father's Phone" field="father_phone" placeholder="+91 98765 43210" />
+                  <Input form={form} set={set} label="Father's Name" field="father_name" placeholder="Mr. Rajesh Sharma" />
+                  <Input form={form} set={set} label="Father's Phone" field="father_phone" placeholder="+91 98765 43210" />
                   <div className="col-span-2">
-                    <Input label="Father's Email" field="father_email" type="email" />
+                    <Input form={form} set={set} label="Father's Email" field="father_email" type="email" />
                   </div>
                 </div>
               </div>
@@ -168,10 +176,10 @@ export default function NewStudentPage() {
                   Mother&apos;s Details
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Input label="Mother's Name" field="mother_name" placeholder="Mrs. Priya Sharma" />
-                  <Input label="Mother's Phone" field="mother_phone" placeholder="+91 98765 43210" />
+                  <Input form={form} set={set} label="Mother's Name" field="mother_name" placeholder="Mrs. Priya Sharma" />
+                  <Input form={form} set={set} label="Mother's Phone" field="mother_phone" placeholder="+91 98765 43210" />
                   <div className="col-span-2">
-                    <Input label="Mother's Email" field="mother_email" type="email" />
+                    <Input form={form} set={set} label="Mother's Email" field="mother_email" type="email" />
                   </div>
                 </div>
               </div>

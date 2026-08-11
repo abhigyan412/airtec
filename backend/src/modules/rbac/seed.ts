@@ -355,3 +355,25 @@ export async function ensureAdmissionApprovalWorkflowDefinition(schoolId: string
     ],
   })
 }
+
+// Same gap as every workflow above — 'Transfer Certificate Workflow' is
+// referenced by name in POST /students/:id/tc but was never wired to
+// call this before startWorkflow(), so every TC request ever created had
+// no workflow_instances row at all: TransferCertificateCard.tsx's
+// pipeline reads workflow?.all_steps, which comes back empty, so no
+// action buttons ever render for the Accountant or Principal — the
+// request just sits at status='pending' forever with no visible way to
+// act on it. action_name values are lowercase/snake_case (not human-
+// readable, unlike Admission's) because both the frontend
+// (STEP_LABELS, the `dues_clearance` button-text branch) and the backend
+// (POST /:id/tc/:tcId/workflow-action's dues_cleared write) key off
+// these exact strings.
+export async function ensureTransferCertificateWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Transfer Certificate Workflow', module: 'sis', entityType: 'transfer_certificate',
+    steps: [
+      { roleName: 'Accountant', actionName: 'dues_clearance' },
+      { roleName: 'Principal', actionName: 'approve' },
+    ],
+  })
+}

@@ -10,6 +10,7 @@ import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr, countWorkingDays }
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 import { buildStudentSearchFilter } from '../../shared/utils/studentSearch'
 import { getTeacherContext } from '../../shared/utils/teacherContext'
+import { ensureTransferCertificateWorkflowDefinition } from '../rbac/seed'
 
 const router = Router()
 
@@ -60,9 +61,27 @@ const BulkPromoteSchema = z.object({
 
 // ── GET /students (list) ────────────────────────────────────
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { page = '1', limit = '20', search, class_id, section_id, status, house_id } = req.query
+  const { page = '1', limit = '20', search, class_id, section_id, status, house_id, tc_status } = req.query
   const { from, to, limit: lim, page: pg } = getPagination(Number(page), Number(limit))
   const school_id = req.user!.school_id
+
+  // Powers the dashboard's "Pending TC Requests" tile — it used to just
+  // link to the unfiltered roster, leaving the admin to hunt for which
+  // 3 of however-many students actually had a pending request. One
+  // query for the matching student ids, then .in() on the main query
+  // below — same idiom as everywhere else in this codebase that needs
+  // to filter students by something outside the students table itself,
+  // and avoids the row-duplication risk of an inner-join filter if a
+  // student ever has more than one transfer_certificates row.
+  let tcStudentIds: string[] | null = null
+  if (tc_status) {
+    const { data: tcRows, error: tcErr } = await supabase
+      .from('transfer_certificates').select('student_id')
+      .eq('school_id', school_id).eq('status', tc_status as string)
+    if (tcErr) return res.status(500).json({ success: false, error: tcErr.message })
+    tcStudentIds = [...new Set((tcRows ?? []).map(r => r.student_id))]
+    if (!tcStudentIds.length) return res.json({ success: true, data: [], meta: { total: 0, page: pg, limit: lim } })
+  }
 
   // Same gap as everywhere else in this sweep: no ownership check, so
   // a parent/student — who does hold student.view — could browse the
@@ -96,6 +115,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     .range(from, to)
 
   if (search) query = query.or(buildStudentSearchFilter(String(search)))
+  if (tcStudentIds) query = query.in('id', tcStudentIds)
   if (teacherSectionIds) query = query.in('section_id', teacherSectionIds)
   if (class_id) query = query.eq('class_id', class_id)
   if (section_id && (!teacherSectionIds || teacherSectionIds.includes(section_id as string))) query = query.eq('section_id', section_id)
@@ -743,15 +763,27 @@ router.get('/promotions', asyncHandler(async (req: AuthRequest, res: Response) =
   if (error) return res.status(500).json({ success: false, error: error.message })
   res.json({ success: true, data })
 }))
+// teacher only, active only — feeds both the Teacher View selector (browse
+// a teacher's weekly timetable) and AddPeriodModal's teacher-assignment
+// dropdown. Neither is a place administrators belong: live timetable data
+// confirms school_admin/principal are never actually assigned a period,
+// so including them here only added noise (an admin nobody assigns
+// anything to, cluttering a picker meant for actual teaching staff) —
+// same reasoning as free-faculty/substitutes above. Resigned/terminated
+// staff are excluded too, for the same reason "Mark Attendance" already does.
 router.get('/timetable/teachers', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase
     .from('users')
-    .select('id, full_name, role')
+    .select('id, full_name, role, staff_profiles!staff_profiles_user_id_fkey(employment_status)')
     .eq('school_id', req.user!.school_id)
-    .in('role', ['teacher', 'school_admin', 'principal'])
+    .eq('role', 'teacher')
     .order('full_name')
   if (error) return res.status(500).json({ success: false, error: error.message })
-  res.json({ success: true, data })
+  const NON_ACTIVE = new Set(['resigned', 'suspended', 'terminated'])
+  const active = (data ?? [])
+    .filter(t => !NON_ACTIVE.has((t as any).staff_profiles?.employment_status))
+    .map(t => ({ id: t.id, full_name: t.full_name, role: t.role }))
+  res.json({ success: true, data: active })
 }))
 
 // ── GET /students/timetable/free-faculty — who's free at a given
@@ -773,20 +805,48 @@ router.get('/timetable/free-faculty', requirePermissionV2('timetable.manage'),
     const school_id = req.user!.school_id
     const day_of_week = Number(req.query.day_of_week)
     const period_number = req.query.period_number ? Number(req.query.period_number) : undefined
+    // Only sent by the frontend when the day being browsed IS today —
+    // staff_attendance is a real calendar date, so there's nothing
+    // meaningful to check it against for a hypothetical "what does a
+    // typical Wednesday look like" query on some other day of the week.
+    const date = req.query.date as string | undefined
 
     if (!day_of_week || day_of_week < 1 || day_of_week > 6) {
       return res.status(400).json({ success: false, error: 'day_of_week (1-6) is required' })
     }
 
-    const [{ data: teachers, error: teachersErr }, { data: dayPeriods, error: periodsErr }] = await Promise.all([
-      supabase.from('users').select('id, full_name, role')
-        .eq('school_id', school_id).in('role', ['teacher', 'school_admin', 'principal']).order('full_name'),
+    const [{ data: teacherRows, error: teachersErr }, { data: dayPeriods, error: periodsErr }, { data: attendanceRows, error: attErr }] = await Promise.all([
+      // teacher only — school_admin/principal are never actually assigned
+      // a period in this schema (confirmed against live timetable_periods
+      // data), so including them here just means an administrator with
+      // zero periods shows up as permanently "free," which isn't a real
+      // substitute candidate. staff_profiles is joined to drop anyone no
+      // longer employed for the same reason "Mark Attendance" already does.
+      supabase.from('users').select('id, full_name, role, staff_profiles!staff_profiles_user_id_fkey(employment_status)')
+        .eq('school_id', school_id).eq('role', 'teacher').order('full_name'),
       supabase.from('timetable_periods')
         .select('teacher_id, period_number, start_time, end_time, subject_name, room, is_break, classes(name), sections(name)')
         .eq('school_id', school_id).eq('day_of_week', day_of_week),
+      date
+        ? supabase.from('staff_attendance').select('user_id, status').eq('school_id', school_id).eq('date', date)
+        : Promise.resolve({ data: [], error: null }),
     ])
     if (teachersErr) return res.status(500).json({ success: false, error: teachersErr.message })
     if (periodsErr) return res.status(500).json({ success: false, error: periodsErr.message })
+    const NON_ACTIVE = new Set(['resigned', 'suspended', 'terminated'])
+    const teachers = (teacherRows ?? []).filter(t => !NON_ACTIVE.has((t as any).staff_profiles?.employment_status))
+    if (attErr) return res.status(500).json({ success: false, error: (attErr as any).message })
+
+    // A teacher out today (absent or on approved leave) isn't actually
+    // available to cover a class, and isn't actually the one standing in
+    // front of their own class either — drop them from both lists rather
+    // than have the timetable (which has no concept of "today") vouch
+    // for someone who isn't in the building.
+    const absentToday = new Set(
+      (attendanceRows ?? []).filter(a => a.status === 'absent' || a.status === 'on_leave').map(a => a.user_id),
+    )
+    const teachersPresent = (teachers ?? []).filter(t => !absentToday.has(t.id))
+    const dayPeriodsPresent = (dayPeriods ?? []).filter(p => !p.teacher_id || !absentToday.has(p.teacher_id))
 
     // Every distinct period slot offered that day, for the period picker —
     // deduped by period_number, keeping the first start/end seen for it.
@@ -815,15 +875,15 @@ router.get('/timetable/free-faculty', requirePermissionV2('timetable.manage'),
       }
     }
 
-    let free = teachers ?? []
+    let free = teachersPresent
     let busy: any[] = []
 
     if (period_number) {
-      const busyThisPeriod = (dayPeriods ?? []).filter(p => p.teacher_id && p.period_number === period_number && !p.is_break)
+      const busyThisPeriod = dayPeriodsPresent.filter(p => p.teacher_id && p.period_number === period_number && !p.is_break)
       const busyTeacherIds = new Set(busyThisPeriod.map(p => p.teacher_id))
-      free = (teachers ?? []).filter(t => !busyTeacherIds.has(t.id))
+      free = teachersPresent.filter(t => !busyTeacherIds.has(t.id))
       busy = busyThisPeriod.map(p => {
-        const t = (teachers ?? []).find(x => x.id === p.teacher_id)
+        const t = teachersPresent.find(x => x.id === p.teacher_id)
         return {
           teacher_id: p.teacher_id, full_name: t?.full_name ?? 'Unknown', subject_name: p.subject_name,
           class_name: (p as any).classes?.name, section_name: (p as any).sections?.name, room: p.room,
@@ -922,6 +982,82 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
 
     const teacherPeriodsInProgress = (periods ?? []).filter(p => p.teacher_id).length
     res.json({ success: true, data: { date: todayDate, day_of_week, periods_in_progress: teacherPeriodsInProgress, flagged: result } })
+  })
+)
+
+// ── GET /students/timetable/substitutes — the actual "who should cover
+// this" answer behind the Find Substitute button. A real suggestion, not
+// just re-showing the free-faculty list: candidates must (a) be marked
+// PRESENT today — not merely "not marked absent", since attention-required
+// itself fires on missing/incomplete check-ins and a substitute has to be
+// someone actually confirmed in the building — (b) have no class of their
+// own in this exact period, and (c) teach this subject somewhere on their
+// WEEKLY timetable (not just today's — a teacher who covers this subject
+// only on other days is still qualified to substitute it today). Falls
+// back to a same-period-free-but-different-subject pool when no subject
+// match exists, so the principal isn't left with an empty screen.
+router.get('/timetable/substitutes', requirePermissionV2('timetable.manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const day_of_week = Number(req.query.day_of_week)
+    const period_number = Number(req.query.period_number)
+    const subject_name = req.query.subject_name as string | undefined
+    const exclude_teacher_id = req.query.exclude_teacher_id as string | undefined
+    const todayDate = toLocalDateStr(new Date())
+
+    if (!day_of_week || day_of_week < 1 || day_of_week > 6 || !period_number) {
+      return res.status(400).json({ success: false, error: 'day_of_week (1-6) and period_number are required' })
+    }
+
+    const [{ data: teacherRows, error: teachersErr }, { data: weekPeriods, error: periodsErr }, { data: attendanceRows, error: attErr }] = await Promise.all([
+      // teacher only, active only — same reasoning as free-faculty above:
+      // a substitute has to be an actual teacher who's actually employed,
+      // not an administrator or someone who's left.
+      supabase.from('users').select('id, full_name, role, staff_profiles!staff_profiles_user_id_fkey(employment_status)')
+        .eq('school_id', school_id).eq('role', 'teacher').order('full_name'),
+      // The WHOLE week, not just this day — subject qualification and
+      // "busy this exact period" both need to be derived from it, and
+      // fetching once avoids a second near-identical query.
+      supabase.from('timetable_periods')
+        .select('teacher_id, day_of_week, period_number, subject_name, is_break')
+        .eq('school_id', school_id),
+      supabase.from('staff_attendance').select('user_id, status').eq('school_id', school_id).eq('date', todayDate),
+    ])
+    if (teachersErr) return res.status(500).json({ success: false, error: teachersErr.message })
+    if (periodsErr) return res.status(500).json({ success: false, error: periodsErr.message })
+    if (attErr) return res.status(500).json({ success: false, error: attErr.message })
+    const NON_ACTIVE = new Set(['resigned', 'suspended', 'terminated'])
+    const teachers = (teacherRows ?? []).filter(t => !NON_ACTIVE.has((t as any).staff_profiles?.employment_status))
+
+    const presentToday = new Set(
+      (attendanceRows ?? []).filter(a => a.status === 'present' || a.status === 'half_day').map(a => a.user_id),
+    )
+    const busyThisPeriod = new Set(
+      (weekPeriods ?? [])
+        .filter(p => p.teacher_id && !p.is_break && p.day_of_week === day_of_week && p.period_number === period_number)
+        .map(p => p.teacher_id as string),
+    )
+    const subjectsByTeacher = new Map<string, Set<string>>()
+    for (const p of weekPeriods ?? []) {
+      if (!p.teacher_id || p.is_break) continue
+      if (!subjectsByTeacher.has(p.teacher_id)) subjectsByTeacher.set(p.teacher_id, new Set())
+      subjectsByTeacher.get(p.teacher_id)!.add(p.subject_name)
+    }
+
+    const eligible = (teachers ?? []).filter(t =>
+      t.id !== exclude_teacher_id && presentToday.has(t.id) && !busyThisPeriod.has(t.id),
+    )
+
+    const decorate = (t: any) => ({ id: t.id, full_name: t.full_name, role: t.role, subjects: [...(subjectsByTeacher.get(t.id) ?? [])].sort() })
+
+    const qualified = subject_name
+      ? eligible.filter(t => subjectsByTeacher.get(t.id)?.has(subject_name)).map(decorate)
+      : eligible.map(decorate)
+    const otherFree = subject_name
+      ? eligible.filter(t => !subjectsByTeacher.get(t.id)?.has(subject_name)).map(decorate)
+      : []
+
+    res.json({ success: true, data: { date: todayDate, day_of_week, period_number, subject_name: subject_name ?? null, suggestions: qualified, other_free: otherFree } })
   })
 )
 
@@ -1126,6 +1262,7 @@ router.post('/:id/tc', requirePermissionV2('tc.generate'),
     // Start the Transfer Certificate Workflow:
     //   step 1: Accountant / dues_clearance
     //   step 2: Principal / approve
+    await ensureTransferCertificateWorkflowDefinition(school_id)
     const wfResult = await startWorkflow({
       schoolId: school_id,
       workflowName: 'Transfer Certificate Workflow',
@@ -1192,7 +1329,20 @@ router.post('/:id/tc/:tcId/workflow-action', asyncHandler(async (req: AuthReques
 
   const beforeStatus = await getWorkflowStatus('transfer_certificate', tcId, school_id)
   const currentStepActionName = beforeStatus?.current_step?.action_name
- 
+
+  // Same gate the frontend already shows (disabled button + fee-due
+  // banner) — enforced here too so it can't be bypassed by calling this
+  // route directly. Reuses the exact fee_invoices/fee_payments math the
+  // Fee Summary card on the student page already shows, not a separate
+  // number that could drift from it.
+  if (status === 'approved' && currentStepActionName === 'dues_clearance') {
+    const studentWithFees = await fetchStudentWithFeeSummary(id, school_id)
+    const feeDue = studentWithFees?.fee_summary?.total_due ?? 0
+    if (feeDue > 0) {
+      return res.status(400).json({ success: false, error: `Cannot confirm dues cleared — ₹${feeDue} still due for this student` })
+    }
+  }
+
   const result = await actOnWorkflow({
     instanceId: instance.id,
     userId: req.user!.id,

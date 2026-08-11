@@ -126,6 +126,15 @@ export default function StudentDetailPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
+          {/* Was previously the last card in this column, below Parent/
+              Guardian — easy to never scroll to, which is exactly why the
+              TC request/approval flow was so hard to find. Leads the
+              column instead, since a pending/in-progress TC is the kind
+              of thing a visit to this page is often actually about. */}
+          <div id="transfer-certificate">
+            <TransferCertificateCard studentId={id} studentStatus={s.status} feeDue={s.fee_summary?.total_due ?? 0} />
+          </div>
+
           <Card title="Personal Information" icon={User}>
             <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
               <Detail label="Date of Birth" value={s.date_of_birth ? formatDate(s.date_of_birth) : '—'} />
@@ -205,12 +214,10 @@ export default function StudentDetailPage() {
               </div>
             </Card>
           )}
-
-          <TransferCertificateCard studentId={id} studentStatus={s.status} />
         </div>
 
         <div className="space-y-5">
-          <Card title="Fee Summary" icon={CreditCard}>
+          <Card title="Fee Summary" icon={CreditCard} id="fee-summary">
             <div className="space-y-3">
               <div className="flex items-center justify-between py-2 border-b border-border">
                 <span className="text-sm text-muted-foreground">Total Billed</span>
@@ -233,6 +240,7 @@ export default function StudentDetailPage() {
               <QuickAction href={`/students/${id}/attendance`} label="View Attendance" />
               <QuickAction href={`/students/${id}/performance`} label="View Performance" />
               <QuickAction href={documentsApi.idCard(id)} label="Print ID Card" external />
+              <QuickAction href="#transfer-certificate" label="Transfer Certificate" />
             </div>
           </Card>
 
@@ -421,9 +429,9 @@ function PhotoUpload({ studentId, currentUrl, initials }: { studentId: string, c
   )
 }
 
-function Card({ title, icon: Icon, children }: { title: string; icon?: any; children: React.ReactNode }) {
+function Card({ title, icon: Icon, children, id }: { title: string; icon?: any; children: React.ReactNode; id?: string }) {
   return (
-    <UICard className="rounded-2xl">
+    <UICard id={id} className="rounded-2xl">
       <CardHeader className="pb-4">
         <CardTitle className="flex items-center gap-2 text-sm">
           {Icon && <Icon className="w-4 h-4 text-muted-foreground" />}

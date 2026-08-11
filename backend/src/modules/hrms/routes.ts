@@ -1337,6 +1337,35 @@ async function syncUnpaidLeaveOnAttendanceChange(schoolId: string, userId: strin
   // delta < 0 with no existing balance row: nothing to reverse, no-op.
 }
 
+// Credits `days` onto the school's real Leave Without Pay balance row for
+// a user/year — creating it if none exists yet. Used when a PAID leave
+// request is approved for more days than the requester actually had left:
+// the overflow needs to land on the same LWP leave_type row
+// syncUnpaidLeaveOnAttendanceChange already maintains, not just let the
+// paid type's own used_days silently exceed its total_days (which is all
+// the old "exceeds_balance" flag ever did — the UI's "pushes the days
+// beyond remaining balance to Leave Without Pay" copy was aspirational,
+// not something the backend actually carried out).
+async function creditUnpaidLeaveDays(schoolId: string, userId: string, year: number, days: number): Promise<void> {
+  if (days <= 0) return
+  const { data: lwpType } = await supabase
+    .from('leave_types').select('id, default_days_per_year, accrual_frequency')
+    .eq('school_id', schoolId).eq('is_paid', false).limit(1).maybeSingle()
+  if (!lwpType) return // no unpaid leave type configured for this school — nothing to credit against
+
+  const { data: balance } = await supabase
+    .from('leave_balances').select('id, used_days').eq('user_id', userId).eq('leave_type_id', lwpType.id).eq('year', year).maybeSingle()
+
+  if (balance) {
+    await supabase.from('leave_balances').update({ used_days: balance.used_days + days }).eq('id', balance.id)
+  } else {
+    await supabase.from('leave_balances').insert({
+      school_id: schoolId, user_id: userId, leave_type_id: lwpType.id, year,
+      total_days: defaultTotalDaysForType(lwpType, year), used_days: days,
+    })
+  }
+}
+
 // GET /hrms/leave-types
 router.get('/leave-types', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase.from('leave_types').select('*').eq('school_id', req.user!.school_id).order('name')
@@ -1584,34 +1613,36 @@ router.patch('/leave-requests/:id', requirePermissionV2('staff.leave_approve'), 
   if (error) return res.status(400).json({ success: false, error: error.message })
 
   // If approved, update leave balance. Warn-but-allow: this still goes
-  // through even if it pushes used_days past total_days — the response
-  // carries that back so the approver sees it happened.
+  // through even if it exceeds what's left — but the overflow now lands
+  // on the school's real Leave Without Pay balance (via
+  // creditUnpaidLeaveDays) instead of just letting the requested paid
+  // type's used_days run past its total_days. A request made directly
+  // against the unpaid type itself (leaveReq.leave_type_id already IS
+  // the LWP type) skips the split — there's nothing to overflow into.
   let exceeds_balance = false
   if (result.completed && result.instance.status === 'approved') {
     const year = new Date(leaveReq.from_date).getFullYear()
-    const { data: balance } = await supabase
-      .from('leave_balances')
-      .select('*')
-      .eq('user_id', leaveReq.user_id)
-      .eq('leave_type_id', leaveReq.leave_type_id)
-      .eq('year', year)
-      .maybeSingle()
+    const [{ data: balance }, { data: requestedType }] = await Promise.all([
+      supabase.from('leave_balances').select('*')
+        .eq('user_id', leaveReq.user_id).eq('leave_type_id', leaveReq.leave_type_id).eq('year', year).maybeSingle(),
+      supabase.from('leave_types').select('default_days_per_year, accrual_frequency, is_paid').eq('id', leaveReq.leave_type_id).single(),
+    ])
+    const total_days_allowed = balance?.total_days ?? (requestedType ? defaultTotalDaysForType(requestedType, year) : 0)
+    const used_before = balance?.used_days ?? 0
+    const remaining = Math.max(0, total_days_allowed - used_before)
+    const withinBalance = requestedType?.is_paid === false ? leaveReq.total_days : Math.min(leaveReq.total_days, remaining)
+    const overflow = leaveReq.total_days - withinBalance
 
     if (balance) {
-      const newUsed = balance.used_days + leaveReq.total_days
-      await supabase.from('leave_balances')
-        .update({ used_days: newUsed })
-        .eq('id', balance.id)
-      exceeds_balance = newUsed > balance.total_days
+      await supabase.from('leave_balances').update({ used_days: used_before + withinBalance }).eq('id', balance.id)
     } else {
-      const { data: lt } = await supabase.from('leave_types').select('default_days_per_year, accrual_frequency').eq('id', leaveReq.leave_type_id).single()
-      const total_days_allowed = lt ? defaultTotalDaysForType(lt, year) : 0
       await supabase.from('leave_balances').insert({
         school_id, user_id: leaveReq.user_id, leave_type_id: leaveReq.leave_type_id, year,
-        total_days: total_days_allowed, used_days: leaveReq.total_days,
+        total_days: total_days_allowed, used_days: withinBalance,
       })
-      exceeds_balance = leaveReq.total_days > total_days_allowed
     }
+    if (overflow > 0) await creditUnpaidLeaveDays(school_id, leaveReq.user_id, year, overflow)
+    exceeds_balance = overflow > 0
   }
 
   if (result.completed) {
@@ -3524,9 +3555,18 @@ router.post('/attendance', requirePermissionV2('staff.attendance_mark'),
     const { data: existingRows } = await supabase.from('staff_attendance').select('user_id, status').eq('school_id', school_id).eq('date', date).in('user_id', userIds)
     const previousStatusByUser = new Map((existingRows ?? []).map(r => [r.user_id, r.status]))
 
+    // "Mark All Present" (and any other present-marking path that
+    // doesn't set an explicit time) leaves check_in blank, which then
+    // reads as "hasn't checked in" everywhere downstream that depends on
+    // it (attention-required, free-faculty once it factors in
+    // attendance) even though the school actually was in session and
+    // everyone was there. Default present staff to the standard 8:00 AM
+    // start rather than leaving that gap — an explicit check_in from the
+    // marking sheet always wins.
     const rows = records.map((r: any) => ({
       school_id, user_id: r.user_id, date, status: r.status,
-      check_in: r.check_in || null, check_out: r.check_out || null,
+      check_in: r.check_in || (r.status === 'present' ? '08:00:00' : null),
+      check_out: r.check_out || null,
       overtime_hours: r.overtime_hours || 0,
       remarks: r.remarks || null, marked_by: req.user!.id,
     }))

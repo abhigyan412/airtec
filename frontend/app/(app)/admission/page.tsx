@@ -386,6 +386,20 @@ export default function AdmissionPage() {
   )
 }
 
+// Module-scope, not defined inside the modal component: a component
+// defined inside another component's function body gets a new identity
+// every render, so React remounts it (dropping input focus) after every
+// keystroke that triggers a re-render. Doesn't close over any modal
+// state, so it moves out verbatim.
+function Field({ label, children, span = 1 }: { label: string, children: React.ReactNode, span?: number }) {
+  return (
+    <div className={span === 2 ? 'col-span-2' : ''}>
+      <Label className="mb-1.5 block">{label}</Label>
+      {children}
+    </div>
+  )
+}
+
 function NewInquiryModal({ classes, onClose }: { classes: any[], onClose: () => void }) {
   const qc = useQueryClient()
   const [form, setForm] = useState({
@@ -427,13 +441,6 @@ function NewInquiryModal({ classes, onClose }: { classes: any[], onClose: () => 
     },
     onError: (err: any) => toast.error(err?.response?.data?.error ?? 'Failed to create inquiry'),
   })
-
-  const Field = ({ label, children, span = 1 }: { label: string, children: React.ReactNode, span?: number }) => (
-    <div className={span === 2 ? 'col-span-2' : ''}>
-      <Label className="mb-1.5 block">{label}</Label>
-      {children}
-    </div>
-  )
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>

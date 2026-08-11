@@ -569,10 +569,14 @@ export const timetableApi = {
   get: (params?: any) => api.get('/students/timetable', { params }).then(r => r.data),
   save: (periods: any[]) => api.post('/students/timetable', { periods }).then(r => r.data),
   delete: (id: string) => api.delete(`/students/timetable/${id}`).then(r => r.data),
-  freeFaculty: (dayOfWeek: number, periodNumber?: number) =>
-    api.get('/students/timetable/free-faculty', { params: { day_of_week: dayOfWeek, period_number: periodNumber } }).then(r => r.data),
+  freeFaculty: (dayOfWeek: number, periodNumber?: number, date?: string) =>
+    api.get('/students/timetable/free-faculty', { params: { day_of_week: dayOfWeek, period_number: periodNumber, date } }).then(r => r.data),
   attentionRequired: () =>
     api.get('/students/timetable/attention-required').then(r => r.data),
+  substitutes: (dayOfWeek: number, periodNumber: number, subjectName?: string, excludeTeacherId?: string) =>
+    api.get('/students/timetable/substitutes', {
+      params: { day_of_week: dayOfWeek, period_number: periodNumber, subject_name: subjectName, exclude_teacher_id: excludeTeacherId },
+    }).then(r => r.data),
 }
 
 export const resourcesApi = {

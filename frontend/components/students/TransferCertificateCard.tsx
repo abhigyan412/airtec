@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { studentsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { FileX, Plus, Check, X, Loader2, GitBranch } from 'lucide-react'
 import { toast } from 'sonner'
 import { Card } from '@/components/ui/card'
@@ -42,7 +42,7 @@ const STEP_LABELS: Record<string, string> = {
   approve: 'Final Approval',
 }
 
-export function TransferCertificateCard({ studentId, studentStatus }: { studentId: string, studentStatus: string }) {
+export function TransferCertificateCard({ studentId, studentStatus, feeDue = 0 }: { studentId: string, studentStatus: string, feeDue?: number }) {
   const { user } = useAuth()
   const qc = useQueryClient()
   const [showRequest, setShowRequest] = useState(false)
@@ -210,6 +210,27 @@ export function TransferCertificateCard({ studentId, studentStatus }: { studentI
           <p className="mb-3 text-sm text-muted-foreground">
             Waiting on <span className="font-semibold text-foreground">{currentStep.roles?.name}</span> to {STEP_LABELS[currentStep.action_name]?.toLowerCase() ?? currentStep.action_name}
           </p>
+
+          {/* Fee due is pulled from this same student's real fee records
+              (the Fee Summary card on this page, fee_invoices minus
+              fee_payments) — not a separate form field the Accountant
+              could just type over. Dues clearance can only be confirmed
+              once that number is actually zero. */}
+          {currentStep.action_name === 'dues_clearance' && (
+            feeDue > 0 ? (
+              <div className="mb-3 flex items-center justify-between rounded-xl border border-destructive/20 bg-destructive/10 px-4 py-3">
+                <span className="text-sm font-semibold text-destructive">{formatCurrency(feeDue)} still due for this student</span>
+                <a href="#fee-summary" className="text-xs font-medium text-destructive underline underline-offset-2 hover:text-destructive/80">
+                  View Fee Summary
+                </a>
+              </div>
+            ) : (
+              <div className="mb-3 rounded-xl border border-success/20 bg-success/10 px-4 py-3 text-sm font-medium text-success">
+                All fees cleared — ₹0 due
+              </div>
+            )
+          )}
+
           {canAct ? (
             <div className="space-y-3">
               {showNotesFor && (
@@ -223,7 +244,9 @@ export function TransferCertificateCard({ studentId, studentStatus }: { studentI
                 />
               )}
               <div className="flex gap-2">
-                <Button onClick={() => handleAction('approved')} disabled={actionMutation.isPending}
+                <Button onClick={() => handleAction('approved')}
+                  disabled={actionMutation.isPending || (currentStep.action_name === 'dues_clearance' && feeDue > 0)}
+                  title={currentStep.action_name === 'dues_clearance' && feeDue > 0 ? 'Dues must be fully cleared before confirming' : undefined}
                   className="bg-success text-success-foreground hover:bg-success/90">
                   {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                   {currentStep.action_name === 'dues_clearance' ? 'Confirm Dues Cleared' : 'Approve & Issue TC'}

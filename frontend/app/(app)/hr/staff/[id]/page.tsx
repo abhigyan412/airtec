@@ -301,6 +301,30 @@ function StaffPhotoUpload({ staffId, currentUrl, fullName }: { staffId: string; 
   )
 }
 
+// Module-scope, not defined inside ProfileTab: a component defined
+// inside another component's function body gets a new identity every
+// render, so React remounts it (dropping input focus) after every
+// keystroke that triggers a re-render. form/setForm/editMode are passed
+// in explicitly instead of closed over so this can live outside.
+function ProfileField({ form, setForm, editMode, label, name, type = 'text', options }: any) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      {options ? (
+        <Select disabled={!editMode} value={(form[name] || EMPTY_OPTION)} onValueChange={v => setForm((f: any) => ({ ...f, [name]: v === EMPTY_OPTION ? '' : v }))}>
+          <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {options.map((o: any) => <SelectItem key={o.value} value={o.value === '' ? EMPTY_OPTION : o.value}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      ) : (
+        <Input type={type} disabled={!editMode} value={form[name]}
+          onChange={e => setForm((f: any) => ({ ...f, [name]: e.target.value }))} className="disabled:opacity-60" />
+      )}
+    </div>
+  )
+}
+
 // ── PROFILE TAB ────────────────────────────────────────────────
 function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }: any) {
   const qc = useQueryClient()
@@ -360,23 +384,6 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
   })
 
-  const Field = ({ label, name, type = 'text', options }: any) => (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      {options ? (
-        <Select disabled={!editMode} value={((form as any)[name] || EMPTY_OPTION)} onValueChange={v => setForm(f => ({ ...f, [name]: v === EMPTY_OPTION ? '' : v }))}>
-          <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {options.map((o: any) => <SelectItem key={o.value} value={o.value === '' ? EMPTY_OPTION : o.value}>{o.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      ) : (
-        <Input type={type} disabled={!editMode} value={(form as any)[name]}
-          onChange={e => setForm(f => ({ ...f, [name]: e.target.value }))} className="disabled:opacity-60" />
-      )}
-    </div>
-  )
-
   return (
     <div className="space-y-5">
       <Card>
@@ -398,7 +405,7 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <Field label="Employee ID" name="employee_id" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Employee ID" name="employee_id" />
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Designation</Label>
               <p className="flex h-9 items-center rounded-md border border-border bg-muted px-3 text-sm text-foreground">{profile?.designation || '—'}</p>
@@ -407,31 +414,31 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }
               <Label className="text-xs text-muted-foreground">Department</Label>
               <p className="flex h-9 items-center rounded-md border border-border bg-muted px-3 text-sm text-foreground">{profile?.department || '—'}</p>
             </div>
-            <Field label="Date of Joining" name="date_of_joining" type="date" />
-            <Field label="Date of Birth" name="date_of_birth" type="date" />
-            <Field label="Gender" name="gender" options={[{value:'',label:'Select'},{value:'male',label:'Male'},{value:'female',label:'Female'},{value:'other',label:'Other'}]} />
-            <Field label="Qualification" name="qualification" />
-            <Field label="Experience (years)" name="experience_years" type="number" />
-            <Field label="Employment Type" name="employment_type" options={[
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Date of Joining" name="date_of_joining" type="date" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Date of Birth" name="date_of_birth" type="date" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Gender" name="gender" options={[{value:'',label:'Select'},{value:'male',label:'Male'},{value:'female',label:'Female'},{value:'other',label:'Other'}]} />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Qualification" name="qualification" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Experience (years)" name="experience_years" type="number" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Employment Type" name="employment_type" options={[
               {value:'full_time',label:'Full Time'},{value:'part_time',label:'Part Time'},{value:'contract',label:'Contract'},{value:'probation',label:'Probation'}
             ]} />
-            <Field label="Employment Status" name="employment_status" options={[
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Employment Status" name="employment_status" options={[
               {value:'active',label:'Active'},{value:'suspended',label:'Suspended'},{value:'absconded',label:'Absconded'},{value:'resigned',label:'Resigned'},{value:'terminated',label:'Terminated'}
             ]} />
-            <Field label="Shift" name="shift_id" options={[
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Shift" name="shift_id" options={[
               { value: '', label: 'School default schedule' },
               ...(shifts ?? []).map((s: any) => ({ value: s.id, label: s.name })),
             ]} />
-            <Field label="Leave Delegate" name="leave_delegate_id" options={[
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Leave Delegate" name="leave_delegate_id" options={[
               { value: '', label: 'None' },
               ...(allStaff ?? []).filter((s: any) => s.id !== staffId && !['resigned', 'terminated'].includes(s.staff_profile?.employment_status)).map((s: any) => ({ value: s.id, label: s.full_name })),
             ]} />
-            <Field label="Reports To" name="reporting_to" options={[
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Reports To" name="reporting_to" options={[
               { value: '', label: 'None' },
               ...(allStaff ?? []).filter((s: any) => s.id !== staffId && !['resigned', 'terminated'].includes(s.staff_profile?.employment_status)).map((s: any) => ({ value: s.id, label: s.full_name })),
             ]} />
-            <Field label="Phone" name="phone" />
-            <Field label="Personal Email" name="personal_email" type="email" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Phone" name="phone" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Personal Email" name="personal_email" type="email" />
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
             Designation and department are read-only here — use{' '}
@@ -445,9 +452,9 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }
         <CardContent className="p-6">
           <h3 className="mb-4 font-semibold text-foreground">Address</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div className="col-span-3"><Field label="Address" name="address" /></div>
-            <Field label="City" name="city" />
-            <Field label="State" name="state" />
+            <div className="col-span-3"><ProfileField form={form} setForm={setForm} editMode={editMode} label="Address" name="address" /></div>
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="City" name="city" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="State" name="state" />
           </div>
         </CardContent>
       </Card>
@@ -456,10 +463,10 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }
         <CardContent className="p-6">
           <h3 className="mb-4 font-semibold text-foreground">Bank &amp; Tax Details</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <Field label="Bank Name" name="bank_name" />
-            <Field label="Account Number" name="bank_account_number" />
-            <Field label="IFSC Code" name="bank_ifsc" />
-            <Field label="PAN Number" name="pan_number" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Bank Name" name="bank_name" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Account Number" name="bank_account_number" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="IFSC Code" name="bank_ifsc" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="PAN Number" name="pan_number" />
           </div>
         </CardContent>
       </Card>
@@ -468,8 +475,8 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }
         <CardContent className="p-6">
           <h3 className="mb-4 font-semibold text-foreground">Emergency Contact</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <Field label="Contact Name" name="emergency_contact_name" />
-            <Field label="Contact Phone" name="emergency_contact_phone" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Contact Name" name="emergency_contact_name" />
+            <ProfileField form={form} setForm={setForm} editMode={editMode} label="Contact Phone" name="emergency_contact_phone" />
           </div>
         </CardContent>
       </Card>
@@ -870,6 +877,17 @@ function IssueLoanModal({ staffId, userName, onClose }: { staffId: string; userN
   )
 }
 
+// Module-scope, not defined inside SalaryModal — same reasoning as
+// ProfileField above.
+function SalaryField({ form, setForm, label, name }: any) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Input type="number" value={form[name]} onChange={e => setForm((f: any) => ({ ...f, [name]: e.target.value }))} placeholder="0" />
+    </div>
+  )
+}
+
 function SalaryModal({ staffId, userName, existing, onClose }: any) {
   const [type, setType] = useState<'fixed_monthly' | 'hourly' | 'per_session'>(existing?.type ?? 'fixed_monthly')
   const [hourlyRate, setHourlyRate] = useState(existing?.hourly_rate ?? '')
@@ -911,13 +929,6 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
     } finally { setLoading(false) }
   }
 
-  const Field = ({ label, name }: any) => (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <Input type="number" value={(form as any)[name]} onChange={e => setForm(f => ({ ...f, [name]: e.target.value }))} placeholder="0" />
-    </div>
-  )
-
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="max-w-lg">
@@ -942,12 +953,12 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
             <div>
               <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Earnings</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                <Field label="Basic Salary *" name="basic_salary" />
-                <Field label="HRA" name="hra" />
-                <Field label="DA" name="da" />
-                <Field label="Conveyance" name="conveyance_allowance" />
-                <Field label="Medical Allowance" name="medical_allowance" />
-                <Field label="Other Allowances" name="other_allowances" />
+                <SalaryField form={form} setForm={setForm} label="Basic Salary *" name="basic_salary" />
+                <SalaryField form={form} setForm={setForm} label="HRA" name="hra" />
+                <SalaryField form={form} setForm={setForm} label="DA" name="da" />
+                <SalaryField form={form} setForm={setForm} label="Conveyance" name="conveyance_allowance" />
+                <SalaryField form={form} setForm={setForm} label="Medical Allowance" name="medical_allowance" />
+                <SalaryField form={form} setForm={setForm} label="Other Allowances" name="other_allowances" />
               </div>
             </div>
           )}
@@ -966,9 +977,9 @@ function SalaryModal({ staffId, userName, existing, onClose }: any) {
           <div>
             <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Deductions</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <Field label="PF" name="pf_deduction" />
-              <Field label="Professional Tax" name="professional_tax" />
-              <Field label="Other Deductions" name="other_deductions" />
+              <SalaryField form={form} setForm={setForm} label="PF" name="pf_deduction" />
+              <SalaryField form={form} setForm={setForm} label="Professional Tax" name="professional_tax" />
+              <SalaryField form={form} setForm={setForm} label="Other Deductions" name="other_deductions" />
             </div>
           </div>
         </div>
