@@ -384,7 +384,7 @@ function MarkTab({ classId, sectionId, className, canManage }: {
               </div>
             </div>
 
-            {canManage && classId && Object.keys(attendance).length > 0 && (
+            {canManage && classId && rosterCount > 0 && (
               <div className="space-y-1.5">
                 <Label>Mark All</Label>
                 <div className="flex gap-2">

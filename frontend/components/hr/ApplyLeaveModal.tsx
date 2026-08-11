@@ -61,6 +61,13 @@ export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
     reason: '',
   })
   const [loading, setLoading] = useState(false)
+  const [acknowledgedUnpaid, setAcknowledgedUnpaid] = useState(false)
+
+  // Leave Without Pay isn't something to proactively apply for — it only
+  // ever makes sense once every paid balance is exhausted, at which point
+  // it happens automatically (the warning + gate below), not by a staff
+  // member picking "Unpaid" off a menu ahead of an actual shortfall.
+  const applicableTypes = (leaveTypes ?? []).filter((lt: any) => lt.is_paid)
 
   const { totalDays, excludedCount } = (() => {
     if (!form.from_date || !form.to_date || form.to_date < form.from_date) return { totalDays: 0, excludedCount: 0 }
@@ -93,6 +100,7 @@ export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
     }
     if (form.to_date < form.from_date) return toast.error('To date must be on or after from date')
     if (totalDays <= 0) return toast.error('Selected range has no working days (all holidays/weekly-off)')
+    if (exceedsBalance && !acknowledgedUnpaid) return toast.error('Please acknowledge that the excess days will be unpaid before submitting')
 
     setLoading(true)
     try {
@@ -122,21 +130,21 @@ export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
             <Label>Leave Type *</Label>
             <Select
               value={form.leave_type_id}
-              onValueChange={(v) => setForm(f => ({ ...f, leave_type_id: v }))}
+              onValueChange={(v) => { setForm(f => ({ ...f, leave_type_id: v })); setAcknowledgedUnpaid(false) }}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select leave type" />
               </SelectTrigger>
               <SelectContent>
-                {(leaveTypes ?? []).map((lt: any) => (
-                  <SelectItem key={lt.id} value={lt.id}>{lt.name} {lt.is_paid ? '(Paid)' : '(Unpaid)'}</SelectItem>
+                {applicableTypes.map((lt: any) => (
+                  <SelectItem key={lt.id} value={lt.id}>{lt.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
             {selectedBalance && (
               <p className="mt-1 text-xs text-muted-foreground">{selectedBalance.remaining_days} of {selectedBalance.total_days} days remaining</p>
             )}
-            {!leaveTypesLoading && (leaveTypes ?? []).length === 0 && (
+            {!leaveTypesLoading && applicableTypes.length === 0 && (
               <p className="mt-1 text-xs text-muted-foreground">
                 No leave types have been configured for this school yet — an administrator needs to add one before leave can be applied for.
               </p>
@@ -147,12 +155,12 @@ export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
             <div className="space-y-1.5">
               <Label htmlFor="from_date">From Date *</Label>
               <Input id="from_date" type="date" value={form.from_date}
-                onChange={e => setForm(f => ({ ...f, from_date: e.target.value }))} />
+                onChange={e => { setForm(f => ({ ...f, from_date: e.target.value })); setAcknowledgedUnpaid(false) }} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="to_date">To Date *</Label>
               <Input id="to_date" type="date" value={form.to_date}
-                onChange={e => setForm(f => ({ ...f, to_date: e.target.value }))} />
+                onChange={e => { setForm(f => ({ ...f, to_date: e.target.value })); setAcknowledgedUnpaid(false) }} />
             </div>
           </div>
 
@@ -168,13 +176,20 @@ export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
             <p className="text-sm font-medium text-destructive">Selected range is entirely holidays/weekly-off — nothing to apply for</p>
           )}
           {exceedsBalance && (
-            <div className="flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3 py-2.5">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-warning" />
-              <p className="text-xs text-warning">
-                This exceeds your remaining balance of {selectedBalance.remaining_days} day{selectedBalance.remaining_days === 1 ? '' : 's'}.
-                You can still submit it, but it'll be flagged for the approver as going past your quota.
-              </p>
-            </div>
+            <label className="flex items-start gap-2.5 rounded-xl border border-warning/20 bg-warning/10 px-3 py-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={acknowledgedUnpaid}
+                onChange={e => setAcknowledgedUnpaid(e.target.checked)}
+                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-warning"
+              />
+              <span className="text-xs text-warning">
+                <AlertTriangle className="mr-1 inline h-3.5 w-3.5 -mt-0.5" />
+                You only have {selectedBalance.remaining_days} day{selectedBalance.remaining_days === 1 ? '' : 's'} left —
+                {' '}{totalDays - selectedBalance.remaining_days} of the {totalDays} day{totalDays === 1 ? '' : 's'} requested will be recorded as{' '}
+                <strong>unpaid leave (Leave Without Pay)</strong> once approved. I understand and want to proceed.
+              </span>
+            </label>
           )}
 
           <div className="space-y-1.5">
@@ -187,7 +202,7 @@ export function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
 
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSubmit} disabled={loading}>
+          <Button onClick={handleSubmit} disabled={loading || (exceedsBalance && !acknowledgedUnpaid)}>
             {loading && <Loader2 className="h-4 w-4 animate-spin" />} Submit Application
           </Button>
         </DialogFooter>

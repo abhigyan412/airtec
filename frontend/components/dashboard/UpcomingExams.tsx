@@ -15,7 +15,9 @@ export function UpcomingExams() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-upcoming-exams'],
-    queryFn: () => api.get('/exams/upcoming', { params: { days: 7 } }).then(r => r.data.data),
+    // No `days` param — defaults server-side to the rest of the current
+    // academic year rather than a rolling 7-day window.
+    queryFn: () => api.get('/exams/upcoming').then(r => r.data.data),
     enabled: canView,
   })
 
@@ -43,7 +45,7 @@ export function UpcomingExams() {
             <Skeleton className="h-12 w-full rounded-xl" />
           </div>
         ) : exams.length === 0 ? (
-          <EmptyState icon={BookOpen} title="No exams in the next 7 days" className="py-10" />
+          <EmptyState icon={BookOpen} title="No exams scheduled this academic year" className="py-10" />
         ) : (
           <div className="space-y-2.5">
             {exams.map((e: any) => (

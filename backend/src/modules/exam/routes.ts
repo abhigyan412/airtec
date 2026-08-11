@@ -107,18 +107,39 @@ router.get('/stats', asyncHandler(async (req: AuthRequest, res: Response) => {
     } })
 }))
 
-// GET /exams/upcoming — exams starting within the next N days (default 7),
-// for the dashboard's Academic Snapshot widget. Separate from GET / (which
-// paginates and orders by created_at, not start_date) since a dashboard
-// widget needs "what's coming up soon", not "what was created recently".
+// GET /exams/upcoming — for the dashboard's Academic Snapshot widget.
+// Separate from GET / (which paginates and orders by created_at, not
+// start_date) since a dashboard widget needs "what's coming up", not
+// "what was created recently".
+//
+// A `days` param still narrows to a rolling N-day window if a caller
+// wants that. Without it, "upcoming" defaults to the rest of the
+// CURRENT ACADEMIC YEAR (e.g. 1 Apr 2026 - 31 Mar 2027 for this school,
+// whatever is_current actually spans) rather than a fixed 7 days — a
+// school's exam calendar is planned a year at a time, so a widget that
+// only looked 7 days ahead read as empty ("No exams") for most of the
+// year even with a full datesheet already scheduled.
 router.get('/upcoming', asyncHandler(async (req: AuthRequest, res: Response) => {
-    const days = Number(req.query.days) || 7
     const school_id = req.user!.school_id
-    const now = new Date()
-    const today = toLocalDateStr(now)
-    const end = new Date(now)
-    end.setDate(end.getDate() + days)
-    const endStr = toLocalDateStr(end)
+    const today = toLocalDateStr(new Date())
+
+    let endStr: string
+    if (req.query.days) {
+        const end = new Date()
+        end.setDate(end.getDate() + Number(req.query.days))
+        endStr = toLocalDateStr(end)
+    } else {
+        const { data: currentYear } = await supabase
+            .from('academic_years').select('end_date')
+            .eq('school_id', school_id).eq('is_current', true).maybeSingle()
+        endStr = currentYear?.end_date ?? (() => {
+            // No academic year configured — fall back to a year out
+            // rather than erroring the whole widget.
+            const end = new Date()
+            end.setFullYear(end.getFullYear() + 1)
+            return toLocalDateStr(end)
+        })()
+    }
 
     const { data, error } = await supabase
         .from('exams')
