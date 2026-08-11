@@ -106,11 +106,11 @@ export function Header({ onMenuClick }: HeaderProps) {
               <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push('/settings')}>
               <User className="h-4 w-4" />
               Profile
             </DropdownMenuItem>
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push('/settings/team')}>
               <Settings className="h-4 w-4" />
               Settings
             </DropdownMenuItem>
