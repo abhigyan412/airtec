@@ -85,11 +85,16 @@ export default function DashboardPage() {
     queryFn: () => studentsApi.list({ limit: 5, page: 1 }).then((r) => r.data),
     enabled: canViewStudents,
   })
-  const { data: dues, isLoading: duesLoading } = useQuery({
-    queryKey: ['fee-dues'],
-    queryFn: () => feeApi.dues().then((r) => r.data),
+  // Only the first 8 are rendered, so only 8 are fetched; the headline count
+  // comes off meta.total, which the server counts across the whole school.
+  // Measuring the returned array capped this at the page size (50).
+  const { data: duesPage, isLoading: duesLoading } = useQuery({
+    queryKey: ['fee-dues', { limit: 8 }],
+    queryFn: () => feeApi.dues({ page: 1, limit: 8 }),
     enabled: canViewFees,
   })
+  const dues: any[] = duesPage?.data ?? []
+  const duesTotal: number = duesPage?.meta?.total ?? 0
 
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
@@ -252,7 +257,8 @@ export default function DashboardPage() {
                   <CardHeader className="flex-row items-center justify-between space-y-0">
                     <div>
                       <CardTitle>Pending Dues</CardTitle>
-                      <p className="mt-0.5 text-xs text-muted-foreground">{(dues ?? []).length} students</p>
+                      {/* Invoices, not students — one student can hold several. */}
+                      <p className="mt-0.5 text-xs text-muted-foreground">{duesTotal} unpaid invoice{duesTotal === 1 ? '' : 's'}</p>
                     </div>
                     <ViewAll href="/fees/recovery" />
                   </CardHeader>
@@ -263,9 +269,9 @@ export default function DashboardPage() {
                           <Skeleton key={i} className="h-11 w-full rounded-lg" />
                         ))}
                       </div>
-                    ) : (dues ?? []).length > 0 ? (
+                    ) : dues.length > 0 ? (
                       <div className="max-h-[250px] space-y-1 overflow-y-auto pr-1">
-                        {(dues ?? []).slice(0, 8).map((inv: any) => (
+                        {dues.map((inv: any) => (
                           <div
                             key={inv.id}
                             className="flex items-center justify-between rounded-lg px-2 py-2 transition-colors hover:bg-muted/60"

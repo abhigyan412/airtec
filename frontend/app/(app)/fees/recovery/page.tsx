@@ -251,9 +251,12 @@ function Defaulters() {
           {/* The whole position, not this page of it — the count and the money
               are what the card is for, and a page-local sum would understate
               both the moment the list runs past twenty-five families. */}
+          {/* Students, not families: /defaulters groups by student_id, so two
+              siblings who each owe are two rows here. Calling that "families"
+              overstates how many households the school actually has to call. */}
           {!isPending && !!total && (
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {total} famil{total === 1 ? 'y' : 'ies'} · {formatCurrency(data?.meta?.total_outstanding ?? 0)} outstanding
+              {total} student{total === 1 ? '' : 's'} · {formatCurrency(data?.meta?.total_outstanding ?? 0)} outstanding
             </p>
           )}
         </div>
@@ -402,7 +405,7 @@ function Defaulters() {
             <Pagination
               page={page} limit={limit} total={total}
               onPageChange={p => { setExpanded(null); setPage(p) }}
-              label="families"
+              label="students"
             />
           </div>
         )}

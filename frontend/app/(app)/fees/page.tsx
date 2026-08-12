@@ -41,9 +41,17 @@ export default function FeesOverviewPage() {
     queryFn: () => feeApi.discounts.list({ approval_status: 'pending' }).then(r => r.data as any[]),
   })
 
+  // Same "count, don't measure" rule as the defaulters query below: filter to
+  // the horizon server-side and read meta.total. Fetching a 50-row page and
+  // filtering it in the browser capped this at 50 however many were really due.
+  const dueSoonDate = (() => {
+    const d = new Date()
+    d.setDate(d.getDate() + DUE_SOON_DAYS)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  })()
   const { data: dues } = useQuery({
-    queryKey: ['fee-dues', { page: 1, limit: 50 }],
-    queryFn: () => feeApi.dues({ page: 1, limit: 50 }),
+    queryKey: ['fee-dues', { due_on_or_before: dueSoonDate, limit: 1 }],
+    queryFn: () => feeApi.dues({ page: 1, limit: 1, due_on_or_before: dueSoonDate }),
   })
 
   // Only the count is wanted here, so ask for the smallest page and read the
@@ -59,10 +67,7 @@ export default function FeesOverviewPage() {
     queryFn: () => feeApi.payments.list({ page: 1, limit: 6 }),
   })
 
-  const dueRows: any[] = dues?.data ?? []
-  const horizon = new Date()
-  horizon.setDate(horizon.getDate() + DUE_SOON_DAYS)
-  const dueSoon = dueRows.filter(d => d.due_date && new Date(d.due_date) <= horizon)
+  const dueSoonCount = dues?.meta?.total ?? 0
 
   const outstanding = stats?.total_outstanding ?? stats?.total_due ?? 0
 
@@ -139,7 +144,7 @@ export default function FeesOverviewPage() {
           <WorkItem
             href="/fees/recovery"
             icon={Clock}
-            count={dueSoon.length}
+            count={dueSoonCount}
             label="invoice"
             description={`Due in the next ${DUE_SOON_DAYS} days`}
             accent="primary"
@@ -149,7 +154,9 @@ export default function FeesOverviewPage() {
             href="/fees/recovery#defaulters"
             icon={Users}
             count={defaulters?.meta?.total ?? 0}
-            label="family"
+            // Students, not families — /defaulters groups by student_id, so
+            // siblings who each owe are counted separately.
+            label="student"
             description="Overdue by 30 days or more"
             accent="destructive"
             show

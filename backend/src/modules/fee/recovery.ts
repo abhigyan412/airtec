@@ -20,7 +20,7 @@ const STUDENT_COLUMNS = 'id, first_name, last_name, admission_number, class_id, 
 const OPEN = ['unpaid', 'partial']
 
 router.get('/dues', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Response) => {
-  const { class_id, academic_year_id, page = '1', limit = '50' } = req.query
+  const { class_id, academic_year_id, due_on_or_before, page = '1', limit = '50' } = req.query
   const { from, to, limit: lim, page: pg } = getPagination(Number(page), Number(limit))
   const scope = req.feeScope!
 
@@ -38,6 +38,12 @@ router.get('/dues', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Re
   q = scopeInvoiceQuery(q, scope)
   if (academic_year_id) q = q.eq('academic_year_id', academic_year_id as string)
   if (filteringOnStudent) q = q.eq('students.class_id', class_id as string)
+  // "Already due" as a server-side filter, so a caller that only wants the
+  // count can ask for it with limit=1 instead of paging the whole list and
+  // measuring the array — which is what the dashboard tile used to do, and why
+  // it read 50 for a school with 1,111 open invoices. Nulls drop out, which is
+  // right: an invoice with no due date is not yet due.
+  if (due_on_or_before) q = q.lte('due_date', due_on_or_before as string)
 
   const { data, error, count } = await q
   if (error) return res.status(500).json({ success: false, error: error.message })

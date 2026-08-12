@@ -36,9 +36,19 @@ export function NeedsAttentionToday() {
     queryFn: () => studentsApi.pendingTcRequests().then(r => r.data),
     enabled: canCertificates,
   })
-  const { data: fees } = useQuery({
-    queryKey: ['dashboard-fee-followups'],
-    queryFn: () => feeApi.dues().then(r => r.data),
+  // Counts, not pages. /fees/dues is paginated (50 by default), so measuring
+  // the returned array caps every number here at the page size — the tile read
+  // "50 total unpaid/partial" for a school with 1,111 open invoices, and would
+  // have read 50 at 6,000 too. limit=1 throws away the rows and keeps
+  // meta.total, which the endpoint counts server-side across the whole school.
+  const { data: feesDue } = useQuery({
+    queryKey: ['dashboard-fee-followups-due', todayStr],
+    queryFn: () => feeApi.dues({ limit: 1, due_on_or_before: todayStr }),
+    enabled: canFees,
+  })
+  const { data: feesOpen } = useQuery({
+    queryKey: ['dashboard-fee-followups-open'],
+    queryFn: () => feeApi.dues({ limit: 1 }),
     enabled: canFees,
   })
   const { data: attendanceToday, isLoading: attendanceLoading } = useQuery({
@@ -52,7 +62,8 @@ export function NeedsAttentionToday() {
   const absentTeachers = (staffAttendance ?? []).filter((a: any) => a.status === 'absent')
   const unresolvedComplaints = (complaintStats?.open ?? 0) + (complaintStats?.in_progress ?? 0)
   const pendingTcCount = (pendingTc ?? []).length
-  const feesDueToday = (fees ?? []).filter((f: any) => f.due_date && f.due_date <= todayStr)
+  const feesDueTodayCount = feesDue?.meta?.total ?? 0
+  const feesOpenCount = feesOpen?.meta?.total ?? 0
 
   const tiles = [
     canStaff && {
@@ -83,9 +94,11 @@ export function NeedsAttentionToday() {
       key: 'fees',
       icon: Wallet,
       label: 'Fee Follow-ups Due',
-      count: feesDueToday.length,
-      sub: feesDueToday.length > 0 ? `${(fees ?? []).length} total unpaid/partial` : 'None due today',
-      href: '/fees',
+      count: feesDueTodayCount,
+      sub: feesDueTodayCount > 0 ? `${feesOpenCount} total unpaid/partial` : 'None due today',
+      // The chase list itself, not the fee overview — this tile counts invoices
+      // that are already due, and /fees/recovery is the screen that lists them.
+      href: '/fees/recovery',
     },
   ].filter(Boolean) as { key: string; icon: any; label: string; count: number; sub: string; href: string }[]
 
