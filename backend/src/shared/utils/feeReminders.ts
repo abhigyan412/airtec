@@ -1,4 +1,4 @@
-import { supabase } from '../db/client'
+import { selectAll } from '../db/paged'
 import { fetchPaidByInvoice } from './feePayments'
 import { toLocalDateStr } from './academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudent } from './notifications'
@@ -39,20 +39,21 @@ const NOT_THE_FAMILYS_DEBT = ['rte']
  * quarters has thousands of open invoices and only a few hundred students.
  */
 async function studentsNotToChase(schoolId?: string): Promise<Set<string>> {
-  let q = supabase.from('fee_assignments')
-    .select('student_id')
-    .eq('status', 'active')
-    .in('fee_category', NOT_THE_FAMILYS_DEBT)
-  if (schoolId) q = q.eq('school_id', schoolId)
-
-  const { data, error } = await q
-  // A failure here must not silence the whole sweep — reminding everyone is the
-  // status quo and is recoverable; skipping every reminder silently is not.
-  if (error) {
-    console.error('[fee-reminders] could not read fee categories, chasing everyone:', error.message)
+  try {
+    // Paged. A capped read here dropped every RTE student past row 1,000 out of
+    // the exclusion set — and this function exists precisely so those families
+    // are not telephoned about a debt the state owes.
+    const rows = await selectAll<any>('fee_assignments', 'student_id', q => {
+      const scoped = q.eq('status', 'active').in('fee_category', NOT_THE_FAMILYS_DEBT)
+      return schoolId ? scoped.eq('school_id', schoolId) : scoped
+    })
+    return new Set(rows.map(a => a.student_id))
+  } catch (e: any) {
+    // A failure here must not silence the whole sweep — reminding everyone is the
+    // status quo and is recoverable; skipping every reminder silently is not.
+    console.error('[fee-reminders] could not read fee categories, chasing everyone:', e.message)
     return new Set()
   }
-  return new Set((data ?? []).map(a => a.student_id))
 }
 
 // schoolId: omit for the unattended daily cron (all schools); pass it
@@ -62,18 +63,23 @@ export async function runFeeReminders(schoolId?: string) {
   const today = toLocalDateStr(new Date())
   const dueSoonCutoff = toLocalDateStr(new Date(Date.now() + DUE_SOON_WINDOW_DAYS * 24 * 60 * 60 * 1000))
 
-  let query = supabase
-    .from('fee_invoices')
-    .select('id, school_id, student_id, invoice_number, total_amount, due_date')
-    .in('status', ['unpaid', 'partial'])
-    .not('due_date', 'is', null)
-    .lte('due_date', dueSoonCutoff)
-  if (schoolId) query = query.eq('school_id', schoolId)
+  // Paged. On the cron path this scan covers EVERY school, so the 1,000-row cap
+  // bit early and hard: every invoice past the first thousand was never
+  // reminded about — not late, never — while the log reported `checked: 1000`
+  // and looked perfectly healthy.
+  const invoices = await selectAll<any>(
+    'fee_invoices',
+    'id, school_id, student_id, invoice_number, total_amount, due_date',
+    q => {
+      const scoped = q
+        .in('status', ['unpaid', 'partial'])
+        .not('due_date', 'is', null)
+        .lte('due_date', dueSoonCutoff)
+      return schoolId ? scoped.eq('school_id', schoolId) : scoped
+    },
+  )
 
-  const { data: invoices, error } = await query
-
-  if (error) throw new Error(error.message)
-  if (!invoices?.length) return { checked: 0, notified: 0 }
+  if (!invoices.length) return { checked: 0, notified: 0, skipped_not_owed_by_family: 0 }
 
   const invoiceIds = invoices.map(i => i.id)
   // Chunked + error-checked. The old inline version silently produced an empty

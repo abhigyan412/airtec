@@ -335,8 +335,9 @@ router.post('/:id/versions', requireFeeManage, asyncHandler(async (req: FeeReque
   const body = VersionSchema.parse(req.body ?? {})
   const school_id = req.user!.school_id
 
-  const { data: current } = await supabase.from('fee_structures').select(SELECT)
+  const { data: current, error: currentErr } = await supabase.from('fee_structures').select(SELECT)
     .eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+  if (currentErr) return res.status(500).json({ success: false, error: currentErr.message })
   if (!current) return res.status(404).json({ success: false, error: 'Structure not found' })
 
   const lines = body.lines ?? (current.fee_structure_lines ?? []).map((l: any) => ({

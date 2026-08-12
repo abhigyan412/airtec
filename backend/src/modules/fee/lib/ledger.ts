@@ -72,9 +72,91 @@ export async function post(
 }
 
 /**
+ * An invoice raised: the school is now owed money, and has earned income.
+ *
+ * This posting did not exist. Invoices were recorded nowhere in the ledger, so
+ * `receivable` was only ever credited — by waivers and write-offs — and ran
+ * permanently negative, which is why nothing could read this table usefully.
+ *
+ * Income is recognised HERE, when the bill goes out, not when it is paid. That
+ * is what makes the ledger accrual, which is the correct basis for a school that
+ * bills in advance and collects late, and it is what postWriteOff has always
+ * assumed.
+ */
+export async function postInvoice(opts: {
+  schoolId: string
+  invoiceId: string
+  studentId: string
+  netAmount: number
+  lateFee?: number
+  memo?: string
+}): Promise<boolean> {
+  const net = money(opts.netAmount)
+  const lateFee = money(opts.lateFee ?? 0)
+
+  return post(opts.schoolId, { type: 'invoice', id: opts.invoiceId, studentId: opts.studentId }, [
+    { account: 'receivable', debit: money(net + lateFee), memo: opts.memo ?? 'Invoice raised' },
+    ...(net > 0 ? [{ account: 'fee_income' as Account, credit: net }] : []),
+    ...(lateFee > 0 ? [{ account: 'late_fee_income' as Account, credit: lateFee }] : []),
+  ])
+}
+
+/** An invoice voided: the exact mirror of postInvoice. */
+export async function postInvoiceReversal(opts: {
+  schoolId: string
+  invoiceId: string
+  studentId: string
+  netAmount: number
+  lateFee?: number
+  memo?: string
+}): Promise<boolean> {
+  const net = money(opts.netAmount)
+  const lateFee = money(opts.lateFee ?? 0)
+
+  return post(opts.schoolId, { type: 'invoice', id: opts.invoiceId, studentId: opts.studentId }, [
+    ...(net > 0 ? [{ account: 'fee_income' as Account, debit: net, memo: opts.memo ?? 'Invoice cancelled' }] : []),
+    ...(lateFee > 0 ? [{ account: 'late_fee_income' as Account, debit: lateFee }] : []),
+    { account: 'receivable', credit: money(net + lateFee) },
+  ])
+}
+
+/**
+ * A late fine levied: more is owed, and the school has earned penalty income.
+ *
+ * Recognised once, when the fine is applied. It used to be credited on every
+ * PAYMENT that touched the invoice instead, reading `invoice.late_fee` — which
+ * is the total fine, not the unrecovered remainder — so two payments against one
+ * ₹500 fine posted ₹1,000 of late-fee income. Debits still equalled credits, so
+ * nothing anywhere looked wrong.
+ */
+export async function postLateFee(opts: {
+  schoolId: string; invoiceId: string; studentId: string; amount: number
+}): Promise<boolean> {
+  const amount = money(opts.amount)
+  if (amount === 0) return true
+
+  // A negative delta is a fine being REDUCED — a re-sweep after a part payment
+  // on a percentage rule. It unwinds rather than posting a negative number,
+  // because the one-side CHECK on fee_ledger_entries forbids those outright.
+  return amount > 0
+    ? post(opts.schoolId, { type: 'invoice', id: opts.invoiceId, studentId: opts.studentId }, [
+        { account: 'receivable', debit: amount, memo: 'Late fine' },
+        { account: 'late_fee_income', credit: amount },
+      ])
+    : post(opts.schoolId, { type: 'invoice', id: opts.invoiceId, studentId: opts.studentId }, [
+        { account: 'late_fee_income', debit: money(-amount), memo: 'Late fine reduced' },
+        { account: 'receivable', credit: money(-amount) },
+      ])
+}
+
+/**
  * Money received: the asset account is debited, and the credit is split between
- * what settled invoices (income) and what was taken in advance (a liability —
- * the school owes the family that value in future schooling).
+ * the debt it settled and what was taken in advance (a liability — the school
+ * owes the family that value in future schooling).
+ *
+ * Credits RECEIVABLE, not income. The income was recognised when the invoice was
+ * raised; crediting it again here counted every rupee twice the moment invoices
+ * started being posted, and left `receivable` with nothing to work against.
  */
 export async function postPayment(opts: {
   schoolId: string
@@ -83,16 +165,12 @@ export async function postPayment(opts: {
   method: string
   allocated: number
   unallocated: number
-  lateFee?: number
 }): Promise<boolean> {
   const asset = accountForMethod(opts.method)
-  const lateFee = money(opts.lateFee ?? 0)
-  const feeIncome = money(opts.allocated - lateFee)
 
   return post(opts.schoolId, { type: 'payment', id: opts.paymentId, studentId: opts.studentId }, [
     { account: asset, debit: money(opts.allocated + opts.unallocated), memo: `Receipt via ${opts.method}` },
-    ...(feeIncome > 0 ? [{ account: 'fee_income' as Account, credit: feeIncome }] : []),
-    ...(lateFee > 0 ? [{ account: 'late_fee_income' as Account, credit: lateFee }] : []),
+    ...(opts.allocated > 0 ? [{ account: 'receivable' as Account, credit: money(opts.allocated) }] : []),
     ...(opts.unallocated > 0 ? [{ account: 'advance' as Account, credit: money(opts.unallocated), memo: 'Paid ahead' }] : []),
   ])
 }
@@ -119,18 +197,25 @@ export async function postBounce(opts: {
   const unallocated = money(opts.unallocated)
 
   return post(opts.schoolId, { type: 'payment', id: opts.paymentId, studentId: opts.studentId }, [
-    ...(allocated > 0 ? [{ account: 'fee_income' as Account, debit: allocated, memo: 'Cheque dishonoured' }] : []),
+    ...(allocated > 0 ? [{ account: 'receivable' as Account, debit: allocated, memo: 'Cheque dishonoured' }] : []),
     ...(unallocated > 0 ? [{ account: 'advance' as Account, debit: unallocated, memo: 'Advance reversed' }] : []),
     { account: asset, credit: money(allocated + unallocated), memo: `Bounced ${opts.method}` },
   ])
 }
 
-/** Money returned: income reverses, the asset account is credited. */
+/**
+ * Money returned: the asset account is credited and the debt comes back.
+ *
+ * Debits RECEIVABLE, not income. The school did not un-earn the fee by handing
+ * the money back — the invoice is still outstanding, and the family owes it
+ * again. Debiting income here understated what the school had billed and left
+ * the receivable balance disagreeing with the invoices it is supposed to mirror.
+ */
 export async function postRefund(opts: {
   schoolId: string; paymentId: string; studentId: string; method: string; amount: number
 }): Promise<boolean> {
   return post(opts.schoolId, { type: 'refund', id: opts.paymentId, studentId: opts.studentId }, [
-    { account: 'fee_income', debit: money(opts.amount), memo: 'Refund' },
+    { account: 'receivable', debit: money(opts.amount), memo: 'Refund' },
     { account: accountForMethod(opts.method), credit: money(opts.amount) },
   ])
 }

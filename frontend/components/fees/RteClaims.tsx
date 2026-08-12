@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert } from '@/components/ui/alert'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { QueryError } from '@/components/shared/QueryError'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -53,7 +54,7 @@ export function RteClaims() {
     queryFn: () => feeApi.rte.summary(yearId),
     enabled: !!yearId,
   })
-  const { data: claims, isPending } = useQuery({
+  const { data: claims, isPending, error } = useQuery({
     queryKey: ['rte-claims', yearId],
     queryFn: () => feeApi.rte.claims({ academic_year_id: yearId }),
     enabled: !!yearId,
@@ -106,6 +107,8 @@ export function RteClaims() {
             <div className="space-y-3 p-5">
               {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
+          ) : error ? (
+            <QueryError error={error} title="Could not load the RTE claims" />
           ) : !rows.length ? (
             <EmptyState
               icon={Landmark}

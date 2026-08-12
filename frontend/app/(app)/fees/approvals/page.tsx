@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Alert } from '@/components/ui/alert'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { QueryError } from '@/components/shared/QueryError'
 import { EmptyState } from '@/components/shared/EmptyState'
 
 // One queue for everything waiting on a decision.
@@ -50,7 +51,7 @@ export default function ApprovalsPage() {
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-approvals'],
     queryFn: () => feeApi.approvals(),
   })
@@ -112,6 +113,10 @@ export default function ApprovalsPage() {
         <div className="space-y-3">
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28 w-full rounded-xl" />)}
         </div>
+      ) : error ? (
+        // "Nothing waiting" on a failed read empties an approval queue that may
+        // have a ₹50,000 waiver sitting in it.
+        <QueryError error={error} title="Could not load the approval queue" />
       ) : !items.length ? (
         <Card>
           <EmptyState

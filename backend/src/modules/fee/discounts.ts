@@ -1,11 +1,14 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
-import { asyncHandler } from '../../shared/utils/helpers'
+import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { amountDue, money } from '../../shared/utils/feeMoney'
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 import { getPermissionsForUser } from '../../shared/middleware/permissions-v2'
-import { FeeRequest, attachFeeScope, requireFeeView, requireFeeDiscount, requireFeeManage, requireSettingsManage } from './lib/guards'
+import {
+  FeeRequest, attachFeeScope, requireFeeView, requireFeeDiscount, requireFeeManage,
+  requireSettingsManage, scopeInvoiceQuery, studentsEmbed,
+} from './lib/guards'
 
 // Concessions and scholarships.
 //
@@ -86,18 +89,30 @@ router.get('/', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Respon
   res.json({ success: true, data })
 }))
 
-router.post('/', requireFeeDiscount, asyncHandler(async (req: FeeRequest, res: Response) => {
-  const body = CreateSchema.parse(req.body)
-  const school_id = req.user!.school_id
-  const userId = req.user!.id
-
-  const { data: userRoles } = await supabase.from('user_roles')
-    .select('role_id').eq('user_id', userId).eq('school_id', school_id)
+/**
+ * The ceiling this user may approve up to, and what they have spent this month.
+ *
+ * Extracted because it was inline in POST / and consulted NOWHERE on approval —
+ * which made the ceiling a routing rule rather than an authorisation limit.
+ * Anyone holding fee.discount, the same permission needed to REQUEST one, could
+ * approve a concession of any size, including the one that was queued precisely
+ * because it blew through their own ceiling. The escalation went to whoever
+ * clicked first rather than to a Principal, and the separate settings.manage
+ * guard on the limits themselves (which exists so an Accountant cannot raise
+ * their own ceiling) was pointless: they never needed to raise it.
+ */
+async function discountCeilingFor(schoolId: string, userId: string) {
+  const { data: userRoles, error: rErr } = await supabase.from('user_roles')
+    .select('role_id').eq('user_id', userId).eq('school_id', schoolId)
+  if (rErr) throw new Error(`Could not read your roles: ${rErr.message}`)
   const roleIds = (userRoles ?? []).map(r => r.role_id)
 
-  const { data: limits } = roleIds.length
-    ? await supabase.from('fee_discount_limits').select('*').eq('school_id', school_id).in('role_id', roleIds)
-    : { data: [] as any[] }
+  const { data: limits, error: lErr } = roleIds.length
+    ? await supabase.from('fee_discount_limits').select('*').eq('school_id', schoolId).in('role_id', roleIds)
+    : { data: [] as any[], error: null }
+  // Checked: a failed read used to yield maxSingle = 0, which silently sent every
+  // concession to review — and, on the approval path, would have blocked one.
+  if (lErr) throw new Error(`Could not read the concession limits: ${lErr.message}`)
 
   // Most permissive ceiling across the user's roles — someone who is both Admin
   // and Accountant gets the Admin figure, not the lower one.
@@ -107,16 +122,29 @@ router.post('/', requireFeeDiscount, asyncHandler(async (req: FeeRequest, res: R
     : 0
 
   const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
-  const { data: thisMonth } = await supabase.from('fee_discounts')
-    .select('discount_value, discount_type').eq('school_id', school_id)
+  const { data: thisMonth, error: mErr } = await supabase.from('fee_discounts')
+    .select('discount_value, discount_type').eq('school_id', schoolId)
     .eq('requested_by', userId).eq('approval_status', 'approved')
     .gte('created_at', monthStart.toISOString())
+  // Checked, and this one fails OPEN in the dangerous direction: an unchecked
+  // error read as "nothing spent this month", which LOOSENS the monthly cap.
+  if (mErr) throw new Error(`Could not total this month's concessions: ${mErr.message}`)
+
+  const monthlySoFar = money((thisMonth ?? [])
+    .filter(d => d.discount_type === 'fixed').reduce((s, d) => s + Number(d.discount_value), 0))
+
+  return { maxSingle, maxMonthly, monthlySoFar }
+}
+
+router.post('/', requireFeeDiscount, asyncHandler(async (req: FeeRequest, res: Response) => {
+  const body = CreateSchema.parse(req.body)
+  const school_id = req.user!.school_id
+  const userId = req.user!.id
 
   // A percentage has no rupee value until it meets a fee, so it cannot be checked
   // against a ceiling and is always reviewed. Stated in the response rather than
   // left for the UI to guess.
-  const monthlySoFar = money((thisMonth ?? [])
-    .filter(d => d.discount_type === 'fixed').reduce((s, d) => s + Number(d.discount_value), 0))
+  const { maxSingle, maxMonthly, monthlySoFar } = await discountCeilingFor(school_id, userId)
 
   const isFixed = body.discount_type === 'fixed'
   const withinSingle = isFixed && body.discount_value <= maxSingle
@@ -157,9 +185,10 @@ router.post('/:id/decide', requireFeeDiscount, asyncHandler(async (req: FeeReque
   }
   const school_id = req.user!.school_id
 
-  const { data: existing } = await supabase.from('fee_discounts')
-    .select('id, approval_status, student_id, requested_by')
+  const { data: existing, error: readErr } = await supabase.from('fee_discounts')
+    .select('id, approval_status, student_id, requested_by, discount_type, discount_value')
     .eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+  if (readErr) return res.status(500).json({ success: false, error: readErr.message })
   if (!existing) return res.status(404).json({ success: false, error: 'Concession not found' })
   if (existing.approval_status !== 'pending') {
     return res.status(400).json({ success: false, error: `Already ${existing.approval_status}` })
@@ -174,10 +203,11 @@ router.post('/:id/decide', requireFeeDiscount, asyncHandler(async (req: FeeReque
   //
   // So: everyone else is still blocked; the School Admin may self-decide, and it
   // is recorded as a self-approval rather than passing silently.
+  // Looked up unconditionally now, because the ceiling check below needs it too:
+  // it was previously computed only on the self-decide path, so an unrelated
+  // approver's super-role status was unknown.
   const selfDecided = existing.requested_by === req.user!.id
-  const { isSuperRole } = selfDecided
-    ? await getPermissionsForUser(req.user!.id, school_id)
-    : { isSuperRole: false }
+  const { isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
 
   if (selfDecided && !isSuperRole) {
     return res.status(403).json({
@@ -186,10 +216,40 @@ router.post('/:id/decide', requireFeeDiscount, asyncHandler(async (req: FeeReque
     })
   }
 
+  // The ceiling applies to the APPROVER too.
+  //
+  // Without this the limits are only a routing rule: a concession queued because
+  // it exceeded someone's ceiling could be approved by anyone else holding
+  // fee.discount — including a colleague with the same, or a lower, ceiling. The
+  // School Admin escape hatch is honoured here as it is above, because the
+  // person with nobody to escalate to has to be able to decide.
+  if (decision === 'approved' && !isSuperRole) {
+    const { maxSingle, maxMonthly, monthlySoFar } = await discountCeilingFor(school_id, req.user!.id)
+    const value = Number(existing.discount_value)
+
+    if (existing.discount_type === 'fixed') {
+      if (value > maxSingle) {
+        return res.status(403).json({
+          success: false,
+          error: `This concession is ₹${value}, above your approval limit of ₹${maxSingle}. It needs a Principal or School Admin.`,
+        })
+      }
+      if (maxMonthly !== null && monthlySoFar + value > maxMonthly) {
+        return res.status(403).json({
+          success: false,
+          error: `Approving this would take you to ₹${money(monthlySoFar + value)} of concessions this month, above your ₹${maxMonthly} monthly limit.`,
+        })
+      }
+    }
+  }
+
+  // Claimed atomically: the update only matches while the row is still pending,
+  // so two approvers clicking together produce one decision rather than two.
   const { data, error } = await supabase.from('fee_discounts').update({
     approval_status: decision, approved_by: req.user!.id, approved_at: new Date().toISOString(),
-  }).eq('id', req.params.id).select(SELECT).single()
+  }).eq('id', req.params.id).eq('approval_status', 'pending').select(SELECT).maybeSingle()
   if (error) return res.status(400).json({ success: false, error: error.message })
+  if (!data) return res.status(409).json({ success: false, error: 'Somebody else decided this a moment ago.' })
 
   // A concession decision moves money, so it is logged whoever made it — and a
   // self-approval is exactly the row an auditor comes looking for.
@@ -246,7 +306,8 @@ router.get('/limits', requireFeeView, asyncHandler(async (req: FeeRequest, res: 
     .eq('permission_id', permission.id).eq('roles.school_id', school_id)
   if (error) return res.status(500).json({ success: false, error: error.message })
 
-  const { data: limits } = await supabase.from('fee_discount_limits').select('*').eq('school_id', school_id)
+  const { data: limits, error: limitsErr } = await supabase.from('fee_discount_limits').select('*').eq('school_id', school_id)
+  if (limitsErr) return res.status(500).json({ success: false, error: limitsErr.message })
   const byRole = new Map((limits ?? []).map(l => [l.role_id, l]))
 
   res.json({
@@ -449,17 +510,38 @@ router.delete('/rules/:id', requireFeeManage, asyncHandler(async (req: FeeReques
 }))
 
 // ── Scholarships ──────────────────────────────────────────────────────
+//
+// The 'section' branch was missing entirely, which made this the one route in
+// the module that reads req.feeScope and does not apply it — the exact mistake
+// the guards' own header comment names as a bug. A class teacher needs no
+// fee.view to get here, and got back every scholarship in the school: names,
+// admission numbers, award amounts and funding sources for other people's
+// children.
+//
+// Note the embed has to be `students!inner`. Filtering on an embedded column
+// only narrows the parent rows on an INNER join; with the default left join
+// PostgREST keeps the scholarship row and nulls the student, which hides the
+// name while still leaking the count and the amount. That is what studentsEmbed
+// exists for, and the plain `students(...)` here was quietly opting out of it —
+// section_id was even being selected and then never used.
 router.get('/scholarships', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Response) => {
   const scope = req.feeScope!
+  const { page = '1', limit = '50' } = req.query as Record<string, string | undefined>
+  const { from, to, limit: lim, page: pg } = getPagination(Number(page), Number(limit))
+
   let q = supabase.from('fee_scholarships')
-    .select('*, students(id, first_name, last_name, admission_number, section_id, classes(name))')
-    .eq('school_id', req.user!.school_id).order('created_at', { ascending: false })
-  if (scope.kind === 'student') q = q.eq('student_id', scope.studentId)
+    .select(`*, ${studentsEmbed(scope, 'id, first_name, last_name, admission_number, section_id, classes(name)')}`,
+            { count: 'exact' })
+    .eq('school_id', req.user!.school_id)
+    .range(from, to)
+    .order('created_at', { ascending: false })
+
+  q = scopeInvoiceQuery(q, scope)
   if (req.query.student_id) q = q.eq('student_id', req.query.student_id as string)
 
-  const { data, error } = await q
+  const { data, error, count } = await q
   if (error) return res.status(500).json({ success: false, error: error.message })
-  res.json({ success: true, data })
+  res.json({ success: true, data, meta: { total: count ?? 0, page: pg, limit: lim } })
 }))
 
 router.post('/scholarships', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {

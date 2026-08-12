@@ -1,10 +1,16 @@
 import 'dotenv/config'
+// Side-effect import: pins the process to the school's timezone before anything
+// else in this process asks what day it is. Must stay directly below dotenv.
+import './shared/utils/timezone'
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import morgan from 'morgan'
 import rateLimit from 'express-rate-limit'
 import cron from 'node-cron'
+import { SCHOOL_TIMEZONE } from './shared/utils/timezone'
+import { toLocalDateStr } from './shared/utils/academicCalendar'
+import { activeProvider, paymentConfigError } from './modules/fee/lib/providers'
 import { runFeeReminders } from './shared/utils/feeReminders'
 import { runDeliveries } from './shared/utils/delivery'
 import { runLeaveAccrual, runLeaveYearEnd } from './shared/utils/leavePolicy'
@@ -16,6 +22,7 @@ import sisRoutes from './modules/sis/routes'
 import hrmsRoutes from './modules/hrms/routes'
 import admissionRoutes from './modules/admission/routes'
 import feeRoutes, { feeWebhookRoutes } from './modules/fee'
+import { reapStaleOrders } from './modules/fee/gateway'
 import examRoutes from './modules/exam/routes'
 import documentRoutes from './modules/documents/routes'
 import { errorHandler, notFoundHandler } from './shared/utils/helpers'
@@ -81,7 +88,21 @@ app.use(morgan('dev'))
 // the handler unparsed — express.json() would re-serialise and the hash would no
 // longer match what the provider signed. Mounted ahead of the parser, and ahead
 // of the fee module's `authenticate`, because a payment provider has no login.
-app.use('/api/fees/gateway/webhook', express.raw({ type: '*/*', limit: '1mb' }), feeWebhookRoutes)
+//
+// It needs its own limiter, because mounting it here means the global /api
+// limiter further down never sees it — Express matches in registration order and
+// this router terminates the request. That left the one unauthenticated,
+// publicly reachable, money-moving endpoint in the product with no rate limit at
+// all: unbounded HMAC guessing, one crypto compare per attempt, free.
+//
+// 60/minute is generous for a provider (Razorpay's retry schedule is minutes
+// apart) and useless for a guesser.
+app.use(
+  '/api/fees/gateway/webhook',
+  rateLimit({ windowMs: 60 * 1000, max: 60 }),
+  express.raw({ type: '*/*', limit: '1mb' }),
+  feeWebhookRoutes,
+)
 
 app.use(express.json({ limit: '10mb' }))
 
@@ -118,6 +139,16 @@ app.use('/api/principal', principalRoutes)
 app.use(notFoundHandler)
 app.use(errorHandler)
 
+// Unresolved payment orders. Hourly, because the number worth watching is not
+// how many expired but whether ANY are expiring — a steady trickle means orders
+// are being created and never captured, which is what a rotated webhook secret
+// or a misconfigured provider dashboard looks like from the inside.
+cron.schedule('30 * * * *', () => {
+  reapStaleOrders()
+    .then(r => { if (r.expired) console.log(`[gateway] reaper expired ${r.expired} order(s)`) })
+    .catch(err => console.error('[gateway] reaper failed:', err))
+})
+
 // Daily fee due/overdue reminder sweep, 7:00 AM server time, across
 // every school (there's no per-request school_id here — this is the
 // unattended background job; the admin-triggered POST
@@ -126,7 +157,12 @@ app.use(errorHandler)
 // guaranteed to actually fire).
 cron.schedule('0 7 * * *', () => {
   runFeeReminders()
-    .then(result => console.log(`[fee-reminders] checked ${result.checked} invoices, notified for ${result.notified}`))
+    // skipped_not_owed_by_family is printed because it is the signal that a
+    // student is miscategorised — the number the sweep's own comment says to
+    // watch, and which nothing ever showed anybody.
+    .then(result => console.log(
+      `[fee-reminders] checked ${result.checked} invoices, notified for ${result.notified}, ` +
+      `skipped ${result.skipped_not_owed_by_family} not owed by the family`))
     .catch(err => console.error('[fee-reminders] failed:', err))
 })
 
@@ -190,7 +226,22 @@ app.listen(PORT, () => {
   // Printed because a CORS rejection is invisible from the browser — it
   // surfaces as a generic network failure with no hint of what the server
   // would have accepted.
-  console.log(`  CORS allows: ${allowedOrigins.join(', ') || '(nothing configured — set ALLOWED_ORIGINS)'}\n`)
+  console.log(`  CORS allows: ${allowedOrigins.join(', ') || '(nothing configured — set ALLOWED_ORIGINS)'}`)
+  console.log(`  Timezone:    ${SCHOOL_TIMEZONE} (today is ${toLocalDateStr(new Date())})`)
+
+  // Said at boot rather than discovered by a parent. A misconfigured gateway
+  // does not stop the rest of the ERP — attendance and exams have nothing to do
+  // with Razorpay — but it must not be silent either, because the failure mode
+  // it replaces was a deployment quietly running the simulator.
+  const gatewayProblem = paymentConfigError()
+  if (gatewayProblem) {
+    console.error(`  PAYMENTS:    DISABLED — ${gatewayProblem}\n`)
+  } else {
+    const provider = activeProvider()
+    console.log(
+      `  Payments:    ${provider.name}${provider.isSimulated ? ' (SIMULATED — moves no money)' : ''}\n`,
+    )
+  }
 })
 
 export default app

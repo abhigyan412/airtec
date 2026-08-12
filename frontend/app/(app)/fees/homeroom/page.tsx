@@ -5,6 +5,7 @@ import { ArrowLeft, Wallet } from 'lucide-react'
 import { teacherApi } from '@/lib/api'
 import { formatCurrency } from '@/lib/utils'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { QueryError } from '@/components/shared/QueryError'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -24,7 +25,7 @@ interface FeeDue {
 // than falling back to the school-wide /fees/recovery page, which needs
 // fee.view (a class teacher doesn't hold it) and isn't section-scoped.
 export default function HomeroomFeeDuesPage() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['teacher-homeroom-fee-dues'],
     queryFn: () => teacherApi.homeroomFeeDues().then(r => r.data as { section_name: string; class_name: string; students: FeeDue[]; total_overdue: number }),
   })
@@ -46,6 +47,8 @@ export default function HomeroomFeeDuesPage() {
         <div className="space-y-2">
           {[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full rounded-xl" />)}
         </div>
+      ) : error ? (
+        <QueryError error={error} title="Could not load your homeroom's fees" />
       ) : !data || data.students.length === 0 ? (
         <Card>
           <EmptyState icon={Wallet} title="No pending fees in your homeroom" className="py-14" />

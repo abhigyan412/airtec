@@ -3,8 +3,9 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Download, Banknote, Landmark, Receipt, AlertTriangle, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { QueryError } from '@/components/shared/QueryError'
 import { feeApi, downloadFeeCsv } from '@/lib/api'
-import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { formatCurrency, formatDate, cn, todayLocalISO } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -20,13 +21,16 @@ import { StatCard } from '@/components/shared/StatCard'
 // "find this parent's receipt" and "what did we take today". Two destinations
 // for one table was a nav entry nobody could tell apart from the other.
 
-const today = () => new Date().toISOString().slice(0, 10)
+// todayLocalISO, not toISOString().slice(0,10). The UTC slice returns
+// YESTERDAY until 05:30 IST, so a cashier opening the Day Book first thing was
+// shown the previous day's takings — and the "Today" button was wrong too.
+const today = () => todayLocalISO()
 
 export function DayBook() {
   const [date, setDate] = useState(today())
   const [downloading, setDownloading] = useState(false)
 
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-daybook', date],
     queryFn: () => feeApi.daybook(date).then(r => r.data),
   })
@@ -69,6 +73,11 @@ export function DayBook() {
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[120px] rounded-xl" />)}
         </div>
+      ) : error ? (
+        // ₹0 cash, ₹0 bank, 0 receipts is what a failed request used to look
+        // like — indistinguishable from a genuine zero-takings day, on the one
+        // report whose whole job is to be reconciled against a cash box.
+        <QueryError error={error} title="Could not load the day book" />
       ) : (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {/* Cash first and on its own: it is the only line that has to match a
@@ -131,6 +140,8 @@ export function DayBook() {
             <div className="space-y-3 p-5">
               {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
+          ) : error ? (
+            <div className="p-5"><QueryError error={error} title="Could not load the receipts" /></div>
           ) : !rows.length ? (
             <EmptyState
               icon={Receipt}

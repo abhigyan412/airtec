@@ -120,8 +120,9 @@ router.post('/:id/decide', requireFeeManage, asyncHandler(async (req: FeeRequest
   }
   const school_id = req.user!.school_id
 
-  const { data: request } = await supabase.from('fee_action_requests')
+  const { data: request, error: readErr } = await supabase.from('fee_action_requests')
     .select('*').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+  if (readErr) return res.status(500).json({ success: false, error: readErr.message })
   if (!request) return res.status(404).json({ success: false, error: 'Request not found' })
   if (request.status !== 'pending') {
     return res.status(400).json({ success: false, error: `Already ${request.status}` })
@@ -130,16 +131,36 @@ router.post('/:id/decide', requireFeeManage, asyncHandler(async (req: FeeRequest
     return res.status(403).json({ success: false, error: 'You raised this — someone else has to decide it.' })
   }
 
-  if (decision === 'approved') {
-    const applied = await apply(request, school_id)
-    if (applied.error) return res.status(400).json({ success: false, error: applied.error })
-  }
-
+  // ── Claim the request BEFORE performing the action ────────────────
+  //
+  // apply() used to run first and the row was marked decided afterwards, with
+  // nothing in between making the pair exclusive. Two clicks — or one
+  // double-click on a slow connection — both read 'pending', both passed the
+  // check above, and both applied: a ₹3,000 refund approved twice posted ₹6,000
+  // to the ledger against a ₹3,000 payment.
+  //
+  // A conditional UPDATE is atomic, so exactly one caller gets the row. The
+  // action then runs having already won the claim, and a failure inside it
+  // releases the claim below.
   const { data, error } = await supabase.from('fee_action_requests').update({
     status: decision, decision_note: note,
     decided_by: req.user!.id, decided_at: new Date().toISOString(),
-  }).eq('id', req.params.id).select(SELECT).single()
+  }).eq('id', req.params.id).eq('status', 'pending').select(SELECT).maybeSingle()
+
   if (error) return res.status(400).json({ success: false, error: error.message })
+  if (!data) return res.status(409).json({ success: false, error: 'Somebody else decided this a moment ago.' })
+
+  if (decision === 'approved') {
+    const applied = await apply(request, school_id)
+    if (applied.error) {
+      // Put it back. The claim exists to make the action happen once, not to
+      // consume the request when the action could not be performed at all.
+      await supabase.from('fee_action_requests').update({
+        status: 'pending', decision_note: null, decided_by: null, decided_at: null,
+      }).eq('id', req.params.id)
+      return res.status(400).json({ success: false, error: applied.error })
+    }
+  }
 
   await supabase.from('audit_logs').insert({
     school_id, user_id: req.user!.id, action: `FEE_REQUEST_${decision.toUpperCase()}`,
@@ -155,14 +176,24 @@ async function apply(request: any, schoolId: string): Promise<{ error?: string }
   const amount = money(Number(request.amount ?? 0))
 
   if (request.kind === 'late_fee_waiver') {
-    const { data: inv } = await supabase.from('fee_invoices')
-      .select('total_amount, late_fee').eq('id', request.target_id).maybeSingle()
+    const { data: inv, error: invErr } = await supabase.from('fee_invoices')
+      .select('total_amount, late_fee, late_fee_waived').eq('id', request.target_id).maybeSingle()
+    if (invErr) return { error: invErr.message }
     if (!inv) return { error: 'The invoice no longer exists' }
     const fee = money(Number(inv.late_fee))
     if (fee <= 0) return { error: 'The late fee has already been removed' }
 
+    // late_fee_waived is the whole point. Zeroing late_fee recorded the
+    // forgiveness NOWHERE, so the nightly sweep recomputed the identical fine
+    // from the identical overdue date and applied it again — the family was
+    // chased for money the school had formally written off, and the ledger and
+    // the invoice disagreed about whether it existed.
     const { error } = await supabase.from('fee_invoices')
-      .update({ late_fee: 0, total_amount: money(Number(inv.total_amount) - fee) })
+      .update({
+        late_fee: 0,
+        late_fee_waived: money(Number(inv.late_fee_waived ?? 0) + fee),
+        total_amount: money(Number(inv.total_amount) - fee),
+      })
       .eq('id', request.target_id)
     if (error) return { error: error.message }
     await postWriteOff({ schoolId, sourceId: request.id, studentId: request.student_id, amount: fee, kind: 'waiver' })
@@ -170,15 +201,29 @@ async function apply(request: any, schoolId: string): Promise<{ error?: string }
   }
 
   if (request.kind === 'writeoff') {
+    // Re-derived, not taken from the request. `amount` is a snapshot from when
+    // the request was RAISED; a payment made in between would make it larger
+    // than what is actually outstanding, and the ledger would write off money
+    // the family had since paid.
+    const { data: inv, error: invErr } = await supabase.from('fee_invoices')
+      .select('total_amount, amount_paid, status').eq('id', request.target_id).maybeSingle()
+    if (invErr) return { error: invErr.message }
+    if (!inv) return { error: 'The invoice no longer exists' }
+    if (['cancelled', 'waived'].includes(inv.status)) return { error: `This invoice is already ${inv.status}` }
+
+    const owed = money(Number(inv.total_amount) - Number(inv.amount_paid))
+    if (owed <= 0) return { error: 'That balance has since been paid — nothing to write off.' }
+
     const { error } = await supabase.from('fee_invoices')
       .update({ status: 'waived' }).eq('id', request.target_id)
     if (error) return { error: error.message }
-    await postWriteOff({ schoolId, sourceId: request.id, studentId: request.student_id, amount, kind: 'writeoff' })
+    await postWriteOff({ schoolId, sourceId: request.id, studentId: request.student_id, amount: owed, kind: 'writeoff' })
     return {}
   }
 
-  const { data: pay } = await supabase.from('fee_payments')
+  const { data: pay, error: payErr } = await supabase.from('fee_payments')
     .select('amount, refunded_amount, method').eq('id', request.target_id).maybeSingle()
+  if (payErr) return { error: payErr.message }
   if (!pay) return { error: 'The payment no longer exists' }
 
   if (request.kind === 'payment_cancel') {

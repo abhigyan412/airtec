@@ -1,4 +1,8 @@
 import { supabase } from '../../../shared/db/client'
+import { selectAll } from '../../../shared/db/paged'
+
+// Re-exported so the fee module keeps one import for its data-access helpers.
+export { selectAll, PAGE_SIZE, ROW_CEILING } from '../../../shared/db/paged'
 
 /**
  * PostgREST puts `.in()` lists in the URL, so a large id array becomes a very
@@ -23,6 +27,13 @@ export function chunk<T>(items: T[], size = IN_CHUNK): T[][] {
  * Errors throw rather than resolving to a partial set. A short read here would
  * silently drop a student's discount or a class's fee structure, and the caller
  * would bill the wrong amount without anything looking wrong.
+ *
+ * Each chunk is PAGED, which it was not before. Chunking bounds the number of
+ * ids in the URL; it does nothing about the number of rows that come back, and
+ * the two are only the same when each id yields about one row. They frequently
+ * do not: 150 students yield 600–1,800 invoices, and one fee structure yields
+ * every assignment on it. Those chunks were being capped at 1,000 rows and the
+ * shortfall landed straight in a billing run or a category report.
  */
 export async function selectIn<T = any>(
   table: string,
@@ -30,19 +41,19 @@ export async function selectIn<T = any>(
   column: string,
   ids: string[],
   refine?: (q: any) => any,
+  opts: { orderBy?: string } = {},
 ): Promise<T[]> {
   if (!ids.length) return []
 
   const results = await Promise.all(
-    chunk(ids).map(async (batch, idx) => {
-      let q = supabase.from(table).select(columns).in(column, batch)
-      if (refine) q = refine(q)
-      const { data, error } = await q
-      if (error) {
-        throw new Error(`Failed to read ${table} (batch ${idx + 1}): ${error.message}`)
-      }
-      return (data ?? []) as T[]
-    }),
+    chunk(ids).map((batch, idx) =>
+      selectAll<T>(table, columns, q => {
+        const scoped = q.in(column, batch)
+        return refine ? refine(scoped) : scoped
+      }, { orderBy: opts.orderBy ?? 'id' }).catch((e: any) => {
+        throw new Error(`Failed to read ${table} (batch ${idx + 1}): ${e.message}`)
+      }),
+    ),
   )
 
   return results.flat()

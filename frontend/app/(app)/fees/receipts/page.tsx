@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { QueryError } from '@/components/shared/QueryError'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { DayBook } from '@/components/fees/DayBook'
@@ -35,7 +36,7 @@ export default function ReceiptsPage() {
   const limit = 25
 
   const query = { page, limit, search: search || undefined }
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-receipts', query],
     // A receipt IS a payment — there is no separate list endpoint and there
     // should not be, or the two would drift on what "collected" means.
@@ -113,6 +114,8 @@ export default function ReceiptsPage() {
           <div className="space-y-3 p-5">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
           </div>
+        ) : error ? (
+          <QueryError error={error} title="Could not load the receipts" />
         ) : !rows.length ? (
           <EmptyState
             icon={Receipt}

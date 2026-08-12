@@ -4,7 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { money } from '../../shared/utils/feeMoney'
 import { FREQUENCIES, Frequency, findPeriod, periodsForFrequency } from '../../shared/utils/billingPeriod'
-import { selectIn, insertChunked } from './lib/db'
+import { selectAll, selectIn, insertChunked } from './lib/db'
 import { FeeRequest, requireFeeView, requireFeeManage } from './lib/guards'
 
 // What the state owes the school.
@@ -111,14 +111,20 @@ router.post('/claims/generate', requireFeeManage, asyncHandler(async (req: FeeRe
 
   // Who is on an RTE seat. The category is on the assignment, so a student
   // recategorised mid-year is picked up on the next run without a backfill.
-  const { data: assignments, error: aErr } = await supabase.from('fee_assignments')
-    .select('student_id, students!inner(id, first_name, last_name, admission_number, status, classes(name, numeric_level))')
-    .eq('school_id', school_id).eq('academic_year_id', body.academic_year_id)
-    .eq('fee_category', 'rte').eq('status', 'active')
-    .eq('students.status', 'active')
-  if (aErr) return res.status(500).json({ success: false, error: aErr.message })
+  // Paged. Under a 25% RTE quota a 4,000-student school has about 1,000 seats —
+  // exactly at the cap — and past it the run raised claims for fewer children
+  // than it has, reporting `generated: N` as a success. That is money the state
+  // owes the school, never asked for, with nothing anywhere saying so.
+  const assignments = await selectAll<any>(
+    'fee_assignments',
+    'student_id, students!inner(id, first_name, last_name, admission_number, status, classes(name, numeric_level))',
+    q => q.eq('school_id', school_id).eq('academic_year_id', body.academic_year_id)
+          .eq('fee_category', 'rte').eq('status', 'active')
+          .eq('students.status', 'active'),
+    { orderBy: 'student_id' },
+  )
 
-  const students = (assignments ?? []).map((a: any) => a.students).filter(Boolean)
+  const students = assignments.map((a: any) => a.students).filter(Boolean)
   if (!students.length) {
     return res.json({
       success: true,
@@ -126,8 +132,17 @@ router.post('/claims/generate', requireFeeManage, asyncHandler(async (req: FeeRe
     })
   }
 
-  const { data: rates } = await supabase.from('rte_rates').select('*')
+  // Checked. A failed read here made rateFor() return undefined for everyone, so
+  // every student came back `skipped: no_rate_for_class` and the run reported
+  // success having raised zero claims — indistinguishable from a school that has
+  // simply not configured its rates.
+  //
+  // Ordered, too: overlapping bands used to resolve by whatever order the rows
+  // happened to come back in, so which rate applied was not deterministic.
+  const { data: rates, error: rErr } = await supabase.from('rte_rates').select('*')
     .eq('school_id', school_id).eq('academic_year_id', body.academic_year_id)
+    .order('class_from', { ascending: true })
+  if (rErr) return res.status(500).json({ success: false, error: rErr.message })
 
   const rateFor = (level: number | null) =>
     (rates ?? []).find((r: any) => level != null && level >= r.class_from && level <= r.class_to)

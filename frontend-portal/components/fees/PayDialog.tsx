@@ -58,23 +58,61 @@ export function PayDialog({
     }
   }
 
-  // Stands in for the provider's checkout sheet. With real credentials this is
-  // where the SDK opens instead, and everything after it is unchanged.
+  /** Poll the order and land on done/failed. Shared by both completion paths. */
+  const settle = async () => {
+    const res = await feeApi.gateway.get(order.order_id)
+    if (res.data.status === 'paid') {
+      setReceipt(res.data.receipt)
+      setStage('done')
+      qc.invalidateQueries({ queryKey: ['portal-fee-summary'] })
+      qc.invalidateQueries({ queryKey: ['notifications'] })
+    } else {
+      setError(res.data.failure_reason ?? 'The payment did not go through')
+      setStage('failed')
+    }
+  }
+
+  // The real provider's checkout.
+  //
+  // The backend has returned a `checkout` object on every order since this flow
+  // was built and NOTHING read it — confirm() called /simulate unconditionally,
+  // which returns 400 the moment a provider is configured. The pay button was
+  // therefore guaranteed to break on the day the school connected Razorpay, and
+  // the non-simulated branch of this dialog rendered the words "Opening your
+  // bank's secure page…" while opening nothing at all.
+  const openCheckout = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const checkout = order?.checkout
+      if (checkout?.redirect_url) {
+        // Hosted checkout: leave the app. The webhook records the payment
+        // whether or not the browser ever comes back, which is why capture does
+        // not depend on this return trip.
+        window.location.href = checkout.redirect_url
+        return
+      }
+      setError(
+        'This school\'s payment provider is configured but the checkout could not be opened. ' +
+        'Please pay at the school office.',
+      )
+      setStage('failed')
+    } catch (e: any) {
+      setError(e?.response?.data?.error ?? 'Could not open the payment page')
+      setStage('failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // The mock driver's stand-in for a checkout sheet. Only ever reachable when
+  // the order came back `simulated` AND this caller may complete one.
   const confirm = async (outcome: 'paid' | 'failed') => {
     setBusy(true)
     setError(null)
     try {
       await feeApi.gateway.simulate(order.order_id, outcome)
-      const res = await feeApi.gateway.get(order.order_id)
-      if (res.data.status === 'paid') {
-        setReceipt(res.data.receipt)
-        setStage('done')
-        qc.invalidateQueries({ queryKey: ['portal-fee-summary'] })
-        qc.invalidateQueries({ queryKey: ['notifications'] })
-      } else {
-        setError(res.data.failure_reason ?? 'The payment did not go through')
-        setStage('failed')
-      }
+      await settle()
     } catch (e: any) {
       setError(e?.response?.data?.error ?? 'Could not complete the payment')
       setStage('failed')
@@ -169,7 +207,7 @@ export function PayDialog({
               </p>
             </div>
 
-            {order?.simulated ? (
+            {order?.simulated && order?.can_complete && (
               // Said plainly. A parent must never be shown a receipt for money
               // that did not move.
               <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5">
@@ -179,19 +217,51 @@ export function PayDialog({
                   will actually move. Use the buttons below to see what happens either way.
                 </p>
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">Opening your bank&apos;s secure page…</p>
+            )}
+
+            {order?.simulated && !order?.can_complete && (
+              // Honest dead end. The school is running the simulator, so there is
+              // no way to take this money online — and pretending otherwise ends
+              // with a family holding a receipt for a payment that never happened.
+              <div className="rounded-lg border border-border bg-muted/60 px-3 py-2.5">
+                <p className="text-xs font-semibold text-foreground">Online payment isn&apos;t available yet</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Your school hasn&apos;t connected a payment provider. Please pay at
+                  the school office — nothing has been charged.
+                </p>
+              </div>
+            )}
+
+            {!order?.simulated && (
+              <p className="text-sm text-muted-foreground">
+                You&apos;ll be taken to your bank&apos;s secure page to finish paying.
+              </p>
             )}
 
             {error && <p className="text-sm font-medium text-destructive">{error}</p>}
 
             <div className="flex gap-2">
-              <Button className="flex-1" onClick={() => confirm('paid')} disabled={busy}>
-                {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Complete payment
-              </Button>
-              <Button variant="ghost" onClick={() => confirm('failed')} disabled={busy}>
-                Simulate failure
-              </Button>
+              {order?.simulated ? (
+                order?.can_complete ? (
+                  <>
+                    <Button className="flex-1" onClick={() => confirm('paid')} disabled={busy}>
+                      {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Complete payment
+                    </Button>
+                    {/* Inside the simulated guard, where it always belonged. It
+                        used to sit outside the ternary, so a parent on a live
+                        payment provider was shown a "Simulate failure" button. */}
+                    <Button variant="ghost" onClick={() => confirm('failed')} disabled={busy}>
+                      Simulate failure
+                    </Button>
+                  </>
+                ) : (
+                  <Button className="flex-1" variant="outline" onClick={onClose}>Close</Button>
+                )
+              ) : (
+                <Button className="flex-1" onClick={openCheckout} disabled={busy}>
+                  {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Continue to payment
+                </Button>
+              )}
             </div>
           </div>
         )}

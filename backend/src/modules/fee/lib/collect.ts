@@ -1,7 +1,5 @@
 import { supabase } from '../../../shared/db/client'
-import { nextDocumentNumber } from '../../../shared/utils/documentNumbers'
 import { amountDue, money } from '../../../shared/utils/feeMoney'
-import { postPayment } from './ledger'
 
 // Taking money — once, for every channel.
 //
@@ -30,6 +28,13 @@ export interface CollectInput {
   collectedBy?: string | null
   /** Refuse rather than hold change as advance credit. */
   allowAdvance?: boolean
+  /**
+   * A repeat of this key returns the original receipt instead of taking the
+   * money again. The gateway keys on the provider's payment id; the counter
+   * keys on whatever the client sends, so a cashier double-clicking on a slow
+   * connection cannot produce two receipts for one handover.
+   */
+  idempotencyKey?: string | null
 }
 
 export interface CollectResult {
@@ -39,6 +44,8 @@ export interface CollectResult {
   settled_invoices: { invoice_id: string; invoice_number: string; allocated: number }[]
   advance: number
   remaining_outstanding: number
+  /** True when an idempotency key matched an existing receipt and no money moved. */
+  replayed?: boolean
 }
 
 export type CollectOutcome =
@@ -61,99 +68,62 @@ async function openInvoices(schoolId: string, studentId: string, invoiceIds?: st
   return data ?? []
 }
 
+/**
+ * Take a payment. One transaction, in Postgres.
+ *
+ * This used to be FIVE separate transactions — receipt number, payment row,
+ * allocations, ledger pair, re-read — each an independent HTTP call to
+ * PostgREST, with no way to roll any of them back as a group. A failure between
+ * the payment insert and the allocation insert left a ₹10,000 receipt settling
+ * nothing, which the unallocated trigger then converted into a ₹10,000 advance
+ * credit that does not exist: the same money reported simultaneously as
+ * advance_held and as outstanding, and spendable by a cashier.
+ *
+ * The manual `delete the payment again` compensation below it was the tell. It
+ * could itself fail, and when it did there was nothing left to try.
+ *
+ * The other half of the win is inside the function: it locks the open invoices
+ * BEFORE deciding the split. Working the allocation out from an unlocked read is
+ * what let two cashiers take the same fee at the same moment and both believe
+ * the invoice was unpaid.
+ */
 export async function collectPayment(input: CollectInput): Promise<CollectOutcome> {
-  const { schoolId, studentId } = input
-  const allowAdvance = input.allowAdvance ?? true
-
-  let invoices: any[]
-  try {
-    invoices = await openInvoices(schoolId, studentId, input.invoiceIds)
-  } catch (e: any) {
-    return { ok: false, status: 500, error: e.message }
-  }
-
-  const outstanding = money(invoices.reduce((s, i) => s + amountDue(i.total_amount, i.amount_paid), 0))
-  const advance = money(Math.max(0, input.amount - outstanding))
-
-  if (advance > 0 && !allowAdvance) {
-    return {
-      ok: false, status: 400,
-      error: `That is ₹${advance} more than the ₹${outstanding} outstanding.`,
-    }
-  }
-
-  // Work the split out BEFORE writing anything, so a shortfall is caught before
-  // any money is recorded rather than halfway through a sequence of inserts.
-  let left = money(input.amount)
-  const split: { invoice: any; amount: number }[] = []
-  for (const inv of invoices) {
-    if (left <= 0.001) break
-    const due = amountDue(inv.total_amount, inv.amount_paid)
-    if (due <= 0) continue
-    const take = money(Math.min(due, left))
-    split.push({ invoice: inv, amount: take })
-    left = money(left - take)
-  }
-
-  const receiptNumber = await nextDocumentNumber(schoolId, 'RCP')
-
-  const { data: payment, error: payErr } = await supabase.from('fee_payments').insert({
-    school_id: schoolId,
-    student_id: studentId,
-    receipt_number: receiptNumber,
-    amount: money(input.amount),
-    method: input.method,
-    reference: input.reference,
-    cheque_number: input.chequeNumber,
-    cheque_date: input.chequeDate,
-    bank_name: input.bankName,
-    notes: input.notes,
-    collected_by: input.collectedBy ?? null,
-  }).select().single()
-
-  if (payErr) return { ok: false, status: 400, error: payErr.message }
-
-  if (split.length) {
-    const { error: allocErr } = await supabase.from('fee_payment_allocations').insert(
-      split.map(s => ({ payment_id: payment.id, invoice_id: s.invoice.id, amount: s.amount })))
-
-    if (allocErr) {
-      // The receipt exists but settles nothing — worse than no receipt, so the
-      // whole transaction is rolled back by hand and the caller told plainly.
-      await supabase.from('fee_payments').delete().eq('id', payment.id)
-      return { ok: false, status: 400, error: `Could not allocate the payment: ${allocErr.message}` }
-    }
-  }
-
-  // Late fee is credited to its own account so fee income is not overstated by
-  // penalties, which a school reports separately.
-  const lateFeePortion = money(split.reduce(
-    (s, p) => s + Math.min(Number(p.invoice.late_fee ?? 0), p.amount), 0))
-
-  await postPayment({
-    schoolId,
-    paymentId: payment.id,
-    studentId,
-    method: input.method,
-    allocated: money(input.amount - advance),
-    unallocated: advance,
-    lateFee: lateFeePortion,
+  const { data, error } = await supabase.rpc('fee_collect_payment', {
+    p_school_id: input.schoolId,
+    p_student_id: input.studentId,
+    p_amount: money(input.amount),
+    p_method: input.method,
+    p_reference: input.reference ?? null,
+    p_cheque_number: input.chequeNumber ?? null,
+    p_cheque_date: input.chequeDate ?? null,
+    p_bank_name: input.bankName ?? null,
+    p_notes: input.notes ?? null,
+    p_invoice_ids: input.invoiceIds?.length ? input.invoiceIds : null,
+    p_collected_by: input.collectedBy ?? null,
+    p_allow_advance: input.allowAdvance ?? true,
+    p_idempotency_key: input.idempotencyKey ?? null,
   })
 
-  const { data: settled } = await supabase.from('fee_payments')
-    .select('unallocated_amount').eq('id', payment.id).single()
+  if (error) {
+    // The overpayment and advance guards raise check_violation, which is the
+    // caller's fault; anything else is ours.
+    const isCallerError = error.code === '23514' || /check_violation|more than the/i.test(error.message)
+    return { ok: false, status: isCallerError ? 400 : 500, error: error.message }
+  }
 
+  const result = data as any
   return {
     ok: true,
     data: {
-      payment_id: payment.id,
-      receipt_number: receiptNumber,
-      amount: money(input.amount),
-      settled_invoices: split.map(s => ({
-        invoice_id: s.invoice.id, invoice_number: s.invoice.invoice_number, allocated: s.amount,
+      payment_id: result.payment_id,
+      receipt_number: result.receipt_number,
+      amount: Number(result.amount),
+      settled_invoices: (result.settled_invoices ?? []).map((s: any) => ({
+        invoice_id: s.invoice_id, invoice_number: s.invoice_number, allocated: Number(s.allocated),
       })),
-      advance: Number(settled?.unallocated_amount ?? advance),
-      remaining_outstanding: money(Math.max(0, outstanding - (input.amount - advance))),
+      advance: Number(result.advance ?? 0),
+      remaining_outstanding: Number(result.remaining_outstanding ?? 0),
+      replayed: Boolean(result.replayed),
     },
   }
 }

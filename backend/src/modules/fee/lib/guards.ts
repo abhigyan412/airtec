@@ -145,13 +145,18 @@ export async function assertCanReadStudent(
   }
 
   if (scope.kind === 'section') {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('students')
       .select('id')
       .eq('id', studentId)
       .eq('school_id', schoolId)
       .eq('section_id', scope.sectionId)
       .maybeSingle()
+    // Distinguished, because they are different problems for the reader. An
+    // unchecked error here told a class teacher they were looking at somebody
+    // else's student when in fact the database was unreachable — and sent them
+    // to an administrator to fix a permission that was never wrong.
+    if (error) return 'Could not check your homeroom just now. Try again.'
     return data ? null : 'You can only view students in your own homeroom section'
   }
 

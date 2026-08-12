@@ -5,7 +5,8 @@ import { asyncHandler } from '../../shared/utils/helpers'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { FREQUENCIES, Frequency, findPeriod, periodsForFrequency } from '../../shared/utils/billingPeriod'
 import { alreadyBilled, resolveBilling } from './lib/resolve'
-import { insertChunked, selectIn } from './lib/db'
+import { insertChunked, selectAll, selectIn } from './lib/db'
+import { postInvoice } from './lib/ledger'
 import { FeeRequest, requireFeeView, requireFeeInvoiceGenerate } from './lib/guards'
 
 // Raising a period's invoices.
@@ -44,25 +45,27 @@ async function targetStudentIds(schoolId: string, body: Run): Promise<string[]> 
   // Billing one plan means billing the students ON it, which is an assignment
   // lookup — not a class filter. A plan offered to Class 5 may have half of 5-B
   // on a scholarship plan instead, and a class filter would bill them twice.
+  // Both scans are PAGED. A school-wide run over more than 1,000 active
+  // students used to bill the first thousand, return `success: true` with
+  // `generated: 1000`, and leave the rest uninvoiced with nothing reporting the
+  // truncation — a whole term's fees, missing, silently.
   if (body.structure_id) {
-    const { data, error } = await supabase.from('fee_assignments')
-      .select('student_id, students!inner(status)')
+    const rows = await selectAll<any>('fee_assignments', 'student_id, students!inner(status)', q => q
       .eq('school_id', schoolId).eq('structure_id', body.structure_id).eq('status', 'active')
-      .eq('students.status', 'active')
-    if (error) throw new Error(error.message)
-    return (data ?? []).map((a: any) => a.student_id)
+      .eq('students.status', 'active'))
+    return rows.map((a: any) => a.student_id)
   }
 
-  let q = supabase.from('students').select('id')
-    .eq('school_id', schoolId)
-    // A student who left in April must never appear in a term run — that is how
-    // a school ends up chasing arrears from a family that owes nothing.
-    .eq('status', 'active')
-  if (body.class_ids.length) q = q.in('class_id', body.class_ids)
-  if (body.section_ids.length) q = q.in('section_id', body.section_ids)
-  const { data, error } = await q
-  if (error) throw new Error(error.message)
-  return (data ?? []).map(s => s.id)
+  const rows = await selectAll<any>('students', 'id', q => {
+    let scoped = q.eq('school_id', schoolId)
+      // A student who left in April must never appear in a term run — that is how
+      // a school ends up chasing arrears from a family that owes nothing.
+      .eq('status', 'active')
+    if (body.class_ids.length) scoped = scoped.in('class_id', body.class_ids)
+    if (body.section_ids.length) scoped = scoped.in('section_id', body.section_ids)
+    return scoped
+  })
+  return rows.map(s => s.id)
 }
 
 /**
@@ -208,6 +211,22 @@ router.post('/generate', requireFeeInvoiceGenerate, asyncHandler(async (req: Fee
     }
     throw e
   }
+
+  // Post the receivable. Invoices were recorded in the ledger NOWHERE, which is
+  // why `receivable` was only ever credited — by waivers and write-offs — and
+  // ran permanently negative. Income is recognised when the bill goes out, which
+  // is the basis postWriteOff has always assumed.
+  //
+  // Best-effort, deliberately: a ledger failure must not fail a billing run that
+  // has already issued numbered invoices. It is logged loudly by post() and the
+  // reconciliation endpoint will surface the gap.
+  await Promise.all(inserted.map(inv => postInvoice({
+    schoolId: school_id,
+    invoiceId: inv.id,
+    studentId: inv.student_id,
+    netAmount: Number(inv.total_amount),
+    memo: `Invoice ${inv.invoice_number}`,
+  })))
 
   await supabase.from('audit_logs').insert({
     school_id, user_id: req.user!.id,

@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Smartphone, Loader2, Copy, Check } from 'lucide-react'
 import { toast } from 'sonner'
+import { QueryError } from '@/components/shared/QueryError'
 import { feeApi, invalidateFeeQueries } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
@@ -47,7 +48,7 @@ export function OnlinePaymentCard({
   const [asking, setAsking] = useState(false)
   const canCollect = can('fee.collect')
 
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-orders', studentId],
     queryFn: () => feeApi.gateway.list({ student_id: studentId }).then(r => r.data as any[]),
   })
@@ -56,7 +57,26 @@ export function OnlinePaymentCard({
   const inFlight = orders.filter(o => o.status === 'created')
 
   // Nothing to show and nothing to start: don't occupy space on the page.
-  if (!isPending && !orders.length && (!canCollect || outstanding <= 0)) return null
+  //
+  // Explicitly NOT on error. This card carries the "a payment is already in
+  // flight for this student, do not take the cash again" warning, so a failed
+  // request silently deleting it is the one outcome that costs a family money
+  // twice — the card disappeared exactly when it had something to say.
+  if (!isPending && !error && !orders.length && (!canCollect || outstanding <= 0)) return null
+
+  if (error) {
+    return (
+      <Card className="p-5">
+        <QueryError
+          error={error}
+          title="Could not check for payments in progress"
+        />
+        <p className="mt-2 text-xs text-muted-foreground">
+          A parent may have an online payment in flight. Check with them before taking cash.
+        </p>
+      </Card>
+    )
+  }
 
   return (
     <Card>

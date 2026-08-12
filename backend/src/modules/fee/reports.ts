@@ -17,46 +17,53 @@ const OPEN = ['unpaid', 'partial']
 // filter was used.
 router.get('/stats', requireFeeView, asyncHandler(async (req: FeeRequest, res: Response) => {
   const { academic_year_id } = req.query
-  const school_id = req.user!.school_id
 
-  let invQ = supabase.from('fee_invoices')
-    .select('status, total_amount, amount_paid').eq('school_id', school_id).neq('status', 'cancelled')
-  if (academic_year_id) invQ = invQ.eq('academic_year_id', academic_year_id as string)
+  // One round trip returning one row, instead of streaming every invoice in the
+  // school into Node to add up.
+  //
+  // The scan this replaces was capped by PostgREST at 1,000 rows with no error
+  // and no indication: on this database, ₹99.3 lakh billed reported against a
+  // truth of ₹1.83 crore. Every screen fed by these figures repeated it.
+  const { data, error } = await supabase.rpc('fee_stats', {
+    p_school_id: req.user!.school_id,
+    p_academic_year_id: (academic_year_id as string) || null,
+  })
+  if (error) return res.status(500).json({ success: false, error: error.message })
 
-  const [invRes, arrRes, advRes] = await Promise.all([
-    invQ,
-    supabase.from('fee_arrears').select('amount, amount_paid')
-      .eq('school_id', school_id).in('status', ['pending', 'partial']),
-    supabase.from('fee_payments').select('unallocated_amount')
-      .eq('school_id', school_id).eq('status', 'captured').gt('unallocated_amount', 0),
+  res.json({ success: true, data })
+}))
+
+// ── Does any of this add up? ──────────────────────────────────────────
+//
+// The ledger has been write-only since it was built: every money path posted to
+// fee_ledger_entries and nothing ever read it back, so "do the books balance"
+// was a question with no way to ask it. Three invariants, each returning both
+// sides and the difference — "off by ₹4,200" is something a bursar can act on,
+// where "FAIL" is not.
+//
+// Intended to be watched, not just visited: an ok that goes false is the first
+// sign of a posting bug, and it will show up here long before it shows up in a
+// number anyone recognises as wrong.
+router.get('/reconciliation', requireFeeView, asyncHandler(async (req: FeeRequest, res: Response) => {
+  const [recon, trial] = await Promise.all([
+    supabase.rpc('fee_reconciliation', { p_school_id: req.user!.school_id }),
+    supabase.from('fee_trial_balance').select('*').eq('school_id', req.user!.school_id).order('account_code'),
   ])
-  if (invRes.error) return res.status(500).json({ success: false, error: invRes.error.message })
+  if (recon.error) return res.status(500).json({ success: false, error: recon.error.message })
+  if (trial.error) return res.status(500).json({ success: false, error: trial.error.message })
 
-  const invoices = invRes.data ?? []
-  const open = invoices.filter(i => OPEN.includes(i.status))
-
-  const billed = money(invoices.reduce((s, i) => s + Number(i.total_amount), 0))
-  const collected = money(invoices.reduce((s, i) => s + Number(i.amount_paid), 0))
-  // Only OPEN invoices are still owed. A carried_forward invoice's balance now
-  // lives in fee_arrears and is counted there — counting both is the exact
-  // double-count this model removes.
-  const invoiceDue = money(open.reduce((s, i) => s + amountDue(i.total_amount, i.amount_paid), 0))
-  const arrearsDue = money((arrRes.data ?? []).reduce((s, a) => s + amountDue(a.amount, a.amount_paid), 0))
-  const advance = money((advRes.data ?? []).reduce((s, p) => s + Number(p.unallocated_amount), 0))
+  const checks = recon.data as any
+  const failing = ['balanced', 'receivable_vs_invoices', 'cash_vs_payments'].filter(k => !checks?.[k]?.ok)
 
   res.json({
     success: true,
-    data: {
-      total_billed: billed,
-      total_collected: collected,
-      total_due: invoiceDue,
-      arrears_due: arrearsDue,
-      total_outstanding: money(invoiceDue + arrearsDue),
-      advance_held: advance,
-      paid_invoices: invoices.filter(i => i.status === 'paid').length,
-      partial_invoices: invoices.filter(i => i.status === 'partial').length,
-      unpaid_invoices: invoices.filter(i => i.status === 'unpaid').length,
-      collection_rate: billed > 0 ? Math.round((collected / billed) * 100) : 0,
+    data: { ...checks, trial_balance: trial.data ?? [] },
+    meta: {
+      ok: failing.length === 0,
+      failing,
+      note: failing.length
+        ? 'The ledger disagrees with the invoices or the payments. Every posting site writes here, so a difference means one of them is wrong.'
+        : 'Debits equal credits, the receivable matches what is outstanding, and cash matches what was received.',
     },
   })
 }))
@@ -64,69 +71,36 @@ router.get('/stats', requireFeeView, asyncHandler(async (req: FeeRequest, res: R
 // ── Fee position by class and section ─────────────────────────────────
 // A school chasing money thinks in classes, not in a flat list of every invoice.
 router.get('/classes', requireFeeView, asyncHandler(async (req: FeeRequest, res: Response) => {
-  const school_id = req.user!.school_id
   const { academic_year_id } = req.query
 
-  const { data: students, error: sErr } = await supabase.from('students')
-    .select('id, class_id, section_id, classes(name), sections(name)')
-    .eq('school_id', school_id).eq('status', 'active')
-  if (sErr) return res.status(500).json({ success: false, error: sErr.message })
+  // Was two unbounded scans — every active student AND every non-cancelled
+  // invoice in the school — joined in JavaScript. Both were capped at 1,000
+  // rows, so per-class billed/collected/outstanding were all understated, and
+  // the larger the class the more of it went missing.
+  const { data, error } = await supabase.rpc('fee_class_positions', {
+    p_school_id: req.user!.school_id,
+    p_academic_year_id: (academic_year_id as string) || null,
+  })
+  if (error) return res.status(500).json({ success: false, error: error.message })
 
-  let invQ = supabase.from('fee_invoices')
-    .select('student_id, total_amount, amount_paid, due_date, status')
-    .eq('school_id', school_id).neq('status', 'cancelled')
-  if (academic_year_id) invQ = invQ.eq('academic_year_id', academic_year_id as string)
-  const { data: invoices, error: iErr } = await invQ
-  if (iErr) return res.status(500).json({ success: false, error: iErr.message })
+  const rows = (data ?? []).map((b: any) => ({
+    ...b,
+    student_count: Number(b.student_count),
+    billed_student_count: Number(b.billed_student_count),
+    billed: Number(b.billed), collected: Number(b.collected),
+    outstanding: Number(b.outstanding), overdue: Number(b.overdue),
+  }))
 
-  const key = (c: string, s: string | null) => `${c}__${s ?? 'none'}`
-  const group = new Map<string, string>()
-  const buckets = new Map<string, any>()
-
-  for (const s of students ?? []) {
-    if (!s.class_id) continue
-    const k = key(s.class_id, s.section_id)
-    group.set(s.id, k)
-    if (!buckets.has(k)) {
-      buckets.set(k, {
-        class_id: s.class_id, class_name: (s.classes as any)?.name ?? null,
-        section_id: s.section_id ?? null, section_name: (s.sections as any)?.name ?? null,
-        student_count: 0, billed_student_count: 0, billed: 0, collected: 0, outstanding: 0, overdue: 0,
-      })
-    }
-    buckets.get(k).student_count += 1
-  }
-
-  const today = new Date()
-  const billedStudents = new Map<string, Set<string>>()
-
-  for (const inv of invoices ?? []) {
-    const k = group.get(inv.student_id)
-    // An invoice for a student who has left is counted nowhere rather than
-    // silently folded into another class's totals.
-    if (!k) continue
-    const b = buckets.get(k)
-    b.billed = money(b.billed + Number(inv.total_amount))
-    b.collected = money(b.collected + Number(inv.amount_paid))
-    if (!billedStudents.has(k)) billedStudents.set(k, new Set())
-    billedStudents.get(k)!.add(inv.student_id)
-
-    if (OPEN.includes(inv.status)) {
-      const due = amountDue(inv.total_amount, inv.amount_paid)
-      b.outstanding = money(b.outstanding + due)
-      if (inv.due_date && daysOverdue(inv.due_date, today) > 0) b.overdue = money(b.overdue + due)
-    }
-  }
-  for (const [k, set] of billedStudents) buckets.get(k).billed_student_count = set.size
-
-  const data = Array.from(buckets.values()).sort((a, b) =>
+  // Natural ordering — "Class 10" after "Class 9", which a plain sort in
+  // Postgres cannot do.
+  rows.sort((a: any, b: any) =>
     (a.class_name ?? '').localeCompare(b.class_name ?? '', undefined, { numeric: true }) ||
     (a.section_name ?? '').localeCompare(b.section_name ?? ''))
 
   res.json({
-    success: true, data,
+    success: true, data: rows,
     meta: {
-      totals: data.reduce((acc, b) => ({
+      totals: rows.reduce((acc: any, b: any) => ({
         students: acc.students + b.student_count,
         billed: money(acc.billed + b.billed),
         collected: money(acc.collected + b.collected),
@@ -158,6 +132,8 @@ router.get('/classes/students', attachFeeScope, asyncHandler(async (req: FeeRequ
   if (error) return res.status(500).json({ success: false, error: error.message })
   if (!students?.length) return res.json({ success: true, data: [], meta: { totals: null } })
 
+  // selectIn pages within each chunk now, so a class whose students carry more
+  // than 1,000 invoices between them is summed in full rather than truncated.
   const invoices = await selectIn<any>(
     'fee_invoices', 'student_id, total_amount, amount_paid, due_date, status', 'student_id',
     students.map(s => s.id), q => q.eq('school_id', school_id).neq('status', 'cancelled'))
@@ -303,55 +279,45 @@ router.get('/collection-trend', requireFeeView, asyncHandler(async (req: FeeRequ
   const school_id = req.user!.school_id
   const { from, to } = req.query as { from?: string; to?: string }
 
+  // Both branches are now GROUP BY in Postgres. They used to pull every payment
+  // in the window into Node — capped at 1,000, so a busy term showed a fraction
+  // of what was actually collected — and they netted refunds by hand while
+  // counting bounced and cancelled payments as money. The RPCs value a payment
+  // through fee_payment_effective, the same function the invoice trigger uses,
+  // so the trend and the invoices cannot disagree.
   if (from && to) {
     if (from > to) return res.status(400).json({ success: false, error: '"from" must be on or before "to"' })
     const days = dateRangeStrings(from, to)
     if (days.length > 366) return res.status(400).json({ success: false, error: 'Range too large — max 366 days' })
 
-    const { data, error } = await supabase.from('fee_payments')
-      .select('amount, refunded_amount, payment_date').eq('school_id', school_id).eq('status', 'captured')
-      .gte('payment_date', `${from}T00:00:00`).lte('payment_date', `${to}T23:59:59`)
+    const { data, error } = await supabase.rpc('fee_collection_by_day', {
+      p_school_id: school_id, p_from: from, p_to: to,
+    })
     if (error) return res.status(500).json({ success: false, error: error.message })
 
-    const sum = new Map<string, number>()
-    for (const p of data ?? []) {
-      const k = toLocalDateStr(new Date(p.payment_date))
-      sum.set(k, (sum.get(k) ?? 0) + Number(p.amount) - Number(p.refunded_amount ?? 0))
-    }
     return res.json({
       success: true,
-      data: days.map(d => ({
-        month: d,
-        label: new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-        collected: money(sum.get(d) ?? 0),
+      data: (data ?? []).map((r: any) => ({
+        month: r.day,
+        label: new Date(`${r.day}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+        collected: money(Number(r.collected)),
       })),
     })
   }
 
   const months = Math.min(24, Math.max(1, Number(req.query.months) || 6))
-  const now = new Date()
-  const buckets = Array.from({ length: months }, (_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth() - (months - 1 - i), 1)
-    return {
-      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
-      label: d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
-    }
+  const { data, error } = await supabase.rpc('fee_collection_by_month', {
+    p_school_id: school_id, p_months: months,
   })
-
-  const { data, error } = await supabase.from('fee_payments')
-    .select('amount, refunded_amount, payment_date').eq('school_id', school_id).eq('status', 'captured')
-    .gte('payment_date', `${buckets[0].key}-01T00:00:00`)
   if (error) return res.status(500).json({ success: false, error: error.message })
-
-  const sum = new Map<string, number>()
-  for (const p of data ?? []) {
-    const k = toLocalDateStr(new Date(p.payment_date)).slice(0, 7)
-    sum.set(k, (sum.get(k) ?? 0) + Number(p.amount) - Number(p.refunded_amount ?? 0))
-  }
 
   res.json({
     success: true,
-    data: buckets.map(b => ({ month: b.key, label: b.label, collected: money(sum.get(b.key) ?? 0) })),
+    data: (data ?? []).map((r: any) => ({
+      month: r.month,
+      label: new Date(`${r.month}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
+      collected: money(Number(r.collected)),
+    })),
   })
 }))
 

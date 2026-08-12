@@ -6,6 +6,7 @@ import {
   ArrowRightLeft, CheckCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { QueryError } from '@/components/shared/QueryError'
 import { feeApi, academicYearsApi, invalidateFeeQueries } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { formatCurrency, cn } from '@/lib/utils'
@@ -13,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -47,11 +49,31 @@ export default function RecoveryPage() {
   const { can } = usePermissions()
   const [tab, setTab] = useState<'overdue' | 'arrears' | 'invoices' | 'categories' | 'rte'>('overdue')
   const [sweeping, setSweeping] = useState(false)
+  const [sweepPreview, setSweepPreview] = useState<any>(null)
 
-  const { data: aging, isPending: agingPending } = useQuery({
+  const { data: aging, isPending: agingPending, error: agingError } = useQuery({
     queryKey: ['fee-aging'],
     queryFn: () => feeApi.agingReport().then(r => r.data),
   })
+
+  // Preview first, then confirm.
+  //
+  // This was a single unconfirmed click that recomputed late fines across every
+  // overdue invoice in the school, with the outcome reported only afterwards in
+  // a toast. Every other bulk write in the module — billing, assignment,
+  // category changes — previews first, and this one moves money onto families'
+  // bills.
+  const previewFines = async () => {
+    setSweeping(true)
+    try {
+      const res = await feeApi.applyLateFees(true)
+      setSweepPreview(res.data)
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Could not work out the late fines')
+    } finally {
+      setSweeping(false)
+    }
+  }
 
   const applyFines = async () => {
     setSweeping(true)
@@ -62,7 +84,11 @@ export default function RecoveryPage() {
           ? `Late fines updated on ${res.data.updated} of ${res.data.checked} overdue invoices`
           : 'No fines needed updating',
       )
+      if (res.data?.failed) {
+        toast.error(`${res.data.failed} invoice(s) could not be updated — see the server log.`)
+      }
       invalidateFeeQueries(qc)
+      setSweepPreview(null)
     } catch (e: any) {
       toast.error(e?.response?.data?.error ?? 'Could not apply late fines')
     } finally {
@@ -82,13 +108,54 @@ export default function RecoveryPage() {
         icon={BarChart3}
         actions={
           can('fee.structure_manage') && (
-            <Button variant="outline" onClick={applyFines} disabled={sweeping}>
+            <Button variant="outline" onClick={previewFines} disabled={sweeping}>
               {sweeping ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Apply late fines
             </Button>
           )
         }
       />
+
+      {sweepPreview && (
+        <ConfirmDialog
+          open
+          onOpenChange={o => { if (!o) setSweepPreview(null) }}
+          title="Apply late fines?"
+          description={
+            sweepPreview.would_update === 0
+              ? `Checked ${sweepPreview.checked} overdue invoices. Nothing needs changing.`
+              : `This will change the late fine on ${sweepPreview.would_update} of ${sweepPreview.checked} overdue invoices, adding ${formatCurrency(sweepPreview.net_change)} to what families owe. Approved waivers are not re-applied.`
+          }
+          confirmLabel={sweepPreview.would_update === 0 ? 'Close' : 'Apply fines'}
+          loading={sweeping}
+          onConfirm={sweepPreview.would_update === 0 ? async () => setSweepPreview(null) : applyFines}
+        >
+          {!!sweepPreview.sample?.length && (
+            <div className="max-h-48 overflow-y-auto rounded-lg border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Invoice</TableHead>
+                    <TableHead className="text-right">Overdue</TableHead>
+                    <TableHead className="text-right">Fine</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sweepPreview.sample.map((r: any) => (
+                    <TableRow key={r.invoice_number}>
+                      <TableCell className="font-mono text-xs">{r.invoice_number}</TableCell>
+                      <TableCell className="text-right tabular-nums">{r.days_overdue}d</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(r.from)} → <strong>{formatCurrency(r.to)}</strong>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </ConfirmDialog>
+      )}
 
       {/* Aging */}
       <Card>
@@ -105,6 +172,10 @@ export default function RecoveryPage() {
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
               {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[104px] rounded-xl" />)}
             </div>
+          ) : agingError ? (
+            // Five ₹0 buckets and "₹0 past due" was what a failed request drew:
+            // the school's entire receivables position reading as fully collected.
+            <QueryError error={agingError} title="Could not load the aging report" />
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
               {BUCKETS.map(b => {
@@ -155,7 +226,7 @@ function Defaulters() {
 
   const [includeAll, setIncludeAll] = useState(false)
 
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-defaulters', minDays, page, includeAll],
     queryFn: () => feeApi.defaulters(minDays, page, undefined, { includeAll }),
     // Keeps the table on screen while the next page loads. Without it the card
@@ -235,6 +306,10 @@ function Defaulters() {
           <div className="space-y-3 p-5">
             {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
           </div>
+        ) : error ? (
+          // "Nobody is behind" on a failed read is the most dangerous empty
+          // state in the module: it tells a school to stop chasing.
+          <div className="p-5"><QueryError error={error} title="Could not load the defaulter list" /></div>
         ) : !rows.length ? (
           <EmptyState
             icon={CheckCircle}
@@ -347,14 +422,19 @@ const ARREAR_STATUS: Record<string, string> = {
 
 function Arrears({ canManage }: { canManage: boolean }) {
   const qc = useQueryClient()
+  const { can } = usePermissions()
+  // Collecting is fee.collect; waiving and carrying forward are arrear_manage.
+  // They are different powers and the row shows only the ones this user holds.
+  const canCollect = can('fee.collect')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
   const [carryOpen, setCarryOpen] = useState(false)
   const [waiveTarget, setWaiveTarget] = useState<any>(null)
+  const [payTarget, setPayTarget] = useState<any>(null)
   const limit = 25
 
   const params = { page, limit, status: status || undefined }
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-arrears', params],
     queryFn: () => feeApi.arrears.list(params),
   })
@@ -391,6 +471,8 @@ function Arrears({ canManage }: { canManage: boolean }) {
         <div className="space-y-3 p-5">
           {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
         </div>
+      ) : error ? (
+        <QueryError error={error} title="Could not load the arrears" />
       ) : !rows.length ? (
         <EmptyState
           icon={ArrowRightLeft}
@@ -440,7 +522,17 @@ function Arrears({ canManage }: { canManage: boolean }) {
                     {canManage && (
                       <TableCell className="text-right">
                         {(a.status === 'pending' || a.status === 'partial') && (
-                          <Button size="sm" variant="outline" onClick={() => setWaiveTarget(a)}>Waive</Button>
+                          <div className="flex justify-end gap-2">
+                            {/* The endpoint has existed since arrears were built
+                                and NOTHING called it. The only way to clear an
+                                arrear in the product was to write it off — while
+                                the parent portal told families to "settle that
+                                at the office", where no such control existed. */}
+                            {canCollect && (
+                              <Button size="sm" onClick={() => setPayTarget(a)}>Record payment</Button>
+                            )}
+                            <Button size="sm" variant="outline" onClick={() => setWaiveTarget(a)}>Waive</Button>
+                          </div>
                         )}
                       </TableCell>
                     )}
@@ -461,6 +553,7 @@ function Arrears({ canManage }: { canManage: boolean }) {
 
       {carryOpen && <CarryForwardDialog onClose={() => { setCarryOpen(false); invalidateFeeQueries(qc) }} />}
       {waiveTarget && <WaiveDialog arrear={waiveTarget} onClose={() => setWaiveTarget(null)} />}
+      {payTarget && <ArrearPaymentDialog arrear={payTarget} onClose={() => setPayTarget(null)} />}
     </Card>
   )
 }
@@ -575,6 +668,76 @@ function WaiveDialog({ arrear, onClose }: { arrear: any; onClose: () => void }) 
           value={reason} onChange={e => setReason(e.target.value)}
           placeholder="e.g. Financial hardship, approved by the Principal"
         />
+      </div>
+    </ConfirmDialog>
+  )
+}
+
+
+// Taking money against a carried-forward balance.
+//
+// POST /fees/arrears/:id/payment has existed since the arrears model was built.
+// Nothing in either app called it, so an arrear could be waived but never
+// collected — the product could forgive a debt and could not accept payment of
+// one.
+function ArrearPaymentDialog({ arrear, onClose }: { arrear: any; onClose: () => void }) {
+  const qc = useQueryClient()
+  const remaining = Number(arrear.amount_due ?? 0)
+  const [amount, setAmount] = useState(String(remaining))
+  const [loading, setLoading] = useState(false)
+
+  const entered = Number(amount)
+  const valid = Number.isFinite(entered) && entered > 0 && entered <= remaining + 0.01
+
+  const submit = async () => {
+    if (!valid) return
+    setLoading(true)
+    try {
+      await feeApi.arrears.recordPayment(arrear.id, { amount: entered })
+      toast.success(
+        entered >= remaining - 0.01
+          ? 'Arrear cleared'
+          : `${formatCurrency(entered)} recorded — ${formatCurrency(remaining - entered)} still owing`,
+      )
+      invalidateFeeQueries(qc)
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Could not record the payment')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <ConfirmDialog
+      open
+      onOpenChange={o => { if (!o) onClose() }}
+      title="Record a payment against this arrear"
+      description={
+        <>
+          {formatCurrency(remaining)} is outstanding for {arrear.students?.first_name}{' '}
+          {arrear.students?.last_name}, carried forward from {arrear.from_year?.name ?? 'the previous year'}.
+        </>
+      }
+      confirmLabel="Record payment"
+      loading={loading}
+      onConfirm={submit}
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="arrear-amount">Amount *</Label>
+        <Input
+          id="arrear-amount" type="number" inputMode="decimal" min={0} max={remaining} step="0.01"
+          value={amount} onChange={e => setAmount(e.target.value)}
+        />
+        {!valid && amount !== '' && (
+          <p className="text-xs text-destructive">
+            Enter an amount between ₹0 and {formatCurrency(remaining)}.
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          An arrear is settled directly rather than through an invoice, so this does not
+          issue a fee receipt. Record the cash or transfer in your day book as usual.
+        </p>
       </div>
     </ConfirmDialog>
   )

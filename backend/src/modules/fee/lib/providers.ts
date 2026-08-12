@@ -54,6 +54,37 @@ function safeEqual(a: string, b: string): boolean {
   return x.length === y.length && crypto.timingSafeEqual(x, y)
 }
 
+/**
+ * A signing key for development that is not in this repository.
+ *
+ * There used to be `?? 'dev-mock-secret'` on the line below, which meant the key
+ * every unconfigured deployment signed its webhooks with was a string anyone
+ * could read here. Combined with a deterministic order id it made "mark this
+ * order paid" a request you could compose from the source alone, with no login.
+ *
+ * Generated once per process instead. The mock still round-trips — the same
+ * value signs and verifies — so development is unaffected, but nothing in
+ * version control produces a signature this process will accept, and a restart
+ * invalidates yesterday's.
+ */
+const EPHEMERAL_DEV_SECRET = crypto.randomBytes(32).toString('hex')
+
+const MIN_SECRET_LENGTH = 16
+
+function webhookSecret(): string {
+  const configured = process.env.PAYMENT_WEBHOOK_SECRET
+  if (configured && configured.length >= MIN_SECRET_LENGTH) return configured
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      configured
+        ? `PAYMENT_WEBHOOK_SECRET is shorter than ${MIN_SECRET_LENGTH} characters.`
+        : 'PAYMENT_WEBHOOK_SECRET is not set. Refusing to sign or verify a payment webhook without one.',
+    )
+  }
+  return EPHEMERAL_DEV_SECRET
+}
+
 // ── Mock ──────────────────────────────────────────────────────────────
 //
 // Signs its callbacks with the same HMAC-SHA256 scheme Razorpay uses, so the
@@ -63,10 +94,18 @@ function safeEqual(a: string, b: string): boolean {
 class MockProvider implements PaymentProvider {
   readonly name = 'mock'
   readonly isSimulated = true
-  private secret = process.env.PAYMENT_WEBHOOK_SECRET ?? 'dev-mock-secret'
+
+  private get secret(): string {
+    return webhookSecret()
+  }
 
   async createOrder(input: CreateOrderInput): Promise<ProviderOrder> {
-    const providerOrderId = `mock_order_${input.orderId.replace(/-/g, '').slice(0, 18)}`
+    // Random, not derived from our own order id. The old form
+    // (`mock_order_${orderId without dashes}`) was DERIVABLE: anyone who had ever
+    // seen one order could compute the provider id of any other, which is half of
+    // a forged capture. The id is stored on the order row either way, so nothing
+    // downstream needs it to be reconstructible.
+    const providerOrderId = `mock_order_${crypto.randomBytes(12).toString('hex')}`
     return {
       providerOrderId,
       checkout: {
@@ -120,7 +159,6 @@ class RazorpayProvider implements PaymentProvider {
   readonly isSimulated = false
   private keyId = process.env.RAZORPAY_KEY_ID ?? ''
   private keySecret = process.env.RAZORPAY_KEY_SECRET ?? ''
-  private webhookSecret = process.env.PAYMENT_WEBHOOK_SECRET ?? ''
 
   async createOrder(input: CreateOrderInput): Promise<ProviderOrder> {
     if (!this.keyId || !this.keySecret) {
@@ -157,8 +195,8 @@ class RazorpayProvider implements PaymentProvider {
   }
 
   verifyWebhook(rawBody: string, signature: string | undefined): VerifiedEvent | null {
-    if (!signature || !this.webhookSecret) return null
-    const expected = crypto.createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex')
+    if (!signature) return null
+    const expected = crypto.createHmac('sha256', webhookSecret()).update(rawBody).digest('hex')
     if (!safeEqual(expected, signature)) return null
 
     try {
@@ -182,16 +220,60 @@ class RazorpayProvider implements PaymentProvider {
 const mock = new MockProvider()
 const razorpay = new RazorpayProvider()
 
-/**
- * The active driver. Defaults to mock so a deployment without credentials still
- * has a working, honest flow rather than a pay button that 500s.
- */
-export function activeProvider(): PaymentProvider {
-  return (process.env.PAYMENT_PROVIDER ?? 'mock') === 'razorpay' ? razorpay : mock
-}
-
 export function providerByName(name: string): PaymentProvider | null {
   return name === 'razorpay' ? razorpay : name === 'mock' ? mock : null
+}
+
+/**
+ * The active driver.
+ *
+ * It used to be `(process.env.PAYMENT_PROVIDER ?? 'mock') === 'razorpay'`, and
+ * the `?? 'mock'` was the whole problem: PAYMENT_PROVIDER was declared in
+ * neither render.yaml nor .env.example, so a production deploy from this repo
+ * silently ran the simulator. Everything downstream then behaved as designed —
+ * and what it was designed to do, when simulated, is mark orders paid.
+ *
+ * Development still defaults to mock, because a local checkout that 500s helps
+ * nobody. Production has to say which driver it wants out loud.
+ */
+export function activeProvider(): PaymentProvider {
+  const configured = process.env.PAYMENT_PROVIDER
+
+  if (!configured) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'PAYMENT_PROVIDER is not set. Set it to "mock" to keep the simulated flow, ' +
+        'or "razorpay" once credentials exist. Defaulting silently is how a live ' +
+        'deployment ends up running the simulator.',
+      )
+    }
+    return mock
+  }
+
+  const provider = providerByName(configured)
+  if (!provider) {
+    throw new Error(`PAYMENT_PROVIDER is "${configured}", which is not a driver this build knows. Use "mock" or "razorpay".`)
+  }
+  return provider
+}
+
+/**
+ * Why the gateway would refuse to run, or null if it is properly configured.
+ *
+ * Checked at boot (so a misconfiguration is a startup line rather than a
+ * mystery) and again per request (so the routes fail closed with a 503 instead
+ * of throwing out of a handler). Deliberately does NOT kill the process: this is
+ * a school ERP, and attendance, exams and the timetable should not stop because
+ * a payment key is missing.
+ */
+export function paymentConfigError(): string | null {
+  try {
+    activeProvider()
+    webhookSecret()
+    return null
+  } catch (e: any) {
+    return e.message
+  }
 }
 
 export { mock as mockProvider }

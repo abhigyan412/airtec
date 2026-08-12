@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Alert } from '@/components/ui/alert'
 import { CheckboxField } from '@/components/ui/checkbox'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { QueryError } from '@/components/shared/QueryError'
 import { StudentSearch, StudentLite, studentLabel } from '@/components/shared/StudentSearch'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -46,7 +47,7 @@ export function FeeCategoryBreakdown() {
   const [downloading, setDownloading] = useState(false)
   const canManage = can('fee.structure_manage')
 
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-by-category'],
     queryFn: () => feeApi.byCategory(),
   })
@@ -116,6 +117,8 @@ export function FeeCategoryBreakdown() {
           <div className="space-y-3 p-5">
             {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
           </div>
+        ) : error ? (
+          <QueryError error={error} title="Could not load the category breakdown" />
         ) : !rows.length ? (
           <EmptyState
             icon={Tags}

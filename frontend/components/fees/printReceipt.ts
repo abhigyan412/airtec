@@ -1,4 +1,4 @@
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrencyExact } from '@/lib/utils'
 
 // The printed receipt.
 //
@@ -20,7 +20,10 @@ const esc = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
 
-const rs = (n: unknown) => formatCurrency(Number(n ?? 0))
+// To the paisa, deliberately. formatCurrency rounds to whole rupees, which put
+// "₹1,235" next to the words "…and fifty paise" on the one document a family
+// keeps and a bank statement has to agree with.
+const rs = (n: unknown) => formatCurrencyExact(Number(n ?? 0))
 
 export function buildReceiptHtml(r: any): string {
   const issued = new Date(r.issued_at)
@@ -114,20 +117,20 @@ ${cancelled ? '<div class="stamp">CANCELLED</div>' : ''}
 <div class="meta">
   <span class="k">Receipt No.</span><span class="v">${esc(r.receipt_number)}</span>
   <span class="k">Date</span><span class="v">${date} ${time}</span>
-  ${r.invoice?.session ? `<span class="k">Session</span><span class="v">${esc(r.invoice.session)}</span>` : ''}
+  ${r.session ? `<span class="k">Session</span><span class="v">${esc(r.session)}</span>` : ''}
   <span class="k">Student</span><span class="v">${esc(r.student?.name)}</span>
   ${r.student?.father_name ? `<span class="k">Father's Name</span><span class="v">${esc(r.student.father_name)}</span>` : ''}
   <span class="k">Class</span><span class="v">${esc(r.student?.class_section ?? '—')}</span>
   <span class="k">Admission No.</span><span class="v">${esc(r.student?.admission_number ?? '—')}</span>
-  ${(r.lines ?? []).length === 1 && r.invoice?.invoice_number
-      ? `<span class="k">Against Invoice</span><span class="v">${esc(r.invoice.invoice_number)}</span>`
+  ${(r.lines ?? []).length === 1 && r.lines[0]?.invoice_number
+      ? `<span class="k">Against Invoice</span><span class="v">${esc(r.lines[0].invoice_number)}</span>`
       : (r.lines ?? []).length > 1
         ? `<span class="k">Settles</span><span class="v">${(r.lines ?? []).length} invoices</span>`
         : ''}
 </div>
 
 ${r.partial ? `<div class="banner"><b>This is a PART PAYMENT.</b> The amount below is what was
-   paid today — it does not clear the full fee. ${rs(r.invoice?.outstanding_after)} remains unpaid;
+   paid today — it does not clear the full fee. ${rs(r.summary?.balance_remaining)} remains unpaid;
    see each line for when it becomes payable.</div>` : ''}
 ${refunded ? `<div class="banner"><b>${rs(r.refunded_amount)} of this payment has been refunded.</b>
    The net amount retained is ${rs(r.effective_amount)}.</div>` : ''}
@@ -139,6 +142,8 @@ ${refunded ? `<div class="banner"><b>${rs(r.refunded_amount)} of this payment ha
 </table>
 
 <div class="words">${esc(r.amount_in_words)}</div>
+${refunded ? `<div class="words" style="font-weight:400;font-size:11px">
+   Net of refund: ${esc(r.effective_amount_in_words)}</div>` : ''}
 
 <table class="sum">
   <tr><td>Total billed to date</td><td class="r">${rs(s.total_billed)}</td></tr>

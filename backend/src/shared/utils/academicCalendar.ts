@@ -35,6 +35,46 @@ export function toLocalDateStr(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
+/** Today, as the school's calendar date. */
+export function todayLocalISO(): string {
+  return toLocalDateStr(new Date())
+}
+
+/**
+ * The two ends of one school day, as timestamps Postgres cannot misread.
+ *
+ * Every range query in the fee module used to build its bounds as
+ * `${date}T00:00:00` — a naive string with no offset. Postgres resolves those in
+ * the DATABASE's timezone, which on Supabase is UTC, no matter what this process
+ * believes. So a "day book for 10 August" actually asked for 05:30 IST on the
+ * 10th to 05:30 IST on the 11th: it dropped the morning counter's first five and
+ * a half hours and swept up the next morning's takings instead.
+ *
+ * Pinning TZ on the process does not fix that on its own — it fixes which date
+ * we ask FOR, not which instants that date means. Hence an explicit offset,
+ * derived from the school's zone rather than hardcoded, so the pair stays
+ * correct if the zone ever changes.
+ */
+function offsetFor(dateStr: string): string {
+  // The offset the school was on at noon on that date — noon so a DST boundary
+  // (none in IST, but this is not IST-only code) resolves to the day's own rule.
+  const noonUtc = new Date(`${dateStr}T12:00:00Z`)
+  const asLocal = new Date(noonUtc.toLocaleString('en-US', { timeZone: process.env.TZ || 'Asia/Kolkata' }))
+  const asUtc = new Date(noonUtc.toLocaleString('en-US', { timeZone: 'UTC' }))
+  const minutes = Math.round((asLocal.getTime() - asUtc.getTime()) / 60_000)
+  const sign = minutes < 0 ? '-' : '+'
+  const abs = Math.abs(minutes)
+  return `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`
+}
+
+export function dayStartISO(dateStr: string): string {
+  return `${dateStr}T00:00:00.000${offsetFor(dateStr)}`
+}
+
+export function dayEndISO(dateStr: string): string {
+  return `${dateStr}T23:59:59.999${offsetFor(dateStr)}`
+}
+
 // Every 'YYYY-MM-DD' calendar date from fromDate to toDate inclusive.
 export function dateRangeStrings(fromDate: string, toDate: string): string[] {
   const dates: string[] = []

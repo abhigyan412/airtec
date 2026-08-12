@@ -22,6 +22,25 @@ export function formatCurrency(amount: number | string | null | undefined) {
 /** Alias for the same INR formatter, matching the reference design system. */
 export const formatINR = formatCurrency
 
+/**
+ * The same formatter, to the paisa.
+ *
+ * formatCurrency rounds to whole rupees, which is right on a dashboard tile and
+ * wrong on a receipt: ₹1,234.50 printed as "₹1,235" beside the words "…and
+ * fifty paise" is a document that contradicts itself on the one field it exists
+ * to make tamper-evident. Anything a parent keeps, or that has to reconcile
+ * against a bank statement, uses this.
+ */
+export function formatCurrencyExact(amount: number | string | null | undefined) {
+  const n = typeof amount === 'number' ? amount : Number(amount ?? 0)
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(n) ? n : 0)
+}
+
 /** Compact Indian-notation number: 12.3L, 4.5Cr, 8.1K. */
 export function formatCompact(n: number): string {
   if (n >= 10_000_000) return `${(n / 10_000_000).toFixed(1)}Cr`

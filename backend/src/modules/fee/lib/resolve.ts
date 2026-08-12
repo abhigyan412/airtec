@@ -1,5 +1,5 @@
 import { supabase } from '../../../shared/db/client'
-import { selectIn } from './db'
+import { selectAll, selectIn } from './db'
 import { ApplicableDiscount, buildLineItems, LineItem, money } from '../../../shared/utils/feeMoney'
 
 // One resolver: what does this student owe for this period.
@@ -192,9 +192,22 @@ export async function resolveBilling(input: ResolveInput): Promise<ResolveResult
   let rules: any[] = []
   const siblingOrder = new Map<string, number>()
   if (applyDiscounts) {
-    const { data } = await supabase.from('fee_concession_rules')
+    // THROWS. This read used to swallow its error and fall through to `[]`,
+    // which is the most expensive silent failure in the module: on any transient
+    // database hiccup every RTE, sibling, staff-ward and scholarship student in
+    // the run is billed the full plan amount, the invoices are issued, and
+    // nothing anywhere says so. Since these amounts go out on paper to families,
+    // there is no version of "carry on with no concessions" that is better than
+    // stopping — and every other read in this resolver already throws.
+    const { data, error } = await supabase.from('fee_concession_rules')
       .select('fee_category, min_sibling_order, fee_head_id, discount_type, discount_value, note')
       .eq('school_id', schoolId).eq('academic_year_id', academicYearId).eq('is_active', true)
+    if (error) {
+      throw new Error(
+        `Could not read the concession rules, so nothing was billed: ${error.message}. ` +
+        'Billing without them would charge every concession student the full amount.',
+      )
+    }
     rules = (data ?? []) as any[]
 
     // Sibling order, read only if some rule actually asks for it. It is a view
@@ -337,10 +350,11 @@ export async function resolveBilling(input: ResolveInput): Promise<ResolveResult
 export async function alreadyBilled(
   schoolId: string, academicYearId: string, periodKey: string,
 ): Promise<Set<string>> {
-  const { data, error } = await supabase
-    .from('fee_invoices').select('student_id')
+  // Paged. Past 1,000 already-billed students the set came back short, so a
+  // preview offered to re-bill families who had already been invoiced — caught
+  // only by the period unique index, which surfaces as a 409 nobody can read.
+  const rows = await selectAll<any>('fee_invoices', 'student_id', q => q
     .eq('school_id', schoolId).eq('academic_year_id', academicYearId)
-    .eq('period_key', periodKey).neq('status', 'cancelled')
-  if (error) throw new Error(`Failed to check existing invoices: ${error.message}`)
-  return new Set((data ?? []).map(r => r.student_id))
+    .eq('period_key', periodKey).neq('status', 'cancelled'))
+  return new Set(rows.map(r => r.student_id))
 }

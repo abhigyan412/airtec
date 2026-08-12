@@ -4,7 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { money } from '../../shared/utils/feeMoney'
 import { BillingPeriod, Frequency, periodKey, periodsForFrequency } from '../../shared/utils/billingPeriod'
-import { insertChunked, selectIn } from './lib/db'
+import { insertChunked, selectAll, selectIn } from './lib/db'
 import {
   FeeRequest, attachFeeScope, assertCanReadStudent, requireFeeView, requireFeeManage,
 } from './lib/guards'
@@ -32,13 +32,16 @@ async function targetStudents(schoolId: string, body: z.infer<typeof AssignSchem
     return selectIn<any>('students', 'id, first_name, last_name, class_id', 'id', body.student_ids,
       q => q.eq('school_id', schoolId).eq('status', 'active'))
   }
-  let q = supabase.from('students').select('id, first_name, last_name, class_id')
-    .eq('school_id', schoolId).eq('status', 'active')
-  if (body.class_ids.length) q = q.in('class_id', body.class_ids)
-  if (body.section_ids.length) q = q.in('section_id', body.section_ids)
-  const { data, error } = await q
-  if (error) throw new Error(error.message)
-  return data ?? []
+  // Paged: both /assignments/preview and POST /assignments used to stop at the
+  // first 1,000 students, so a school-wide assignment silently left everyone
+  // after that with no fee plan — and an unplanned student is skipped by every
+  // billing run thereafter.
+  return selectAll<any>('students', 'id, first_name, last_name, class_id', q => {
+    let scoped = q.eq('school_id', schoolId).eq('status', 'active')
+    if (body.class_ids.length) scoped = scoped.in('class_id', body.class_ids)
+    if (body.section_ids.length) scoped = scoped.in('section_id', body.section_ids)
+    return scoped
+  })
 }
 
 async function resolveAssign(schoolId: string, body: z.infer<typeof AssignSchema>) {

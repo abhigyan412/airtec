@@ -465,7 +465,11 @@ export const feeApi = {
         include_all_categories: opts?.includeAll ? 'true' : undefined,
       },
     }).then(r => r.data),
-  applyLateFees: () => api.post('/fees/apply-late-fees').then(r => r.data),
+  // preview writes nothing and reports what WOULD change — matching the
+  // preview-then-commit shape billing and assignment already use. The sweep is
+  // a school-wide money mutation and used to be one unconfirmed click.
+  applyLateFees: (preview = false) =>
+    api.post('/fees/apply-late-fees', { preview }).then(r => r.data),
 
   /** What this counter took today, for tallying the drawer against the cash box. */
   daybook: (date?: string) =>

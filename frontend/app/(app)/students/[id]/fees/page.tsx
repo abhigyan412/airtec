@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert } from '@/components/ui/alert'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { QueryError } from '@/components/shared/QueryError'
 import { EmptyState } from '@/components/shared/EmptyState'
 
 // One student's complete fee position.
@@ -27,7 +28,7 @@ export default function StudentFeeLedgerPage() {
   const { id } = useParams<{ id: string }>()
   const { can } = usePermissions()
 
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-student-summary', id],
     queryFn: () => feeApi.student(id).then(r => r.data),
   })
@@ -40,6 +41,10 @@ export default function StudentFeeLedgerPage() {
         <Skeleton className="h-64 w-full rounded-xl" />
       </div>
     )
+  }
+
+  if (error) {
+    return <Card className="p-5"><QueryError error={error} title="Could not load this student's fees" /></Card>
   }
 
   if (!data) {

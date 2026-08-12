@@ -13,11 +13,34 @@ const notifyCalls: any[] = []
 // every invoice look like an RTE assignment, so the sweep correctly skipped
 // everybody and three unrelated assertions failed. A default of "no rows" is
 // also the honest default: a school with no RTE seats excludes nobody.
+//
+// The chain now honours .order()/.range() and reports an exact count, because
+// the sweep pages through selectAll instead of issuing one capped request. The
+// stub deliberately ENFORCES a server cap (SERVER_MAX_ROWS) that is smaller than
+// the page size the helper asks for — that is the real PostgREST behaviour the
+// production bug depended on, and a mock that hands back everything in one go
+// cannot tell a paging helper from a broken one.
+export const SERVER_MAX_ROWS = 3
+
 vi.mock('../../db/client', () => {
   const make = (rows: () => any[]) => {
+    let from = 0
+    let to = Infinity
+    let wantCount = false
     const chain: any = {
-      select: () => chain, eq: () => chain, in: () => chain, not: () => chain, lte: () => chain,
-      then: (res: any) => Promise.resolve({ data: rows(), error: null }).then(res),
+      select: (_cols?: string, opts?: any) => { wantCount = opts?.count === 'exact'; return chain },
+      eq: () => chain, in: () => chain, not: () => chain, lte: () => chain,
+      order: () => chain,
+      range: (f: number, t: number) => { from = f; to = t; return chain },
+      then: (res: any) => {
+        const all = rows()
+        // The server never returns more than its cap, whatever was asked for.
+        const width = Math.min(to - from + 1, SERVER_MAX_ROWS)
+        const page = all.slice(from, from + width)
+        return Promise.resolve({
+          data: page, error: null, count: wantCount ? all.length : null,
+        }).then(res)
+      },
     }
     return chain
   }

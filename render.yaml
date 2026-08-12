@@ -10,6 +10,26 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Every date this product computes is a school's date: which day a
+      # receipt belongs to, which month a collection lands in, and above all
+      # which financial year a payment on 31 March falls into. A container
+      # defaults to UTC, and UTC is 5.5 hours behind the school — so an
+      # ₹8 lakh evening collection on 31 March files itself into April.
+      - key: TZ
+        value: Asia/Kolkata
+      # Said out loud on purpose. This used to be undeclared, and the code
+      # defaulted to 'mock' when it was missing — so a production deploy ran
+      # the simulator, and the simulator's job is to mark orders paid.
+      # Change to 'razorpay' only together with RAZORPAY_KEY_ID/KEY_SECRET.
+      - key: PAYMENT_PROVIDER
+        value: mock
+      # Signs and verifies the provider callback. Required: the backend
+      # refuses to serve the gateway routes without it rather than falling
+      # back to a key that lives in the repository. Any long random string
+      # (>= 16 chars) while the provider is 'mock'; with Razorpay it must
+      # match the secret set in their dashboard.
+      - key: PAYMENT_WEBHOOK_SECRET
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY

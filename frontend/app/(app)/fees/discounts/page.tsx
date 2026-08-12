@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert } from '@/components/ui/alert'
@@ -46,6 +47,8 @@ export default function DiscountsPage() {
   const [status, setStatus] = useState(params.get('status') ?? '')
   const [showCreate, setShowCreate] = useState(false)
   const [tab, setTab] = useState('concessions')
+  const [decideTarget, setDecideTarget] = useState<{ discount: any; decision: 'approved' | 'rejected' } | null>(null)
+  const [decideNote, setDecideNote] = useState('')
 
   const studentParam = params.get('student')
   useEffect(() => { if (studentParam) setShowCreate(true) }, [studentParam])
@@ -64,8 +67,11 @@ export default function DiscountsPage() {
   })
 
   const decide = useMutation({
-    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) =>
-      feeApi.discounts.decide(id, decision),
+    mutationFn: ({ id, decision, note }: { id: string; decision: 'approved' | 'rejected'; note?: string }) =>
+      // The note is passed now. It was dropped entirely here while the identical
+      // decision on the Approvals screen sent one, so the same concession
+      // carried a reason or not depending on which screen decided it.
+      feeApi.discounts.decide(id, decision, note || undefined),
     // This used to read `res.data.invoices_updated`, a field the server has never
     // sent, and print "0 invoice(s) updated" as if that were the happy path. It
     // was the reason nobody noticed a concession coming off nothing.
@@ -82,6 +88,8 @@ export default function DiscountsPage() {
       }
       invalidateFeeQueries(qc)
       qc.invalidateQueries({ queryKey: ['fee-by-category'] })
+      setDecideTarget(null)
+      setDecideNote('')
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Could not record the decision'),
   })
@@ -180,13 +188,20 @@ export default function DiscountsPage() {
                         <TableCell className="text-right">
                           {d.approval_status === 'pending' && canDecide && (
                             <div className="flex justify-end gap-1.5">
+                              {/* Confirmed, and with a note, like every other
+                                  approval in the module. These two used to fire
+                                  straight from the row: one misclick permanently
+                                  approved a concession that reduces every future
+                                  invoice, with no undo and no reason recorded —
+                                  while the identical decision on the Approvals
+                                  screen required a dialog and a note. */}
                               <Button size="sm" disabled={decide.isPending}
                                 className="bg-success text-success-foreground hover:bg-success/90"
-                                onClick={() => decide.mutate({ id: d.id, decision: 'approved' })}>
+                                onClick={() => setDecideTarget({ discount: d, decision: 'approved' })}>
                                 Approve
                               </Button>
                               <Button size="sm" variant="destructive" disabled={decide.isPending}
-                                onClick={() => decide.mutate({ id: d.id, decision: 'rejected' })}>
+                                onClick={() => setDecideTarget({ discount: d, decision: 'rejected' })}>
                                 Reject
                               </Button>
                             </div>
@@ -212,6 +227,65 @@ export default function DiscountsPage() {
           </TabsContent>
         )}
       </Tabs>
+
+      {decideTarget && (
+
+        <ConfirmDialog
+
+          open
+
+          onOpenChange={o => { if (!o) { setDecideTarget(null); setDecideNote('') } }}
+
+          title={decideTarget.decision === 'approved' ? 'Approve this concession?' : 'Reject this concession?'}
+
+          description={
+
+            decideTarget.decision === 'approved'
+
+              ? <>Reduces every invoice raised for {decideTarget.discount.students?.first_name}{' '}
+
+                  {decideTarget.discount.students?.last_name} from now on. Invoices already issued keep
+
+                  the amount they were billed at. Recorded against your name.</>
+
+              : <>The concession will not be applied. The person who raised it can raise another.</>
+
+          }
+
+          destructive={decideTarget.decision === 'rejected'}
+
+          confirmLabel={decideTarget.decision === 'approved' ? 'Approve' : 'Reject'}
+
+          loading={decide.isPending}
+
+          onConfirm={async () => decide.mutate({
+
+            id: decideTarget.discount.id, decision: decideTarget.decision, note: decideNote.trim(),
+
+          })}
+
+        >
+
+          <div className="space-y-1.5">
+
+            <Label htmlFor="decide-note">Note</Label>
+
+            <Textarea
+
+              id="decide-note" rows={2} className="resize-none"
+
+              value={decideNote} onChange={e => setDecideNote(e.target.value)}
+
+              placeholder="Optional — why this was approved or turned down"
+
+            />
+
+          </div>
+
+        </ConfirmDialog>
+
+      )}
+
 
       {showCreate && (
         <CreateConcessionDialog

@@ -22,6 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Alert } from '@/components/ui/alert'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { QueryError } from '@/components/shared/QueryError'
 import { OptionalFeesCard, AdhocChargesCard } from '@/components/fees/StudentExtras'
 import { OnlinePaymentCard } from '@/components/fees/OnlinePaymentCard'
 
@@ -44,7 +45,7 @@ export default function StudentFeeProfilePage() {
   >(null)
   const [bounceTarget, setBounceTarget] = useState<any>(null)
 
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-student-summary', studentId],
     queryFn: () => feeApi.student(studentId).then(r => r.data),
   })
@@ -62,6 +63,12 @@ export default function StudentFeeProfilePage() {
         <Skeleton className="h-64 w-full rounded-xl" />
       </div>
     )
+  }
+
+  if (error) {
+    // "No fee record" on a failed read looks exactly like a student who owes
+    // nothing, on the screen a cashier uses to decide what to take.
+    return <Card className="p-5"><QueryError error={error} title="Could not load this student's fees" /></Card>
   }
 
   if (!data) {

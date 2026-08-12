@@ -11,9 +11,31 @@
 // Pulling them out here means there is one implementation to be right, and it
 // can be tested without a Supabase instance.
 
-/** Rupees, rounded the way the numeric(12,2) columns store them. */
+/**
+ * Rupees, rounded the way the numeric(12,2) columns store them.
+ *
+ * Half away from zero, on the DECIMAL value a person typed rather than on the
+ * binary float that approximates it.
+ *
+ * This used to be `Math.round((n + Number.EPSILON) * 100) / 100`, and the
+ * epsilon nudge did nothing above about 2.0. Number.EPSILON is the gap between
+ * 1.0 and the next representable double; by 4.475 the gap is four times larger,
+ * so adding it does not move the value at all and money(4.475) returned 4.47.
+ * It worked at 1.005 and silently stopped working as the amounts got real.
+ *
+ * toPrecision(12) is the fix: it renders the scaled value to twelve significant
+ * digits, which discards the 4.474999999999999645 representation error while
+ * keeping every digit a rupee amount can legitimately have — numeric(12,2) tops
+ * out at ten integer digits plus two decimals, so nothing real is lost.
+ */
 export function money(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100
+  if (!Number.isFinite(n)) return 0
+
+  const scaled = Number((Math.abs(n) * 100).toPrecision(12))
+  // Math.round is half-UP, which rounds -0.5 to -0 and biases every negative
+  // amount towards zero. Refunds and reversals are negative here, so the sign is
+  // taken off and put back to keep the two directions symmetrical.
+  return Math.sign(n) * Math.round(scaled) / 100
 }
 
 export type DiscountType = 'percentage' | 'fixed'

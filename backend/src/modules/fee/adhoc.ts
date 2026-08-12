@@ -4,6 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { money } from '../../shared/utils/feeMoney'
+import { postInvoice } from './lib/ledger'
 import { FeeRequest, attachFeeScope, requireFeeAdhocManage, scopeInvoiceQuery, studentsEmbed } from './lib/guards'
 
 // One-off charges — a trip, a lost book, a re-exam.
@@ -51,6 +52,15 @@ async function bill(charge: any, schoolId: string, userId: string) {
   if (error || !invoice) return null
   await supabase.from('fee_adhoc_charges')
     .update({ invoice_id: invoice.id, status: 'billed' }).eq('id', charge.id)
+
+  // A one-off charge raises a real invoice, so it raises a real receivable. This
+  // was missing: the bus trip appeared in /dues and on the family's portal but
+  // nowhere in the ledger, so the reconciliation between receivable and
+  // outstanding drifted by exactly the value of every ad-hoc charge ever billed.
+  await postInvoice({
+    schoolId, invoiceId: invoice.id, studentId: charge.student_id,
+    netAmount: amount, memo: `Invoice ${invoice.invoice_number} (${charge.title})`,
+  })
   return invoice
 }
 
@@ -110,16 +120,22 @@ router.post('/:id/bill', requireFeeAdhocManage, asyncHandler(async (req: FeeRequ
 }))
 
 router.patch('/:id/cancel', requireFeeAdhocManage, asyncHandler(async (req: FeeRequest, res: Response) => {
-  const { data: charge } = await supabase.from('fee_adhoc_charges')
+  const { data: charge, error: chargeErr } = await supabase.from('fee_adhoc_charges')
     .select('id, invoice_id').eq('id', req.params.id).eq('school_id', req.user!.school_id).maybeSingle()
+  if (chargeErr) return res.status(500).json({ success: false, error: chargeErr.message })
   if (!charge) return res.status(404).json({ success: false, error: 'Charge not found' })
 
   // Cancelling the charge must cancel its bill too, or the family keeps owing
   // for something the school has withdrawn.
   if (charge.invoice_id) {
-    const { data: inv } = await supabase.from('fee_invoices')
+    // Checked. An unchecked failure here read as `amount_paid = 0` and let a
+    // charge the family had already paid for be cancelled, taking its invoice
+    // with it — the money stays, the debt it settled disappears.
+    const { data: inv, error: invErr } = await supabase.from('fee_invoices')
       .select('amount_paid').eq('id', charge.invoice_id).maybeSingle()
-    if (Number(inv?.amount_paid ?? 0) > 0) {
+    if (invErr) return res.status(500).json({ success: false, error: invErr.message })
+    if (!inv) return res.status(404).json({ success: false, error: 'The invoice for this charge no longer exists' })
+    if (Number(inv.amount_paid ?? 0) > 0) {
       return res.status(409).json({
         success: false,
         error: 'Money has been paid against this charge. Refund it before cancelling.',

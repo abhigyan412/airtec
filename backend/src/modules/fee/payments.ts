@@ -4,7 +4,6 @@ import { supabase } from '../../shared/db/client'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { money } from '../../shared/utils/feeMoney'
 import { collectPayment } from './lib/collect'
-import { postBounce } from './lib/ledger'
 import { FeeRequest, attachFeeScope, requireFeeCollect, scopeInvoiceQuery } from './lib/guards'
 
 // Taking money at the counter.
@@ -36,6 +35,12 @@ const CollectSchema = z.object({
   invoice_ids: z.array(z.string().uuid()).optional(),
   /** Refuse rather than hold change as advance credit. */
   allow_advance: z.boolean().default(true),
+  /**
+   * Optional, and the desk should send one. A cashier on a slow connection who
+   * clicks Collect twice used to produce two receipts for one handover; with a
+   * key the second request returns the first receipt.
+   */
+  idempotency_key: z.string().min(8).max(128).optional(),
 })
 
 const BounceSchema = z.object({
@@ -62,9 +67,16 @@ router.post('/', requireFeeCollect, asyncHandler(async (req: FeeRequest, res: Re
     invoiceIds: body.invoice_ids,
     collectedBy: req.user!.id,
     allowAdvance: body.allow_advance,
+    idempotencyKey: body.idempotency_key,
   })
 
   if (!result.ok) return res.status(result.status).json({ success: false, error: result.error })
+
+  // A replay took no money, so it writes no audit line — otherwise the log grows
+  // a second "payment recorded" for a payment that was recorded once.
+  if (result.data.replayed) {
+    return res.status(200).json({ success: true, data: result.data, meta: { replayed: true } })
+  }
 
   await supabase.from('audit_logs').insert({
     school_id, user_id: req.user!.id, action: 'PAYMENT_RECORDED',
@@ -84,80 +96,52 @@ router.post('/', requireFeeCollect, asyncHandler(async (req: FeeRequest, res: Re
 // cancelling says the money never came, bouncing says it came, was credited, and
 // the bank took it back. Conflating them makes a day's collection irreconcilable.
 //
-// Reversing means undoing the allocations — which restores amount_paid on every
-// invoice the cheque touched, because that column is maintained by trigger from
-// the allocation rows — and posting the mirror-image ledger entries.
+// Reversing means the allocations stop being worth anything — which restores
+// amount_paid on every invoice the cheque touched, because that column is
+// maintained by trigger — and posting the mirror-image ledger entries.
 router.post('/:id/bounce', requireFeeCollect, asyncHandler(async (req: FeeRequest, res: Response) => {
   const body = BounceSchema.parse(req.body ?? {})
   const school_id = req.user!.school_id
 
-  const { data: payment } = await supabase.from('fee_payments')
-    .select('id, student_id, amount, refunded_amount, unallocated_amount, method, status, receipt_number')
-    .eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
-
-  if (!payment) return res.status(404).json({ success: false, error: 'Payment not found' })
-  if (payment.status === 'bounced') {
-    return res.status(409).json({ success: false, error: 'Already marked bounced' })
-  }
-  if (payment.status !== 'captured') {
-    return res.status(409).json({
-      success: false,
-      error: `This payment is ${payment.status}. Only a captured payment can bounce.`,
-    })
-  }
-  if (Number(payment.refunded_amount ?? 0) > 0) {
-    return res.status(409).json({
-      success: false,
-      error: 'Part of this payment has been refunded. Sort the refund out before recording a bounce.',
-    })
-  }
-
-  const { data: allocations } = await supabase.from('fee_payment_allocations')
-    .select('amount, invoice_id').eq('payment_id', payment.id)
-  const allocated = money((allocations ?? []).reduce((s, a) => s + Number(a.amount), 0))
-  const advance = money(Number(payment.unallocated_amount ?? 0))
-
-  // Allocations first. If this fails the payment stays captured, which is the
-  // safe direction — a bounce recorded against invoices that were never
-  // un-settled would show the family as paid up on money the bank took back.
-  const { error: delErr } = await supabase.from('fee_payment_allocations')
-    .delete().eq('payment_id', payment.id)
-  if (delErr) return res.status(400).json({ success: false, error: delErr.message })
-
-  await supabase.from('fee_payments').update({
-    status: 'bounced',
-    bounced_on: body.bounced_on ?? new Date().toISOString().slice(0, 10),
-    bounce_reason: body.reason ?? null,
-    bounce_fee: body.bounce_fee ?? 0,
-  }).eq('id', payment.id)
-
-  await postBounce({
-    schoolId: school_id,
-    paymentId: payment.id,
-    studentId: payment.student_id,
-    method: payment.method,
-    allocated,
-    unallocated: advance,
+  // One transaction, and the allocations SURVIVE.
+  //
+  // The old path deleted the allocation rows first and updated the status
+  // second, with no error check on the update. A failure between them left a
+  // payment still marked captured with nothing allocated — which the unallocated
+  // trigger reads as a phantom advance credit a cashier can spend.
+  //
+  // Deleting them was never necessary anyway: fee_payment_effective now values a
+  // bounced payment at zero, so every invoice the cheque touched is restored by
+  // the ordinary trigger path while the record of what it was meant to settle
+  // stays intact. A bounce should make an allocation worth nothing, not erase
+  // the fact that it happened.
+  const { data, error } = await supabase.rpc('fee_bounce_payment', {
+    p_payment_id: req.params.id,
+    p_school_id: school_id,
+    p_reason: body.reason ?? null,
+    p_bounced_on: body.bounced_on ?? null,
+    p_bounce_fee: body.bounce_fee ?? 0,
   })
+
+  if (error) {
+    const status = /not found/i.test(error.message) ? 404 : 409
+    return res.status(status).json({ success: false, error: error.message })
+  }
+
+  const result = data as any
 
   await supabase.from('audit_logs').insert({
     school_id, user_id: req.user!.id, action: 'PAYMENT_BOUNCED',
-    entity_type: 'fee_payment', entity_id: payment.id,
+    entity_type: 'fee_payment', entity_id: req.params.id,
     new_values: {
-      receipt_number: payment.receipt_number, amount: Number(payment.amount),
-      reversed_allocations: (allocations ?? []).length,
+      reversed: result.reversed, restored_invoices: result.restored_invoices,
       reason: body.reason ?? null, bounce_fee: body.bounce_fee ?? 0,
     },
   })
 
   res.json({
     success: true,
-    data: {
-      payment_id: payment.id,
-      reversed: money(allocated + advance),
-      restored_invoices: (allocations ?? []).length,
-      bounce_fee: body.bounce_fee ?? 0,
-    },
+    data: result,
     meta: {
       note: (body.bounce_fee ?? 0) > 0
         ? 'The dues are back on the account. Raise the bounce charge as a one-off charge on the student to bill it.'

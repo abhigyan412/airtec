@@ -1,10 +1,10 @@
 import { Router, Response } from 'express'
 import { supabase } from '../../shared/db/client'
 import { asyncHandler } from '../../shared/utils/helpers'
-import { toLocalDateStr } from '../../shared/utils/academicCalendar'
+import { toLocalDateStr, dayStartISO, dayEndISO } from '../../shared/utils/academicCalendar'
 import { amountDue, money } from '../../shared/utils/feeMoney'
 import { toCsv, csvFilename } from '../../shared/utils/csv'
-import { selectIn } from './lib/db'
+import { selectAll, selectIn } from './lib/db'
 import { lineBillsInPeriod } from './lib/resolve'
 import { FeeRequest, requireFeeView } from './lib/guards'
 
@@ -38,22 +38,27 @@ router.get('/daybook', requireFeeView, asyncHandler(async (req: FeeRequest, res:
     return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' })
   }
 
-  // Local-day bounds. Slicing a UTC timestamp would file every payment taken in
-  // the first 5.5 hours of an IST day into the previous one, which is precisely
-  // the window a morning fee counter operates in.
-  const { data: payments, error } = await supabase.from('fee_payments')
-    .select(`id, receipt_number, payment_date, amount, refunded_amount, unallocated_amount,
-             method, status, reference, cheque_number, bank_name, collected_by,
-             students(first_name, last_name, admission_number, classes(name), sections(name)),
-             users:collected_by(full_name)`)
-    .eq('school_id', school_id)
-    .gte('payment_date', `${date}T00:00:00`)
-    .lte('payment_date', `${date}T23:59:59.999`)
-    .order('payment_date', { ascending: true })
+  // Local-day bounds, WITH AN EXPLICIT OFFSET.
+  //
+  // The comment here used to say this avoided the UTC-slice bug. It did not.
+  // `${date}T00:00:00` is a naive string, and payment_date is a timestamptz, so
+  // Postgres resolved it in the DATABASE's timezone — UTC on Supabase — however
+  // this process was configured. The day book therefore ran 05:30 to 05:30,
+  // dropping the morning counter's first five and a half hours and sweeping up
+  // the next morning's takings instead. On a cash-reconciliation document that
+  // is a till that does not match.
+  const payments = await selectAll<any>(
+    'fee_payments',
+    `id, receipt_number, payment_date, amount, refunded_amount, unallocated_amount,
+     method, status, reference, cheque_number, bank_name, collected_by,
+     students(first_name, last_name, admission_number, classes(name), sections(name)),
+     users:collected_by(full_name)`,
+    q => q.eq('school_id', school_id)
+          .gte('payment_date', dayStartISO(date))
+          .lte('payment_date', dayEndISO(date)),
+  )
 
-  if (error) return res.status(500).json({ success: false, error: error.message })
-
-  const rows = (payments ?? []).map((p: any) => ({
+  const rows = payments.map((p: any) => ({
     id: p.id,
     receipt_number: p.receipt_number,
     at: p.payment_date,
@@ -151,12 +156,17 @@ router.get('/daybook', requireFeeView, asyncHandler(async (req: FeeRequest, res:
 router.get('/forecast', requireFeeView, asyncHandler(async (req: FeeRequest, res: Response) => {
   const school_id = req.user!.school_id
   const months = Math.min(24, Math.max(1, Number(req.query.months) || 6))
+  const { academic_year_id } = req.query
 
-  const { data: structures, error } = await supabase.from('fee_structures')
+  let sq = supabase.from('fee_structures')
     .select(`id, name, frequency, academic_year_id,
              fee_structure_lines(id, amount, is_optional, period_tokens),
              fee_structure_schedules(period_token, label, bills_on, due_date)`)
     .eq('school_id', school_id).eq('status', 'active')
+  // Plans from a previous year were being folded into this year's forecast.
+  if (academic_year_id) sq = sq.eq('academic_year_id', academic_year_id as string)
+
+  const { data: structures, error } = await sq
 
   if (error) return res.status(500).json({ success: false, error: error.message })
   const plans = structures ?? []
@@ -180,12 +190,21 @@ router.get('/forecast', requireFeeView, asyncHandler(async (req: FeeRequest, res
   for (const o of optIns) optInCount.set(o.structure_line_id, (optInCount.get(o.structure_line_id) ?? 0) + 1)
 
   // What has already been raised, per period key.
-  const { data: invoices } = await supabase.from('fee_invoices')
-    .select('period_key, total_amount, amount_paid')
-    .eq('school_id', school_id).neq('status', 'cancelled').not('period_key', 'is', null)
+  // Paged, and scoped to the YEAR being forecast. It was neither: every invoice
+  // ever raised in the school fed `collectionRate`, so a school in its third
+  // year projected against three years of history, and the scan itself stopped
+  // at 1,000 rows.
+  const invoices = await selectAll<any>(
+    'fee_invoices', 'period_key, total_amount, amount_paid',
+    q => {
+      let scoped = q.eq('school_id', school_id).neq('status', 'cancelled').not('period_key', 'is', null)
+      if (academic_year_id) scoped = scoped.eq('academic_year_id', academic_year_id as string)
+      return scoped
+    },
+  )
 
   const billedByKey = new Map<string, { billed: number; collected: number }>()
-  for (const inv of invoices ?? []) {
+  for (const inv of invoices) {
     const cur = billedByKey.get(inv.period_key!) ?? { billed: 0, collected: 0 }
     cur.billed = money(cur.billed + Number(inv.total_amount))
     cur.collected = money(cur.collected + Number(inv.amount_paid))
@@ -199,8 +218,12 @@ router.get('/forecast', requireFeeView, asyncHandler(async (req: FeeRequest, res
   const collectionRate = totalBilled > 0 ? totalCollected / totalBilled : 0
 
   const today = toLocalDateStr(new Date())
-  const horizon = new Date()
-  horizon.setMonth(horizon.getMonth() + months)
+  // setMonth overflows: on 31 August, +6 months is "31 February", which JS
+  // resolves to 3 March — two days short of the month boundary, so a schedule
+  // row due 28 Feb to 2 Mar silently dropped out of the forecast. Anchoring to
+  // the 1st and then taking the month end has no such edge.
+  const now = new Date()
+  const horizon = new Date(now.getFullYear(), now.getMonth() + months + 1, 0)
   const horizonStr = toLocalDateStr(horizon)
 
   const buckets = new Map<string, any>()
@@ -317,14 +340,15 @@ router.get('/by-category', requireFeeView, asyncHandler(async (req: FeeRequest, 
   const school_id = req.user!.school_id
   const { academic_year_id } = req.query
 
-  let aq = supabase.from('fee_assignments')
-    .select('student_id, fee_category')
-    .eq('school_id', school_id).eq('status', 'active')
-  if (academic_year_id) aq = aq.eq('academic_year_id', academic_year_id as string)
-
-  const { data: assignments, error } = await aq
-  if (error) return res.status(500).json({ success: false, error: error.message })
-  if (!assignments?.length) return res.json({ success: true, data: [], meta: { totals: null } })
+  // Paged. A short read here does not shrink a category — it deletes students
+  // from every bucket at once, so the totals look plausible and are simply
+  // missing whoever fell past row 1,000.
+  const assignments = await selectAll<any>('fee_assignments', 'student_id, fee_category', q => {
+    let scoped = q.eq('school_id', school_id).eq('status', 'active')
+    if (academic_year_id) scoped = scoped.eq('academic_year_id', academic_year_id as string)
+    return scoped
+  })
+  if (!assignments.length) return res.json({ success: true, data: [], meta: { totals: null } })
 
   const categoryOf = new Map<string, string>()
   for (const a of assignments) categoryOf.set(a.student_id, a.fee_category ?? 'general')
@@ -437,7 +461,7 @@ router.get('/by-category', requireFeeView, asyncHandler(async (req: FeeRequest, 
       { key: 'concession_unapplied_outstanding', label: 'Still billed in full' },
     ])
     res.setHeader('Content-Type', 'text/csv; charset=utf-8')
-    res.setHeader('Content-Disposition', `attachment; filename="${csvFilename('fee-by-category', new Date().toISOString().slice(0, 10))}"`)
+    res.setHeader('Content-Disposition', `attachment; filename="${csvFilename('fee-by-category', toLocalDateStr(new Date()))}"`)
     return res.send(csv)
   }
 

@@ -1,11 +1,13 @@
-import { Router, Response, Request } from 'express'
+import { Router, Response, Request, NextFunction } from 'express'
+import { randomBytes } from 'crypto'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { money } from '../../shared/utils/feeMoney'
 import { collectPayment, outstandingFor } from './lib/collect'
-import { activeProvider, providerByName, mockProvider } from './lib/providers'
-import { FeeRequest, attachFeeScope, assertCanReadStudent } from './lib/guards'
+import { getPermissionsForUser } from '../../shared/middleware/permissions-v2'
+import { activeProvider, mockProvider, paymentConfigError } from './lib/providers'
+import { FeeRequest, attachFeeScope, assertCanReadStudent, requireFeeCollect } from './lib/guards'
 
 // Paying online.
 //
@@ -26,6 +28,26 @@ import { FeeRequest, attachFeeScope, assertCanReadStudent } from './lib/guards'
 //     mean the second delivery finds the work already done.
 
 const router = Router()
+
+/**
+ * Refuse rather than improvise when the gateway is misconfigured.
+ *
+ * A 503 here is the honest answer: the school's problem is a missing
+ * environment variable, and a pay button that silently falls back to a
+ * simulator is how a family ends up with a receipt for money nobody took.
+ */
+function gatewayReady(res: Response): boolean {
+  const problem = paymentConfigError()
+  if (problem) {
+    console.error(`[gateway] refusing to serve — ${problem}`)
+    res.status(503).json({
+      success: false,
+      error: 'Online payment is not configured on this deployment. Please pay at the school office.',
+    })
+    return false
+  }
+  return true
+}
 
 const CreateOrderSchema = z.object({
   /** Optional narrowing; omitted means everything open. */
@@ -48,6 +70,8 @@ async function payerStudentId(req: FeeRequest): Promise<string | null> {
 
 // ── POST /orders ──────────────────────────────────────────────────────
 router.post('/orders', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Response) => {
+  if (!gatewayReady(res)) return
+
   const body = CreateOrderSchema.parse(req.body ?? {})
   const school_id = req.user!.school_id
 
@@ -95,6 +119,16 @@ router.post('/orders', attachFeeScope, asyncHandler(async (req: FeeRequest, res:
       .update({ provider_order_id: created.providerOrderId, updated_at: new Date().toISOString() })
       .eq('id', order.id)
 
+    // Can THIS caller finish what they just started?
+    //
+    // A simulated order is completed through /simulate, which in production
+    // takes fee.collect — a staff permission a parent cannot hold. Without
+    // saying so here, the portal cheerfully showed a Pay button that 403s at the
+    // last step, which is the worst possible moment to find out.
+    const canComplete = !provider.isSimulated
+      || process.env.NODE_ENV !== 'production'
+      || (await getPermissionsForUser(req.user!.id, school_id)).permissionCodes.has('fee.collect')
+
     res.status(201).json({
       success: true,
       data: {
@@ -103,9 +137,14 @@ router.post('/orders', attachFeeScope, asyncHandler(async (req: FeeRequest, res:
         outstanding,
         checkout: created.checkout,
         simulated: provider.isSimulated,
+        can_complete: canComplete,
       },
       meta: provider.isSimulated
-        ? { note: 'No payment provider is configured, so this order is simulated and moves no money.' }
+        ? {
+            note: canComplete
+              ? 'No payment provider is configured, so this order is simulated and moves no money.'
+              : 'No payment provider is configured, so online payment is not available. Pay at the school office.',
+          }
         : undefined,
     })
   } catch (e: any) {
@@ -177,15 +216,22 @@ async function capture(event: {
   providerOrderId: string; providerPaymentId: string
   status: 'paid' | 'failed'; amountPaise: number; method?: string; failureReason?: string
 }, providerName: string) {
-  const { data: order } = await supabase.from('fee_payment_orders')
+  const { data: order, error: readErr } = await supabase.from('fee_payment_orders')
     .select('*').eq('provider', providerName).eq('provider_order_id', event.providerOrderId).maybeSingle()
 
+  if (readErr) return { status: 500, body: { success: false, error: readErr.message } }
   if (!order) return { status: 404, body: { success: false, error: 'Unknown order' } }
 
   // Already resolved. A re-delivered webhook is normal, not an error — answering
   // 200 stops the provider retrying forever.
   if (order.status === 'paid' && order.payment_id) {
     return { status: 200, body: { success: true, data: { order_id: order.id, already: true } } }
+  }
+
+  // Another delivery of the same event is mid-flight. Also a 200: the provider
+  // must stop retrying, and the delivery that holds the claim will finish.
+  if (order.status === 'capturing') {
+    return { status: 200, body: { success: true, data: { order_id: order.id, already: true, in_progress: true } } }
   }
 
   if (event.status !== 'paid') {
@@ -202,6 +248,29 @@ async function capture(event: {
   // paid a different amount through the gateway, the receipt must match the bank.
   const paid = money(event.amountPaise / 100)
 
+  // ── Claim the order ──────────────────────────────────────────────
+  //
+  // Everything above this line is a READ, and a read cannot make two deliveries
+  // of the same event exclusive. Providers retry aggressively — Razorpay fires
+  // payment.captured more than once as normal behaviour — and both deliveries
+  // used to pass the status check and both call collectPayment: ₹18,000 charged
+  // once by the provider, ₹36,000 recorded, two receipts, one an orphan. The
+  // unique index that exists is on the orders table, and both writers target the
+  // same order row, so it never fired.
+  //
+  // A conditional UPDATE is atomic. Of two concurrent deliveries exactly one
+  // matches `status = 'created'` and gets a row back; the other gets nothing and
+  // returns 200 without touching money.
+  const { data: claimed, error: claimErr } = await supabase.from('fee_payment_orders')
+    .update({ status: 'capturing', updated_at: new Date().toISOString() })
+    .eq('id', order.id).eq('status', 'created').is('payment_id', null)
+    .select('id').maybeSingle()
+
+  if (claimErr) return { status: 500, body: { success: false, error: claimErr.message } }
+  if (!claimed) {
+    return { status: 200, body: { success: true, data: { order_id: order.id, already: true } } }
+  }
+
   const result = await collectPayment({
     schoolId: order.school_id,
     studentId: order.student_id,
@@ -210,6 +279,11 @@ async function capture(event: {
     reference: event.providerPaymentId,
     notes: 'Paid online',
     invoiceIds: order.invoice_ids ?? undefined,
+    // The provider's own payment id is the natural idempotency key: two
+    // deliveries of one capture carry the same one. Belt to the order claim's
+    // braces — the claim serialises deliveries of the same ORDER, this catches
+    // the same PAYMENT arriving by any route at all.
+    idempotencyKey: `gw:${providerName}:${event.providerPaymentId}`,
     // Nobody handled it. Leaving this null is what distinguishes an online
     // payment from one a named cashier took.
     collectedBy: null,
@@ -219,7 +293,12 @@ async function capture(event: {
     // The money is with the provider but we could not record it. Loudly, because
     // this needs a human — silently failing here is a family charged for nothing.
     console.error(`[gateway] CAPTURED BUT NOT RECORDED order=${order.id} payment=${event.providerPaymentId}: ${result.error}`)
+    // The claim goes back. Safe to release only because collectPayment is now a
+    // single Postgres transaction: it either wrote the payment, the allocations
+    // and the ledger pair, or it wrote nothing. There is no half-recorded state
+    // for a retry to land on top of.
     await supabase.from('fee_payment_orders').update({
+      status: 'created',
       provider_payment_id: event.providerPaymentId,
       failure_reason: `Captured at provider but not recorded: ${result.error}`,
       updated_at: new Date().toISOString(),
@@ -256,9 +335,15 @@ async function capture(event: {
 export const webhookRouter = Router()
 
 webhookRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
-  const providerName = String(req.query.provider ?? process.env.PAYMENT_PROVIDER ?? 'mock')
-  const provider = providerByName(providerName)
-  if (!provider) return res.status(400).json({ success: false, error: 'Unknown provider' })
+  if (!gatewayReady(res)) return
+
+  // The driver is OURS to choose, never the caller's.
+  //
+  // This used to read `req.query.provider ?? ...`, so even a correctly
+  // configured Razorpay deployment could be addressed as `?provider=mock` and
+  // verified against the mock's key instead of Razorpay's. An attacker picking
+  // which lock their key has to open is not a lock.
+  const provider = activeProvider()
 
   const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : JSON.stringify(req.body ?? {})
   const signature =
@@ -267,8 +352,17 @@ webhookRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
 
   const event = provider.verifyWebhook(raw, signature)
   if (!event) {
-    // Deliberately terse. Telling an unverified caller WHY it failed helps them
-    // iterate towards a valid forgery.
+    // Logged, because the innocent explanation for a burst of these is a rotated
+    // PAYMENT_WEBHOOK_SECRET or a mistyped provider dashboard — in which case
+    // EVERY payment in the school is silently 400ing and orders are piling up at
+    // 'created' with nobody told. That is the exact shape of "a parent says they
+    // paid and it isn't showing", and it used to be completely unobservable.
+    console.error(
+      `[gateway] webhook signature rejected provider=${provider.name} ` +
+      `signature=${signature ? 'present' : 'absent'} bytes=${raw.length} ip=${req.ip}`,
+    )
+    // The RESPONSE stays terse. Telling an unverified caller why it failed helps
+    // them iterate towards a valid forgery.
     return res.status(400).json({ success: false, error: 'Invalid signature' })
   }
 
@@ -278,10 +372,34 @@ webhookRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
 
 // ── POST /orders/:id/simulate ─────────────────────────────────────────
 //
-// The mock driver's stand-in for a checkout page. Refuses outright when a real
-// provider is configured — otherwise it would be a route that marks any order
-// paid without money, which is a fraud button.
-router.post('/orders/:id/simulate', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Response) => {
+// The mock driver's stand-in for a checkout page: it signs an event exactly as a
+// provider would and runs it through the same verification and capture path.
+//
+// Which is precisely the danger. `capture()` cannot tell a simulated event from
+// a real one — by design — so this route produces a real fee_payments row with a
+// sequential receipt number, real allocations, real ledger entries and an audit
+// log. Nothing downstream distinguishes it from money.
+//
+// It used to be guarded by `if (!provider.isSimulated)` alone. Since no provider
+// was configured anywhere, that check never fired, and the route was reachable by
+// any authenticated caller for any student in their fee scope — which for a
+// parent is their own child. Two requests, no tooling, and a family's bill was
+// clear:
+//
+//     POST /api/fees/gateway/orders            {}
+//     POST /api/fees/gateway/orders/<id>/simulate {"outcome":"paid"}
+//
+// In production it now takes fee.collect — a staff permission a parent cannot
+// hold. Locally it stays open to the caller's own scope, because the whole point
+// of the mock is that a developer can walk the parent's flow end to end.
+async function simulateGuard(req: FeeRequest, res: Response, next: NextFunction) {
+  if (process.env.NODE_ENV !== 'production') return next()
+  return requireFeeCollect(req, res, next)
+}
+
+router.post('/orders/:id/simulate', attachFeeScope, simulateGuard, asyncHandler(async (req: FeeRequest, res: Response) => {
+  if (!gatewayReady(res)) return
+
   const provider = activeProvider()
   if (!provider.isSimulated) {
     return res.status(400).json({ success: false, error: 'A real payment provider is configured; use its checkout' })
@@ -303,7 +421,7 @@ router.post('/orders/:id/simulate', attachFeeScope, asyncHandler(async (req: Fee
   const outcome = req.body?.outcome === 'failed' ? 'failed' : 'paid'
   const payload = JSON.stringify({
     order_id: order.provider_order_id,
-    payment_id: `mock_pay_${Date.now().toString(36)}${Math.round(Number(order.amount) * 100)}`,
+    payment_id: `mock_pay_${randomBytes(12).toString('hex')}`,
     status: outcome,
     amount: Math.round(Number(order.amount) * 100),
     method: 'upi',
@@ -318,5 +436,47 @@ router.post('/orders/:id/simulate', attachFeeScope, asyncHandler(async (req: Fee
   const out = await capture(event, provider.name)
   res.status(out.status).json(out.body)
 }))
+
+// ── The reaper ────────────────────────────────────────────────────────
+//
+// Orders that were started and never resolved.
+//
+// Nothing ever swept these, so they sat at 'created' forever — and that is the
+// silent half of "a parent says they paid and it isn't showing": if the webhook
+// secret is rotated or the provider dashboard is misconfigured, EVERY payment in
+// the school stops being captured and the only trace is a growing pile of
+// unresolved orders nobody was looking at.
+//
+// Expiring them is not the point; noticing them is. A run that expires anything
+// at all logs loudly, because the interesting number is not "how many expired"
+// but "why did any".
+export async function reapStaleOrders(olderThanMinutes = 60) {
+  const cutoff = new Date(Date.now() - olderThanMinutes * 60_000).toISOString()
+
+  const { data, error } = await supabase.from('fee_payment_orders')
+    .update({ status: 'expired', failure_reason: 'Abandoned — never confirmed by the provider' })
+    .in('status', ['created', 'capturing'])
+    .is('payment_id', null)
+    .lt('created_at', cutoff)
+    .select('id, school_id, status, amount')
+
+  if (error) {
+    console.error('[gateway] could not reap stale orders:', error.message)
+    return { expired: 0 }
+  }
+
+  const expired = data ?? []
+  if (expired.length) {
+    // A 'capturing' order that timed out is a different and worse animal than an
+    // abandoned checkout: it means capture started and never finished, so the
+    // provider may hold money we did not record.
+    const stuck = expired.filter((o: any) => o.status === 'capturing')
+    console.warn(
+      `[gateway] expired ${expired.length} unresolved payment order(s) older than ${olderThanMinutes}m` +
+      (stuck.length ? ` — ${stuck.length} were mid-capture and need a human: ${stuck.map((o: any) => o.id).join(', ')}` : ''),
+    )
+  }
+  return { expired: expired.length }
+}
 
 export default router

@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { QueryError } from '@/components/shared/QueryError'
 import { PayDialog } from '@/components/fees/PayDialog'
 import { formatCurrency, formatDate, formatRelativeDue, statusVariant, cn } from '@/lib/utils'
 import { invoiceHeads, invoiceTitle } from '@/lib/fees'
@@ -24,12 +25,12 @@ export default function PortalFeesPage() {
     if (user && user.role !== 'parent') router.replace('/')
   }, [user, router])
 
-  const { data: me, isPending: mePending } = useQuery({
+  const { data: me, isPending: mePending, error: meError } = useQuery({
     queryKey: ['portal-me'],
     queryFn: () => studentsApi.me().then(r => r.data),
   })
 
-  const { data, isPending: summaryPending } = useQuery({
+  const { data, isPending: summaryPending, error: summaryError } = useQuery({
     queryKey: ['portal-fee-summary', me?.id],
     queryFn: () => feeApi.student(me.id).then(r => r.data),
     enabled: !!me?.id,
@@ -44,6 +45,11 @@ export default function PortalFeesPage() {
   // green, that they are all paid up. Gate on isPending, which stays true
   // until the query actually has data.
   const isLoading = mePending || summaryPending
+  // The same reasoning one step further. isPending stops the page rendering ₹0
+  // while the request is IN FLIGHT; this stops it rendering ₹0 when the request
+  // has FAILED, which produced the identical green "all paid up" panel and was
+  // the only one of the two that persisted on screen.
+  const loadError = meError ?? summaryError
 
   if (user && user.role !== 'parent') return null
 
@@ -85,6 +91,10 @@ export default function PortalFeesPage() {
               answer gets the full width and the largest type on screen.
               Billed and paid sit underneath as context, not as peers. */}
           <Card className="p-5">
+            {loadError ? (
+              <QueryError error={loadError} title="Could not load your fee position" />
+            ) : (
+            <>
             <p className="text-sm font-medium text-muted-foreground">
               {settled ? 'Nothing due' : 'Amount due'}
             </p>
@@ -128,6 +138,8 @@ export default function PortalFeesPage() {
                 {formatCurrency(totalDue - payableNow)} of the total isn&apos;t on an
                 invoice yet — settle that at the office.
               </p>
+            )}
+            </>
             )}
 
             {/* The total above now includes carried-forward arrears and one-off

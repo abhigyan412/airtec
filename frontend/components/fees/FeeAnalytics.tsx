@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { QueryError } from '@/components/shared/QueryError'
 
 // Collection meter: single ratio (collected ÷ billed), color-banded by the
 // same severity convention used everywhere else in this app (attendance %,
@@ -70,7 +71,7 @@ function ClassWiseDues() {
     queryFn: () => admissionApi.classes().then(r => r.data),
   })
 
-  const { data: dues, isLoading } = useQuery({
+  const { data: dues, isLoading, error } = useQuery({
     queryKey: ['fee-dues', classId],
     queryFn: () => feeApi.dues(classId ? { class_id: classId } : undefined).then(r => r.data),
   })
@@ -121,6 +122,8 @@ function ClassWiseDues() {
       <CardContent>
         {isLoading ? (
           <Skeleton className="h-[220px] w-full rounded-xl" />
+        ) : error ? (
+          <QueryError error={error} title="Could not load the analytics" />
         ) : data.length === 0 ? (
           <EmptyState
             icon={BarChart3}

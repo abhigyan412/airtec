@@ -60,6 +60,20 @@ router.get('/:paymentId', attachFeeScope, asyncHandler(async (req: FeeRequest, r
       .eq('student_id', payment.student_id).eq('school_id', school_id).neq('status', 'cancelled'),
   ])
 
+  // All four checked. None of them were.
+  //
+  // The one that matters is allInvoicesRes: it is where the receipt's
+  // "balance remaining" comes from, and a failed read silently printed ₹0 —
+  // a document handed to a parent saying they owe nothing, on a day they owe
+  // ₹40,000. A receipt is the one artefact here that leaves the building.
+  const legFailure = [schoolRes, studentRes, allocRes, allInvoicesRes].find(r => r.error)
+  if (legFailure?.error) {
+    return res.status(500).json({
+      success: false,
+      error: `Could not assemble the receipt: ${legFailure.error.message}`,
+    })
+  }
+
   const student = studentRes.data
   const parent = (student?.parents as any)?.[0]
 
@@ -115,7 +129,12 @@ router.get('/:paymentId', attachFeeScope, asyncHandler(async (req: FeeRequest, r
       refunded_amount: money(Number(payment.refunded_amount ?? 0)),
       advance: money(Number(payment.unallocated_amount ?? 0)),
       effective_amount: effective,
-      amount_in_words: amountInWords(effective),
+      // In words OF THE FIGURE PRINTED BESIDE IT. This was computed from
+      // `effective` while the receipt printed `amount`, so a partially refunded
+      // receipt showed a figure and a wording that disagreed by the refund — on
+      // the one field the words exist to make tamper-evident.
+      amount_in_words: amountInWords(money(Number(payment.amount))),
+      effective_amount_in_words: amountInWords(effective),
 
       school: {
         name: schoolRes.data?.name ?? 'School',

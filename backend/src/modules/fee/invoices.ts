@@ -1,7 +1,8 @@
 import { Router, Response } from 'express'
 import { supabase } from '../../shared/db/client'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
-import { amountDue } from '../../shared/utils/feeMoney'
+import { amountDue, money } from '../../shared/utils/feeMoney'
+import { postInvoiceReversal } from './lib/ledger'
 import { FeeRequest, attachFeeScope, requireFeeInvoiceGenerate, scopeInvoiceQuery, studentsEmbed } from './lib/guards'
 
 const router = Router()
@@ -48,9 +49,10 @@ router.get('/:id', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Res
 
   // Payments reach an invoice through allocations now, so the ledger for one
   // invoice is "which transactions put money against it, and how much".
-  const { data: allocations } = await supabase.from('fee_payment_allocations')
+  const { data: allocations, error: allocationsErr } = await supabase.from('fee_payment_allocations')
     .select('amount, fee_payments(id, receipt_number, payment_date, method, status, collected_by, users:collected_by(full_name))')
     .eq('invoice_id', invoice.id)
+  if (allocationsErr) return res.status(500).json({ success: false, error: allocationsErr.message })
 
   res.json({
     success: true,
@@ -67,8 +69,10 @@ router.get('/:id', attachFeeScope, asyncHandler(async (req: FeeRequest, res: Res
 // billed again correctly.
 router.patch('/:id/cancel', requireFeeInvoiceGenerate, asyncHandler(async (req: FeeRequest, res: Response) => {
   const school_id = req.user!.school_id
-  const { data: invoice } = await supabase.from('fee_invoices')
-    .select('id, amount_paid, status').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+  const { data: invoice, error: readErr } = await supabase.from('fee_invoices')
+    .select('id, student_id, amount_paid, total_amount, late_fee, status')
+    .eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+  if (readErr) return res.status(500).json({ success: false, error: readErr.message })
   if (!invoice) return res.status(404).json({ success: false, error: 'Invoice not found' })
 
   if (Number(invoice.amount_paid) > 0) {
@@ -82,6 +86,19 @@ router.patch('/:id/cancel', requireFeeInvoiceGenerate, asyncHandler(async (req: 
   const { data, error } = await supabase.from('fee_invoices').update({ status: 'cancelled' })
     .eq('id', req.params.id).eq('school_id', school_id).select().single()
   if (error) return res.status(400).json({ success: false, error: error.message })
+
+  // Reverse the receivable this invoice raised. Without it, cancelling a bill
+  // left the income recognised and the debt on the books forever — the invoice
+  // vanished from every report while the ledger went on insisting the family
+  // owed it.
+  await postInvoiceReversal({
+    schoolId: school_id,
+    invoiceId: invoice.id,
+    studentId: invoice.student_id,
+    netAmount: money(Number(invoice.total_amount) - Number(invoice.late_fee ?? 0)),
+    lateFee: money(Number(invoice.late_fee ?? 0)),
+    memo: 'Invoice cancelled',
+  })
 
   await supabase.from('audit_logs').insert({
     school_id, user_id: req.user!.id, action: 'INVOICE_CANCELLED',

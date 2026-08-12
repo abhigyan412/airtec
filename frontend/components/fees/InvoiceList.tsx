@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { QueryError } from '@/components/shared/QueryError'
 import { Pagination } from '@/components/shared/Pagination'
 
 // Everything already issued.
@@ -33,7 +34,7 @@ export function InvoiceList({ canManage }: { canManage: boolean }) {
   const limit = 20
 
   const params = { page, limit, status: status || undefined, search: search || undefined }
-  const { data, isPending } = useQuery({
+  const { data, isPending, error } = useQuery({
     queryKey: ['fee-invoices', params],
     queryFn: () => feeApi.invoices.list(params),
   })
@@ -83,6 +84,8 @@ export function InvoiceList({ canManage }: { canManage: boolean }) {
         <div className="space-y-3 p-5">
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
         </div>
+      ) : error ? (
+        <div className="p-5"><QueryError error={error} title="Could not load the invoices" /></div>
       ) : !rows.length ? (
         <EmptyState
           icon={FileText}

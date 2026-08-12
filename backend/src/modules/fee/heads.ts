@@ -66,8 +66,12 @@ router.patch('/:id', requireFeeManage, asyncHandler(async (req: FeeRequest, res:
 // Deactivate rather than delete: structure lines and issued invoice lines
 // reference it, and removing the row would leave both unreadable.
 router.delete('/:id', requireFeeManage, asyncHandler(async (req: FeeRequest, res: Response) => {
-  const { count } = await supabase.from('fee_structure_lines')
+  // Checked. A failed count read as 0, which took the DELETE branch and hard
+  // deleted a head that structure lines and issued invoices still reference —
+  // exactly what the comment above says must never happen.
+  const { count, error: countErr } = await supabase.from('fee_structure_lines')
     .select('id', { count: 'exact', head: true }).eq('fee_head_id', req.params.id)
+  if (countErr) return res.status(500).json({ success: false, error: countErr.message })
 
   if ((count ?? 0) > 0) {
     const { data, error } = await supabase.from('fee_heads').update({ is_active: false })

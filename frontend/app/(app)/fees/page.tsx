@@ -5,6 +5,7 @@ import {
   Wallet, TrendingUp, AlertCircle, CheckCircle, Tag, Clock, Users,
   ArrowRight, Receipt, Percent,
 } from 'lucide-react'
+import { QueryError } from '@/components/shared/QueryError'
 import { feeApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
@@ -30,7 +31,7 @@ const DUE_SOON_DAYS = 7
 export default function FeesOverviewPage() {
   const { can } = usePermissions()
 
-  const { data: stats, isPending: statsPending } = useQuery({
+  const { data: stats, isPending: statsPending, error: statsError } = useQuery({
     queryKey: ['fee-stats'],
     queryFn: () => feeApi.stats().then(r => r.data),
   })
@@ -48,7 +49,7 @@ export default function FeesOverviewPage() {
   // Only the count is wanted here, so ask for the smallest page and read the
   // total off meta. Reading `data.length` would report 25 the moment the school
   // has more defaulters than one page.
-  const { data: defaulters } = useQuery({
+  const { data: defaulters, error: defaultersError } = useQuery({
     queryKey: ['fee-defaulters', 30, 'count'],
     queryFn: () => feeApi.defaulters(30, 1, 1),
   })
@@ -84,6 +85,11 @@ export default function FeesOverviewPage() {
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[120px] rounded-xl" />)}
         </div>
+      ) : statsError ? (
+        // Four ₹0 tiles and "Everything billed is collected" is what a failed
+        // request used to look like — a school that has taken no money reading
+        // as a school that has collected all of it.
+        <QueryError error={statsError} title="Could not load the fee position" />
       ) : (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <StatCard
