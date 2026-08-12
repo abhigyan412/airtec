@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { workflowApi } from '@/lib/api'
+import { workflowApi, admissionApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
 import { Check, X, MessageSquare, ArrowUpCircle, Loader2, GitBranch } from 'lucide-react'
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface WorkflowPipelineProps {
   applicationId: string
@@ -32,15 +33,30 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
   const qc = useQueryClient()
   const [notes, setNotes] = useState('')
   const [showNotesFor, setShowNotesFor] = useState<string | null>(null)
+  const [sectionId, setSectionId] = useState('')
 
   const { data: workflow, isLoading } = useQuery({
     queryKey: ['workflow-status', applicationId],
     queryFn: () => workflowApi.getStatus(applicationId).then(r => r.data),
   })
 
+  // The final approval is what creates the student record, and a student needs
+  // a section. An application only records the class applied for, so this is
+  // the first and only point anybody is asked which section they join —
+  // without it they enrol sectionless and fall out of every section-scoped
+  // screen.
+  const { data: application } = useQuery({
+    queryKey: ['application', applicationId],
+    queryFn: () => admissionApi.applications.get(applicationId).then(r => r.data),
+  })
+  const { data: classes } = useQuery({
+    queryKey: ['classes'],
+    queryFn: () => admissionApi.classes().then(r => r.data),
+  })
+
   const actMutation = useMutation({
-    mutationFn: ({ status, notes }: { status: 'approved' | 'rejected' | 'commented', notes?: string }) =>
-      workflowApi.act(applicationId, status, notes),
+    mutationFn: ({ status, notes, section_id }: { status: 'approved' | 'rejected' | 'commented', notes?: string, section_id?: string }) =>
+      workflowApi.act(applicationId, status, notes, section_id),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['workflow-status', applicationId] })
       if (res.data?.completed) {
@@ -122,12 +138,29 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
     user?.full_name && currentStep.roles?.name && roleMatchesUser(currentStep.roles.name, user.role)
   )
 
+  // Approving on the last step completes the workflow and admits the student.
+  const isFinalStep = !!currentStep && allSteps.length > 0 &&
+    Number(currentStep.step_order) >= Math.max(...allSteps.map((s: any) => Number(s.step_order)))
+  // Only when this approval will actually create a student — re-approving an
+  // application already linked to one needs no section.
+  const needsSection = isFinalStep && !application?.student_id
+  const sections: any[] =
+    classes?.find((c: any) => c.id === application?.applying_for_class_id)?.sections ?? []
+
   const handleAction = (actionStatus: 'approved' | 'rejected' | 'commented') => {
     if (actionStatus === 'rejected' && !notes.trim()) {
       setShowNotesFor('rejected')
       return
     }
-    actMutation.mutate({ status: actionStatus, notes: notes.trim() || undefined })
+    if (actionStatus === 'approved' && needsSection && !sectionId) {
+      toast.error('Pick the section this student will be enrolled into.')
+      return
+    }
+    actMutation.mutate({
+      status: actionStatus,
+      notes: notes.trim() || undefined,
+      section_id: actionStatus === 'approved' && needsSection ? sectionId : undefined,
+    })
   }
 
   return (
@@ -160,6 +193,32 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
 
             {canAct ? (
               <div className="space-y-3">
+                {needsSection && (
+                  <div className="rounded-lg border border-border bg-muted/40 p-3">
+                    <label className="mb-1.5 block text-xs font-medium text-foreground">
+                      Enrol into section <span className="text-destructive">*</span>
+                    </label>
+                    {sections.length === 0 ? (
+                      <p className="text-xs text-destructive">
+                        This class has no sections yet — add one in Settings before admitting.
+                      </p>
+                    ) : (
+                      <>
+                        <Select value={sectionId} onValueChange={setSectionId}>
+                          <SelectTrigger className="h-9"><SelectValue placeholder="Choose a section…" /></SelectTrigger>
+                          <SelectContent>
+                            {sections.map((s: any) => (
+                              <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="mt-1.5 text-[11px] text-muted-foreground">
+                          Approving here admits the student and creates their record.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
                 {showNotesFor && (
                   <Textarea
                     value={notes}

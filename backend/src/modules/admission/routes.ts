@@ -12,6 +12,94 @@ import { ensureAdmissionApprovalWorkflowDefinition } from '../rbac/seed'
 const router = Router()
 router.use(authenticate)
 
+/**
+ * Does this approval finish the workflow — i.e. is the caller about to admit?
+ *
+ * Needed BEFORE actOnWorkflow runs. The student is created only after the
+ * workflow completes, so a section check raised at that point would come too
+ * late to refuse: the action is already recorded and the application already
+ * flipped to 'admitted'. Refusing here costs nothing instead of leaving an
+ * admitted application with no student behind it.
+ *
+ * Asking only on the final step is deliberate — making the counselor on step 1
+ * choose a section is asking months before anyone knows the answer.
+ */
+async function isFinalApprovalStep(instanceId: string, schoolId: string): Promise<boolean> {
+  const { data: instance } = await supabase
+    .from('workflow_instances')
+    .select('workflow_id, current_step_id')
+    .eq('id', instanceId).eq('school_id', schoolId).maybeSingle()
+  if (!instance?.current_step_id) return false
+
+  const [{ data: step }, { data: allSteps }] = await Promise.all([
+    supabase.from('workflow_steps').select('step_order').eq('id', instance.current_step_id).maybeSingle(),
+    supabase.from('workflow_steps').select('step_order').eq('workflow_id', instance.workflow_id),
+  ])
+  if (!step || !allSteps?.length) return false
+  return step.step_order >= Math.max(...allSteps.map((s: any) => Number(s.step_order)))
+}
+
+/**
+ * Creates the student record an admitted application becomes.
+ *
+ * section_id is required and validated against the class applied for, because
+ * admission_applications only carries applying_for_class_id — there is no
+ * section on an application, so nothing here was ever choosing one. Every
+ * student admitted through this workflow landed with section_id NULL, which
+ * hides them from every section-scoped screen and renders them in
+ * /fees/collect as a phantom sectionless "Class 3" row sitting beside the real
+ * Class 3-A and 3-B.
+ *
+ * admission_number was missing for the same reason: POST /students generates
+ * one via nextDocumentNumber, this path never did, so admission-created
+ * students had no number to be looked up or receipted by.
+ */
+async function createStudentForApplication(app: any, schoolId: string, sectionId: string) {
+  const admissionNumber = await nextDocumentNumber(schoolId, 'ADM')
+  return supabase.from('students').insert({
+    school_id: schoolId,
+    first_name: app.student_first_name,
+    last_name: app.student_last_name,
+    date_of_birth: app.date_of_birth,
+    gender: app.gender,
+    class_id: app.applying_for_class_id,
+    section_id: sectionId,
+    academic_year_id: app.academic_year_id,
+    stream: app.stream,
+    admission_number: admissionNumber,
+    status: 'active',
+  }).select().single()
+}
+
+/**
+ * Rejects an admitting approval that names no section, or one belonging to a
+ * different class than the application applied for.
+ * Returns an error string to send back, or null when the caller may proceed.
+ */
+async function checkAdmissionSection(
+  applicationId: string, schoolId: string, sectionId: unknown,
+): Promise<string | null> {
+  const { data: app } = await supabase
+    .from('admission_applications')
+    .select('applying_for_class_id, student_id')
+    .eq('id', applicationId).eq('school_id', schoolId).maybeSingle()
+
+  // Already enrolled — this approval creates nobody, so it needs no section.
+  if (!app || app.student_id) return null
+
+  if (!sectionId || typeof sectionId !== 'string') {
+    return 'section_id is required to admit: pick the section this student will be enrolled into.'
+  }
+  const { data: section } = await supabase
+    .from('sections').select('id, class_id')
+    .eq('id', sectionId).eq('school_id', schoolId).maybeSingle()
+  if (!section) return 'That section does not exist in this school.'
+  if (section.class_id !== app.applying_for_class_id) {
+    return 'That section belongs to a different class than the one applied for.'
+  }
+  return null
+}
+
 // ── Schemas ─────────────────────────────────────────────────
 const CreateInquirySchema = z.object({
   student_name: z.string().min(1),
@@ -569,6 +657,12 @@ router.post(
       return res.status(400).json({ success: false, error: `Workflow already ${instance.status}` })
     }
 
+    // Before acting, not after — see isFinalApprovalStep.
+    if (rawStatus === 'approved' && await isFinalApprovalStep(instance.id, school_id)) {
+      const problem = await checkAdmissionSection(id, school_id, req.body.section_id)
+      if (problem) return res.status(400).json({ success: false, error: problem })
+    }
+
     const result = await actOnWorkflow({
       instanceId: instance.id,
       userId: req.user!.id,
@@ -597,17 +691,7 @@ router.post(
       // On final approval, create the student + parent records
       // (mirrors the old endpoint's behaviour on principal final approval)
       if (newAppStatus === 'admitted' && app && !app.student_id) {
-        const { data: student } = await supabase.from('students').insert({
-          school_id,
-          first_name: app.student_first_name,
-          last_name: app.student_last_name,
-          date_of_birth: app.date_of_birth,
-          gender: app.gender,
-          class_id: app.applying_for_class_id,
-          academic_year_id: app.academic_year_id,
-          stream: app.stream,
-          status: 'active',
-        }).select().single()
+        const { data: student } = await createStudentForApplication(app, school_id, req.body.section_id)
 
         if (student) {
           createdStudent = student
@@ -649,7 +733,7 @@ router.post(
 // non-staff only, defers to actOnWorkflow's own per-step role check.
 router.post('/applications/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
-  const { status, notes } = req.body
+  const { status, notes, section_id } = req.body
   const school_id = req.user!.school_id
 
   if (NON_STAFF_ROLES.includes(req.user!.role)) {
@@ -672,6 +756,12 @@ router.post('/applications/:id/workflow-action', asyncHandler(async (req: AuthRe
 
   if (instErr || !instance) {
     return res.status(404).json({ success: false, error: 'No workflow instance found for this application. It may not have been started.' })
+  }
+
+  // Before acting, not after — see isFinalApprovalStep.
+  if (status === 'approved' && await isFinalApprovalStep(instance.id, school_id)) {
+    const problem = await checkAdmissionSection(id, school_id, section_id)
+    if (problem) return res.status(400).json({ success: false, error: problem })
   }
 
   const result = await actOnWorkflow({
@@ -700,17 +790,7 @@ router.post('/applications/:id/workflow-action', asyncHandler(async (req: AuthRe
       .single()
 
     if (newAppStatus === 'admitted' && app && !app.student_id) {
-      const { data: student } = await supabase.from('students').insert({
-        school_id,
-        first_name: app.student_first_name,
-        last_name: app.student_last_name,
-        date_of_birth: app.date_of_birth,
-        gender: app.gender,
-        class_id: app.applying_for_class_id,
-        academic_year_id: app.academic_year_id,
-        stream: app.stream,
-        status: 'active',
-      }).select().single()
+      const { data: student } = await createStudentForApplication(app, school_id, section_id)
 
       if (student) {
         createdStudent = student

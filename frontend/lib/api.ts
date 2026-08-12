@@ -843,8 +843,11 @@ export const workflowApi = {
   getStatus: (applicationId: string) =>
     api.get(`/admission/applications/${applicationId}/workflow-status`).then(r => r.data),
 
-  act: (applicationId: string, status: 'approved' | 'rejected' | 'escalated' | 'commented', notes?: string) =>
-    api.post(`/admission/applications/${applicationId}/workflow-action`, { status, notes }).then(r => r.data),
+  // section_id is required on the approval that completes the workflow — that
+  // action creates the student, and a student without a section is invisible to
+  // every section-scoped screen.
+  act: (applicationId: string, status: 'approved' | 'rejected' | 'escalated' | 'commented', notes?: string, section_id?: string) =>
+    api.post(`/admission/applications/${applicationId}/workflow-action`, { status, notes, section_id }).then(r => r.data),
 
   start: (applicationId: string) =>
     api.post(`/admission/applications/${applicationId}/start-workflow`).then(r => r.data),
