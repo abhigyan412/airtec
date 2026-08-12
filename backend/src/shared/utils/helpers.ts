@@ -64,8 +64,28 @@ export const defaultSectionNamesForClass = (numericLevel: number | null | undefi
   if (numericLevel === 11 || numericLevel === 12) {
     return ['PCM', 'PCB', 'Commerce', 'Humanities']
   }
-  return ['A', 'B']
+  return ['A', 'B', 'C']
 }
+
+/**
+ * The class ladder a new school starts with: pre-primary through Class 12.
+ *
+ * numeric_level orders the list and is what every "which class is this"
+ * comparison keys on, so the three pre-primary years take the levels below
+ * Class 1 rather than being appended at the end — Nursery must sort before
+ * UKG, which must sort before Class 1, and `Class N` must keep numeric_level N
+ * so nothing that assumes that correspondence breaks.
+ *
+ * Shared because two places build this list — the demo seed and the new-school
+ * signup in auth/routes.ts — and a school whose class ladder depends on which
+ * of the two created it is a bug waiting to happen.
+ */
+export const DEFAULT_CLASSES: { name: string; numeric_level: number }[] = [
+  { name: 'Nursery', numeric_level: -2 },
+  { name: 'LKG', numeric_level: -1 },
+  { name: 'UKG', numeric_level: 0 },
+  ...Array.from({ length: 12 }, (_, i) => ({ name: `Class ${i + 1}`, numeric_level: i + 1 })),
+]
 
 // 'parent' and 'student' are the only non-staff roles in users.role —
 // everyone else (including accountant/counselor, who have no business

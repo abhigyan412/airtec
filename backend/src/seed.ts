@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import { supabase } from './shared/db/client'
 import { seedDefaultRoles, LEGACY_ROLE_TO_RBAC_ROLE } from './modules/rbac/seed'
-import { defaultSectionNamesForClass } from './shared/utils/helpers'
+import { defaultSectionNamesForClass, DEFAULT_CLASSES } from './shared/utils/helpers'
 import { avatarSvg } from './shared/utils/avatar'
 import type { NotificationType } from './shared/utils/notifications'
 
@@ -24,7 +24,10 @@ import type { NotificationType } from './shared/utils/notifications'
 // ═══════════════════════════════════════════════════════════════
 
 // ── Tunables ─────────────────────────────────────────────────
-const STUDENTS_PER_SECTION = 40   // × 28 sections = 1120 students
+// 47 sections = 13 classes (Nursery→Class 10) × A/B/C + 2 senior classes × 4
+// streams. At 40 a section that is 1,880 students, and every per-student
+// artefact below scales with it — 45 days of attendance alone is ~85k rows.
+const STUDENTS_PER_SECTION = 40   // × 47 sections = 1880 students
 const ATTENDANCE_DAYS = 45        // working days of student attendance
 const STAFF_ATTENDANCE_DAYS = 45
 const PORTAL_FAMILIES = 8         // parent + student logins for the family app
@@ -123,6 +126,9 @@ const FATHER_NAMES = ['Rajesh', 'Suresh', 'Mahesh', 'Ramesh', 'Dinesh', 'Ganesh'
 const MOTHER_NAMES = ['Sunita', 'Anita', 'Kavita', 'Savita', 'Rekha', 'Meena', 'Geeta', 'Seema', 'Neeta', 'Rita', 'Poonam', 'Shobha', 'Usha', 'Lata', 'Asha', 'Nirmala', 'Pushpa', 'Sarita', 'Vandana', 'Archana']
 
 // ── Curriculum ───────────────────────────────────────────────
+// Nursery/LKG/UKG sit at numeric_level 0 and below. Without their own list they
+// would inherit the primary timetable and be taught EVS and General Knowledge.
+const PRE_PRIMARY_SUBJECTS = ['English', 'Hindi', 'Numbers', 'Rhymes & Story', 'Art & Craft']
 const PRIMARY_SUBJECTS = ['English', 'Hindi', 'Mathematics', 'EVS', 'General Knowledge', 'Art & Craft']
 const MIDDLE_SUBJECTS = ['English', 'Hindi', 'Mathematics', 'Science', 'Social Science', 'Computer Science']
 const STREAM_SUBJECTS: Record<string, string[]> = {
@@ -132,13 +138,21 @@ const STREAM_SUBJECTS: Record<string, string[]> = {
   Humanities: ['English', 'History', 'Political Science', 'Geography', 'Economics'],
 }
 /** Subjects actually taught to one section (stream-aware for 11–12). */
+/**
+ * What one section is actually taught. Must stay a subset of classSubjects()
+ * for the same level — the timetable, exams and homework built from this all
+ * store subject_name, and a name outside the class's own subject catalogue is
+ * a period nobody can trace back to a subject.
+ */
 function subjectsFor(level: number, sectionName: string): string[] {
   if (level >= 11) return STREAM_SUBJECTS[sectionName] ?? STREAM_SUBJECTS.PCM
+  if (level <= 0) return PRE_PRIMARY_SUBJECTS
   return level <= 5 ? PRIMARY_SUBJECTS : MIDDLE_SUBJECTS
 }
 /** Everything examinable at a class level — the union across streams. */
 function classSubjects(level: number): string[] {
   if (level >= 11) return Array.from(new Set(Object.values(STREAM_SUBJECTS).flat()))
+  if (level <= 0) return PRE_PRIMARY_SUBJECTS
   return level <= 5 ? PRIMARY_SUBJECTS : MIDDLE_SUBJECTS
 }
 
@@ -275,11 +289,9 @@ async function seed() {
   const ay = ayRows.find(a => a.name === AY_NAME)!
   console.log(`   ✅ ${PREV_AY_NAME} (past) + ${AY_NAME} (current)\n`)
 
-  // ── 5. Classes 1–12 ──────────────────────────────────────
+  // ── 5. Classes: Nursery → Class 12 ───────────────────────
   console.log('5️⃣  Creating classes...')
-  const classes = await ins('classes', Array.from({ length: 12 }, (_, i) => ({
-    school_id: schoolId, name: `Class ${i + 1}`, numeric_level: i + 1,
-  })))
+  const classes = await ins('classes', DEFAULT_CLASSES.map(c => ({ school_id: schoolId, ...c })))
   classes.sort((a, b) => a.numeric_level - b.numeric_level)
   console.log(`   ✅ ${classes.length} classes\n`)
 
@@ -319,7 +331,14 @@ async function seed() {
   ])
   const headByName: Record<string, any> = Object.fromEntries(feeHeads.map(h => [h.name, h]))
   const tuitionHead = headByName['Tuition Fee'], examHead = headByName['Exam Fee'], annualHead = headByName['Annual Fund']
-  const tuitionByClass: Record<number, number> = { 1: 2500, 2: 2500, 3: 2800, 4: 2800, 5: 3000, 6: 3200, 7: 3200, 8: 3500, 9: 3800, 10: 3800, 11: 4500, 12: 4500 }
+  // Keyed by numeric_level, so the pre-primary years need their own entries —
+  // without them tuition resolves to undefined and every pre-primary invoice is
+  // billed at NULL.
+  const tuitionByClass: Record<number, number> = {
+    [-2]: 1800, [-1]: 2000, 0: 2200,
+    1: 2500, 2: 2500, 3: 2800, 4: 2800, 5: 3000, 6: 3200,
+    7: 3200, 8: 3500, 9: 3800, 10: 3800, 11: 4500, 12: 4500,
+  }
   const feeStructureRows = classes.flatMap(cls => {
     const lvl = cls.numeric_level
     const rows: any[] = [
@@ -347,30 +366,56 @@ async function seed() {
   ])
   console.log(`   ✅ ${sources.length} inquiry sources\n`)
 
-  // ── 10. Subjects master list ─────────────────────────────
+  // ── 10. Subjects, per class ──────────────────────────────
+  //
+  // subjects.class_id decides which class a subject belongs to, and
+  // GET /admission/subjects treats a NULL class_id as "every class" — so the
+  // old flat insert, which set no class_id at all, put the entire catalogue
+  // under every class. Settings showed Class 1 offering Accountancy, Physics
+  // and Political Science, and Timetable/Homework/Syllabus offered the same
+  // list to pick from.
+  //
+  // Each class now gets exactly the subjects it is taught: the pre-primary
+  // list for Nursery–UKG, primary for 1–5, middle for 6–10, and the union of
+  // the four streams for 11–12 (a section there is a stream, so PCM and
+  // Commerce draw from one class-level list).
   console.log('🔟  Creating subjects...')
-  const subjectDefs: [string, string, boolean][] = [
-    ['English', 'ENG', false], ['Hindi', 'HIN', false], ['Mathematics', 'MAT', false],
-    ['Science', 'SCI', false], ['Social Science', 'SST', false], ['EVS', 'EVS', false],
-    ['Computer Science', 'CS', false], ['Physics', 'PHY', false], ['Chemistry', 'CHE', false],
-    ['Biology', 'BIO', false], ['Accountancy', 'ACC', false], ['Business Studies', 'BST', false],
-    ['Economics', 'ECO', false], ['History', 'HIS', false], ['Political Science', 'POL', false],
-    ['Geography', 'GEO', false], ['Physical Education', 'PE', true], ['Art & Craft', 'ART', true],
-    ['General Knowledge', 'GK', true], ['Music', 'MUS', true],
-  ]
-  await ins('subjects', subjectDefs.map(([name, code, elective]) => ({ school_id: schoolId, name, code, is_elective: elective })))
-  console.log(`   ✅ ${subjectDefs.length} subjects\n`)
+  const SUBJECT_CODES: Record<string, string> = {
+    English: 'ENG', Hindi: 'HIN', Mathematics: 'MAT', Science: 'SCI',
+    'Social Science': 'SST', EVS: 'EVS', 'Computer Science': 'CS', Physics: 'PHY',
+    Chemistry: 'CHE', Biology: 'BIO', Accountancy: 'ACC', 'Business Studies': 'BST',
+    Economics: 'ECO', History: 'HIS', 'Political Science': 'POL', Geography: 'GEO',
+    'Physical Education': 'PE', 'Art & Craft': 'ART', 'General Knowledge': 'GK',
+    Music: 'MUS', Numbers: 'NUM', 'Rhymes & Story': 'RHY',
+  }
+  const ELECTIVES = new Set(['Physical Education', 'Art & Craft', 'General Knowledge', 'Music'])
+  const subjectRows = classes.flatMap(cls =>
+    classSubjects(cls.numeric_level).map(name => ({
+      school_id: schoolId, class_id: cls.id, name,
+      code: SUBJECT_CODES[name] ?? name.slice(0, 3).toUpperCase(),
+      is_elective: ELECTIVES.has(name),
+    })))
+  await ins('subjects', subjectRows)
+  console.log(`   ✅ ${subjectRows.length} subjects across ${classes.length} classes\n`)
 
   // ── 11. Staff (auth users + profiles + photos) ───────────
   console.log('1️⃣1️⃣  Creating staff (this makes one auth user per person)...')
-  // Enough teachers that the timetable can fill 28 sections × every
+  // Enough teachers that the timetable can fill 47 sections × every
   // period without double-booking anyone — see the conflict map below.
+  //
+  // The count also has to clear the section count outright, because class
+  // teachers are handed out one per section below: with fewer teachers than
+  // sections the assignment wraps and somebody becomes homeroom teacher of two
+  // classes at once, which is not a thing.
   const teacherSpecialities = [
     'Mathematics', 'Mathematics', 'Mathematics', 'Mathematics', 'English', 'English', 'English', 'English',
     'Hindi', 'Hindi', 'Hindi', 'Science', 'Science', 'Science', 'Social Science', 'Social Science', 'Social Science',
     'Computer Science', 'Computer Science', 'Physics', 'Physics', 'Chemistry', 'Chemistry', 'Biology',
     'Accountancy', 'Business Studies', 'Economics', 'History', 'Political Science', 'Geography',
     'EVS', 'EVS', 'General Knowledge', 'Art & Craft', 'Physical Education', 'Music', 'English', 'Mathematics',
+    // The pre-primary wing and the third section added across Nursery–Class 10.
+    'English', 'English', 'Hindi', 'Hindi', 'Mathematics', 'Mathematics',
+    'EVS', 'General Knowledge', 'Art & Craft', 'Music', 'Science', 'Social Science',
   ]
   const staffDefs: { name: string; role: string; designation: string; dept: string; subject: string | null }[] = [
     { name: 'Ramesh Chandra', role: 'principal', designation: 'Principal', dept: 'Administration', subject: null },
@@ -1320,7 +1365,11 @@ async function seed() {
   console.log('2️⃣8️⃣  Creating promotion history...')
   const promotionRows = students.map((s, i) => {
     const lvl = classById[s.class_id].numeric_level
-    const fromClass = classes.find(c => c.numeric_level === Math.max(1, lvl - 1)) ?? classes[0]
+    // The class one rung down the actual ladder, not lvl-1: the pre-primary
+    // years sit at 0/-1/-2, so clamping at 1 would have promoted every Nursery
+    // and LKG child "from Class 1". The lowest class has nowhere to come from
+    // and stays put.
+    const fromClass = classes.find(c => c.numeric_level === lvl - 1) ?? classes[0]
     const fromSection = sections.find(sec => sec.class_id === fromClass.id)
     return {
       school_id: schoolId, student_id: s.id,
