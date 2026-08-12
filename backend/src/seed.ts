@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { supabase } from './shared/db/client'
 import { seedDefaultRoles, LEGACY_ROLE_TO_RBAC_ROLE } from './modules/rbac/seed'
 import { defaultSectionNamesForClass, DEFAULT_CLASSES } from './shared/utils/helpers'
+import { seedFees } from './seedFees'
 import { avatarSvg } from './shared/utils/avatar'
 import type { NotificationType } from './shared/utils/notifications'
 
@@ -317,44 +318,20 @@ async function seed() {
   ])
   console.log(`   ✅ ${houses.length} houses\n`)
 
-  // ── 8. Fee heads + structures ────────────────────────────
-  console.log('8️⃣  Creating fee heads & structures...')
-  const feeHeads = await ins('fee_heads', [
-    { school_id: schoolId, name: 'Tuition Fee', description: 'Monthly tuition charges' },
-    { school_id: schoolId, name: 'Exam Fee', description: 'Examination charges' },
-    { school_id: schoolId, name: 'Annual Fund', description: 'Annual development charges' },
-    { school_id: schoolId, name: 'Computer Fee', description: 'Computer lab charges' },
-    { school_id: schoolId, name: 'Transport Fee', description: 'School bus charges' },
-    { school_id: schoolId, name: 'Library Fee', description: 'Library membership & books' },
-    { school_id: schoolId, name: 'Laboratory Fee', description: 'Science lab charges' },
-    { school_id: schoolId, name: 'Sports Fee', description: 'Sports & games facilities' },
-  ])
-  const headByName: Record<string, any> = Object.fromEntries(feeHeads.map(h => [h.name, h]))
-  const tuitionHead = headByName['Tuition Fee'], examHead = headByName['Exam Fee'], annualHead = headByName['Annual Fund']
-  // Keyed by numeric_level, so the pre-primary years need their own entries —
-  // without them tuition resolves to undefined and every pre-primary invoice is
-  // billed at NULL.
-  const tuitionByClass: Record<number, number> = {
-    [-2]: 1800, [-1]: 2000, 0: 2200,
-    1: 2500, 2: 2500, 3: 2800, 4: 2800, 5: 3000, 6: 3200,
-    7: 3200, 8: 3500, 9: 3800, 10: 3800, 11: 4500, 12: 4500,
-  }
-  const feeStructureRows = classes.flatMap(cls => {
-    const lvl = cls.numeric_level
-    const rows: any[] = [
-      { school_id: schoolId, academic_year_id: ay.id, class_id: cls.id, fee_head_id: tuitionHead.id, amount: tuitionByClass[lvl], frequency: 'monthly', due_day: 10, late_fine_per_day: 5 },
-      { school_id: schoolId, academic_year_id: ay.id, class_id: cls.id, fee_head_id: examHead.id, amount: 500, frequency: 'quarterly' },
-      { school_id: schoolId, academic_year_id: ay.id, class_id: cls.id, fee_head_id: annualHead.id, amount: 5000, frequency: 'annually' },
-      { school_id: schoolId, academic_year_id: ay.id, class_id: cls.id, fee_head_id: headByName['Library Fee'].id, amount: 800, frequency: 'annually' },
-      { school_id: schoolId, academic_year_id: ay.id, class_id: cls.id, fee_head_id: headByName['Sports Fee'].id, amount: 1200, frequency: 'annually' },
-      { school_id: schoolId, academic_year_id: ay.id, class_id: cls.id, fee_head_id: headByName['Transport Fee'].id, amount: 1500, frequency: 'monthly', due_day: 10, is_optional: true },
-    ]
-    if (lvl >= 6) rows.push({ school_id: schoolId, academic_year_id: ay.id, class_id: cls.id, fee_head_id: headByName['Computer Fee'].id, amount: 600, frequency: 'quarterly' })
-    if (lvl >= 9) rows.push({ school_id: schoolId, academic_year_id: ay.id, class_id: cls.id, fee_head_id: headByName['Laboratory Fee'].id, amount: 900, frequency: 'half_yearly' })
-    return rows
-  })
-  await ins('fee_structures', feeStructureRows)
-  console.log(`   ✅ ${feeHeads.length} heads, ${feeStructureRows.length} structures\n`)
+  // ── 8. Fees: see the seedFees run at the end ─────────────
+  //
+  // Everything fee-shaped used to be built here, against the pre-rewrite
+  // schema: fee_heads with no code, and one fee_structures row per
+  // class × head carrying its own amount and frequency. The 20260809 rewrite
+  // moved all of that — heads gained a NOT NULL code, and a structure became a
+  // named, versioned plan whose amounts live in fee_structure_lines and whose
+  // classes live in fee_structure_classes. This block had not been updated, so
+  // a full reseed died on the first insert with "null value in column code".
+  //
+  // Rather than maintain a second, drifting implementation of the fee model,
+  // fee data is now built by seedFees() at the very end of this script — the
+  // same code `npm run seed:fees` runs, which is written against the current
+  // schema and is what the earlier guidance already pointed people at.
 
   // ── 9. Inquiry sources ───────────────────────────────────
   console.log('9️⃣  Creating inquiry sources...')
@@ -668,131 +645,18 @@ async function seed() {
   // All RBAC assignments in one insert.
   await ins('user_roles', userRoleRows, 500)
 
-  // ── 16. Fee invoices, payments, installments, arrears ────
-  console.log('1️⃣6️⃣  Creating fee invoices & payments (every month of the session)...')
-  const activeStudents = students.filter(s => s.status === 'active')
-  const invoiceRows: any[] = []
-  let invSeq = 0
-  activeStudents.forEach((s, si) => {
-    const lvl = classById[s.class_id].numeric_level
-    const tuition = tuitionByClass[lvl]
-    feeMonths.forEach((fm, mi) => {
-      invSeq++
-      const isCurrentMonth = mi === feeMonths.length - 1
-      const lineItems: any[] = [{ fee_head_id: tuitionHead.id, name: 'Tuition Fee', amount: tuition, discount: 0, net_amount: tuition }]
-      if (mi % 3 === 0) lineItems.push({ fee_head_id: examHead.id, name: 'Exam Fee', amount: 500, discount: 0, net_amount: 500 })
-      if (mi === 0) lineItems.push({ fee_head_id: annualHead.id, name: 'Annual Fund', amount: 5000, discount: 0, net_amount: 5000 })
-      if (si % 3 === 0) lineItems.push({ fee_head_id: headByName['Transport Fee'].id, name: 'Transport Fee', amount: 1500, discount: 0, net_amount: 1500 })
-      const subtotal = lineItems.reduce((t, li) => t + li.net_amount, 0)
-      // Older months mostly settled; the running month carries the
-      // unpaid/partial mix the collections screens are built to show.
-      const seed = si * 13 + mi * 7
-      const status = isCurrentMonth
-        ? (chance(seed, 45) ? 'paid' : chance(seed + 1, 45) ? 'partial' : chance(seed + 2, 92) ? 'unpaid' : 'waived')
-        : (chance(seed, 88) ? 'paid' : chance(seed + 3, 60) ? 'partial' : chance(seed + 4, 85) ? 'unpaid' : 'cancelled')
-      const lateFine = status === 'unpaid' && !isCurrentMonth ? 5 * ((si + mi) % 12) : 0
-      invoiceRows.push({
-        school_id: schoolId, student_id: s.id, academic_year_id: ay.id,
-        invoice_number: `INV${ayStartYear}${String(invSeq).padStart(5, '0')}`,
-        invoice_date: `${fm.y}-${String(fm.m).padStart(2, '0')}-01`,
-        due_date: `${fm.y}-${String(fm.m).padStart(2, '0')}-10`,
-        line_items: lineItems, subtotal, total_discount: 0, late_fine: lateFine,
-        total_amount: subtotal + lateFine, status, created_by: accountantId,
-      })
-    })
-  })
-  const invoices = await ins('fee_invoices', invoiceRows, 400)
-  console.log(`   ✅ ${invoices.length} invoices`)
-
-  const paymentRows: any[] = []
-  const installmentRows: any[] = []
-  invoices.forEach((inv, i) => {
-    const payDate = new Date(inv.due_date)
-    payDate.setDate(payDate.getDate() - (i % 8))
-    const mode = pick(['cash', 'upi', 'neft', 'card', 'cheque', 'online'], i)
-    if (inv.status === 'paid' || inv.status === 'partial') {
-      const amount = inv.status === 'paid' ? Number(inv.total_amount) : Math.round(Number(inv.total_amount) / 2)
-      paymentRows.push({
-        school_id: schoolId, invoice_id: inv.id, student_id: inv.student_id,
-        receipt_number: `RCP${ayStartYear}${String(i + 1).padStart(5, '0')}`,
-        payment_date: isoT(payDate), amount_paid: amount, payment_mode: mode,
-        transaction_reference: mode === 'cash' ? null : `TXN${ayStartYear}${String(i + 1).padStart(6, '0')}`,
-        cheque_number: mode === 'cheque' ? `CHQ${100000 + i}` : null,
-        cheque_date: mode === 'cheque' ? iso(payDate) : null,
-        bank_name: mode === 'cheque' || mode === 'neft' ? pick(['HDFC Bank', 'ICICI Bank', 'SBI', 'Axis Bank'], i) : null,
-        collected_by: accountantId, is_verified: i % 9 !== 0, verified_by: i % 9 !== 0 ? accountantId : null,
-        notes: inv.status === 'partial' ? 'Part payment — balance promised next week' : null,
-      })
-    }
-    // Installment plans on the April invoice (the one carrying Annual Fund).
-    if (inv.invoice_date === `${ayStartYear}-04-01` && i % 5 === 0) {
-      const per = Math.round(Number(inv.total_amount) / 3)
-      for (let k = 1; k <= 3; k++) {
-        const due = new Date(ayStartYear, 3 + (k - 1) * 2, 10)
-        // Past due date → paid, except a deliberate slice left overdue so
-        // the fee-arrears screens have something to show.
-        const lapsed = due < today
-        const isOverdue = lapsed && k > 1 && i % 15 === 0
-        installmentRows.push({
-          school_id: schoolId, invoice_id: inv.id, installment_number: k, amount: per,
-          due_date: iso(due),
-          status: isOverdue ? 'overdue' : lapsed ? 'paid' : 'pending',
-          paid_at: lapsed && !isOverdue ? isoT(due) : null,
-        })
-      }
-    }
-  })
-  const payCount = await insQuiet('fee_payments', paymentRows)
-  const instCount = await insQuiet('fee_installments', installmentRows)
-
-  // Arrears carried forward from last session.
-  const arrearRows = activeStudents.filter((_, i) => i % 9 === 0).map((s, i) => {
-    const amount = 2500 + (i % 8) * 750
-    const paid = i % 3 === 0 ? Math.round(amount / 2) : i % 3 === 1 ? amount : 0
-    return {
-      school_id: schoolId, student_id: s.id, from_academic_year_id: prevAy.id, to_academic_year_id: ay.id,
-      amount, amount_paid: paid,
-      status: paid === 0 ? 'pending' : paid >= amount ? 'cleared' : i % 11 === 0 ? 'waived' : 'partial',
-      carried_forward_by: accountantId, cleared_at: paid >= amount ? isoT(dMinus(20 - (i % 15))) : null,
-      notes: `Carried forward from ${PREV_AY_NAME}`,
-    }
-  })
-  const arrCount = await insQuiet('fee_arrears', arrearRows)
-
-  // Per-role discount ceilings (settings → fee permissions screen).
-  await ins('fee_discount_limits', [
-    { school_id: schoolId, role_id: roleIdByName['School Admin'], max_single_discount: 25000, max_monthly_total: 200000 },
-    { school_id: schoolId, role_id: roleIdByName['Principal'], max_single_discount: 15000, max_monthly_total: 120000 },
-    { school_id: schoolId, role_id: roleIdByName['Accountant'], max_single_discount: 5000, max_monthly_total: 50000 },
-  ].filter(r => r.role_id))
-  console.log(`   ✅ ${payCount} payments, ${instCount} installments, ${arrCount} arrears\n`)
-
-  // ── 17. Fee discounts + ad-hoc fees ──────────────────────
-  console.log('1️⃣7️⃣  Creating discounts & ad-hoc fees...')
-  const discountReasons = ['Sibling discount', 'Staff ward concession', 'Merit scholarship', 'Financial hardship', 'Sports quota', 'Early payment discount', 'Single parent support', 'Alumni ward']
-  await ins('fee_discounts', activeStudents.filter((_, i) => i % 11 === 0).map((s, i) => ({
-    school_id: schoolId, student_id: s.id, fee_head_id: pick(feeHeads, i).id,
-    discount_type: i % 2 === 0 ? 'percentage' : 'fixed', discount_value: i % 2 === 0 ? 5 + (i % 4) * 5 : 500 + (i % 6) * 250,
-    reason: pick(discountReasons, i),
-    approval_status: i % 7 === 0 ? 'pending' : i % 13 === 0 ? 'rejected' : 'approved',
-    approved_by: i % 7 === 0 ? null : adminId, approved_at: i % 7 === 0 ? null : isoT(dMinus(30 - (i % 25))),
-    requested_by: accountantId, is_active: i % 13 !== 0, valid_from: AY_START, valid_until: AY_END,
-  })), 300)
-  const adhocTitles = ['Annual Day Costume', 'Educational Trip — Agra', 'Science Exhibition Kit', 'Sports Day T-shirt', 'Art & Craft Materials', 'Library Late Fine', 'Lab Breakage Charge', 'Winter Carnival', 'Bus Route Change', 'Yoga Workshop', 'Robotics Club', 'Music Class', 'Swimming Coaching', 'Olympiad Registration', 'Picnic — Nawabganj']
-  await ins('adhoc_fees', activeStudents.filter((_, i) => i % 17 === 0).map((s, i) => ({
-    school_id: schoolId, student_id: s.id, class_id: null,
-    title: pick(adhocTitles, i), description: `${pick(adhocTitles, i)} charge for ${AY_NAME}`,
-    amount: 200 + (i % 12) * 150, due_date: iso(dMinus(-10 - (i % 30))),
-    status: i % 3 === 0 ? 'paid' : i % 19 === 0 ? 'cancelled' : 'unpaid', created_by: accountantId,
-  })))
-  // A few class-wide ad-hoc charges too (student_id null is a valid shape here).
-  await ins('adhoc_fees', classes.map((c, i) => ({
-    school_id: schoolId, student_id: null, class_id: c.id,
-    title: pick(['Class Picnic', 'Annual Magazine', 'Exam Stationery'], i),
-    description: `Class-wide charge for ${c.name}`, amount: 300 + i * 25,
-    due_date: iso(dMinus(-20)), status: i % 3 === 0 ? 'paid' : 'unpaid', created_by: accountantId,
-  })))
-  console.log(`   ✅ discounts + ad-hoc fees\n`)
+  // ── 16-17. Fees: built by seedFees() at the end ──────────
+  //
+  // Invoices, payments, installments, arrears, discounts and ad-hoc charges
+  // were all written here against the pre-rewrite fee schema — fee_invoices
+  // with total_discount/late_fine, a fee_installments table, discounts keyed
+  // straight to a fee_head. None of those shapes survive the 20260809 rewrite.
+  //
+  // seedFees() at the end of this script builds the whole fee stack against
+  // the current model: heads with codes, versioned structures with lines and
+  // class links, assignments, then invoices, payments and allocations with
+  // their ledger postings — which this block never wrote at all, so a seeded
+  // school had invoices the reconciliation report could not explain.
 
   // ── 18. Admission pipeline (+ documents, history, workflow) ──
   console.log('1️⃣8️⃣  Creating admission pipeline...')
@@ -1482,8 +1346,8 @@ async function seed() {
   // and dies on the unique constraint.
   console.log('3️⃣2️⃣  Advancing document number counters...')
   const counterRows = [
-    { prefix: 'INV', last_number: invoices.length },
-    { prefix: 'RCP', last_number: invoices.length },   // receipts are numbered by invoice index
+    // INV and RCP are advanced by seedFees(), which is what issues those
+    // numbers now.
     { prefix: 'ADM', last_number: students.length },
     { prefix: 'CERT', last_number: Math.ceil(students.length / 9) },
     { prefix: 'INQ', last_number: inquiries.length },
@@ -1495,6 +1359,14 @@ async function seed() {
     .upsert(counterRows, { onConflict: 'school_id,year,prefix' })
   if (counterErr) console.error(`   ⚠️  document_counters: ${counterErr.message}`)
   else console.log(`   ✅ ${counterRows.length} counters advanced past seeded numbers\n`)
+
+  // ── 33. Fees, via the fee model's own seeder ─────────────
+  //
+  // Last, because it reads the students, classes and staff created above. This
+  // is the same code `npm run seed:fees` runs; keeping one implementation is
+  // what stops it drifting out of step with the schema again.
+  console.log('3️⃣3️⃣  Building fee data...')
+  await seedFees()
 
   // ── Done ─────────────────────────────────────────────────
   const mins = Math.round((Date.now() - startedAt) / 600) / 100
@@ -1509,7 +1381,7 @@ async function seed() {
   console.log(`   👨‍🏫  Staff:       ${staff.length} (${teachers.length} teachers)`)
   console.log(`   👨‍🎓  Students:    ${students.length} across ${classes.length} classes / ${sections.length} sections — all with photos`)
   console.log(`   📄  Documents:   ${docCount}    🗓️  Attendance: ${attCount}`)
-  console.log(`   💰  Invoices:    ${invoices.length}   💵 Payments: ${payCount}   🧾 Payslips: ${payCount2}`)
+  console.log(`   🧾  Payslips:    ${payCount2}   (fee figures are printed by the fee reseed below)`)
   console.log(`   📊  Exams:       ${exams.length}   ✍️  Marks: ${markCount}   📋 Report cards: ${cardCount}`)
   console.log(`   ⏰  Timetable:   ${tt} periods (all ${sections.length} sections, Mon–Sat)`)
   console.log('')

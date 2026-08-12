@@ -107,6 +107,18 @@ async function insert<T = any>(table: string, rows: any[], chunk = 400): Promise
   return out
 }
 
+/**
+ * Exported so seed.ts can build fee data as its last step instead of carrying
+ * a second implementation of the fee model — the one it used to carry drifted
+ * against the 20260809 rewrite and broke every full reseed.
+ *
+ * Safe to call straight after a fresh seed: it wipes the school's fee tables
+ * before rebuilding, so running it twice is the same as running it once.
+ */
+export async function seedFees() {
+  return main()
+}
+
 async function main() {
   console.log('\n── Fee reseed ──────────────────────────────────────\n')
 
@@ -457,6 +469,28 @@ async function main() {
   })))
   console.log(`   ✓ ${requests.length} pending requests`)
 
+  // ── Advance the number counters past what was just written ──
+  //
+  // Invoice and receipt numbers are composed here directly — this is a bulk
+  // load, not thousands of next_document_number() round trips — so the
+  // counters still sit at zero afterwards. The first payment taken through the
+  // UI would then be issued RCP<year>00001, which already exists, and die on
+  // the unique constraint. Nothing advanced these before, in this script or in
+  // seed.ts, so a freshly seeded school could not take its first payment.
+  //
+  // The ad-hoc invoices use a 9xxxx block, which outranks the main sequence —
+  // the counter has to clear the highest number actually issued, not the
+  // longest run.
+  const highestInvoiceSeq = Math.max(seq, 90_000 + (chargeInvoices as any[]).length)
+  const counterRows = [
+    { prefix: 'INV', last_number: highestInvoiceSeq },
+    { prefix: 'RCP', last_number: (payments as any[]).length },
+  ].map(c => ({ school_id: schoolId, year: yearStart, ...c }))
+  const { error: counterErr } = await supabase.from('document_counters')
+    .upsert(counterRows, { onConflict: 'school_id,year,prefix' })
+  if (counterErr) console.log(`   ⚠️  document_counters: ${counterErr.message}`)
+  else console.log(`   ✓ counters advanced (INV→${highestInvoiceSeq}, RCP→${(payments as any[]).length})`)
+
   // ── Result ──
   console.log('\nAfter:')
   for (const t of TABLES) {
@@ -474,4 +508,8 @@ async function main() {
   console.log('(derived by the database from the allocations above)\n')
 }
 
-main().catch(e => { console.error(`\n✖ ${e.message}\n`); process.exit(1) })
+// Only when run as `npm run seed:fees`. Without the guard, seed.ts importing
+// seedFees would fire this at module load — before the school it needs exists.
+if (require.main === module) {
+  main().catch(e => { console.error(`\n✖ ${e.message}\n`); process.exit(1) })
+}
