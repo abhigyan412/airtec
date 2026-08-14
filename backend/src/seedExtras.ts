@@ -168,9 +168,13 @@ export async function seedExtras(schoolId: string) {
 
   // ── Fees: the policy tables ──
   if (await isEmpty('rte_rates', schoolId)) {
-    // Reimbursement is banded by class, which is why the table stores a range.
+    // Banded by numeric_level, and the lowest band must start at -2: pre-primary
+    // is Nursery -2, LKG -1, UKG 0. A band starting at 0 covers UKG and leaves
+    // Nursery and LKG with no rate, which the claim run reports as "no state
+    // rate set for Nursery" — 29 children skipped on this school.
     console.log(`   ✓ ${await insert('rte_rates', [
-      { school_id: schoolId, academic_year_id: year.id, class_from: 0, class_to: 5,  monthly_amount: 450, annual_allowance: 3000, note: 'Pre-primary and primary' },
+      { school_id: schoolId, academic_year_id: year.id, class_from: -2, class_to: 0, monthly_amount: 400, annual_allowance: 2500, note: 'Pre-primary (Nursery, LKG, UKG)' },
+      { school_id: schoolId, academic_year_id: year.id, class_from: 1, class_to: 5,  monthly_amount: 450, annual_allowance: 3000, note: 'Primary' },
       { school_id: schoolId, academic_year_id: year.id, class_from: 6, class_to: 8,  monthly_amount: 600, annual_allowance: 3500, note: 'Upper primary' },
       { school_id: schoolId, academic_year_id: year.id, class_from: 9, class_to: 12, monthly_amount: 750, annual_allowance: 4000, note: 'Secondary and senior secondary' },
     ])} RTE rates`)
@@ -228,11 +232,18 @@ export async function seedExtras(schoolId: string) {
 
   if (await isEmpty('fee_concession_rules', schoolId)) {
     const tuition = (heads ?? []).find((h: any) => h.code === 'TUITION' || h.name === 'Tuition Fee')
+    // Sibling concessions key on min_sibling_order, NOT on fee_category. The
+    // order-based rules derive who the second child is from the family and
+    // maintain themselves as children join and leave; the 'sibling' CATEGORY is
+    // the legacy hand-applied tag the UI itself labels "prefer the rows above".
+    // Seeding the category left both "Second child" and "Third child and
+    // beyond" reading "Nothing — reporting only" on the Concession Rules screen.
     console.log(`   ✓ ${await insert('fee_concession_rules', [
-      { school_id: schoolId, academic_year_id: year.id, fee_category: 'sibling',     discount_type: 'percentage', discount_value: 10, fee_head_id: tuition?.id ?? null, note: 'Second and subsequent child' },
-      { school_id: schoolId, academic_year_id: year.id, fee_category: 'staff_ward',  discount_type: 'percentage', discount_value: 50, fee_head_id: tuition?.id ?? null, note: 'Children of serving staff' },
-      { school_id: schoolId, academic_year_id: year.id, fee_category: 'rte',         discount_type: 'percentage', discount_value: 100, fee_head_id: null, note: 'Reimbursed by the state, never billed to the family' },
-      { school_id: schoolId, academic_year_id: year.id, fee_category: 'scholarship', discount_type: 'fixed',      discount_value: 5000, fee_head_id: tuition?.id ?? null, note: 'Merit scholarship, reviewed annually' },
+      { school_id: schoolId, academic_year_id: year.id, fee_category: 'rte',         min_sibling_order: null, discount_type: 'percentage', discount_value: 100, fee_head_id: null, note: 'Reimbursed by the state, never billed to the family' },
+      { school_id: schoolId, academic_year_id: year.id, fee_category: 'staff_ward',  min_sibling_order: null, discount_type: 'percentage', discount_value: 50, fee_head_id: tuition?.id ?? null, note: 'Children of serving staff' },
+      { school_id: schoolId, academic_year_id: year.id, fee_category: 'scholarship', min_sibling_order: null, discount_type: 'fixed',      discount_value: 5000, fee_head_id: tuition?.id ?? null, note: 'Merit scholarship, reviewed annually' },
+      { school_id: schoolId, academic_year_id: year.id, fee_category: null,          min_sibling_order: 2,    discount_type: 'percentage', discount_value: 10, fee_head_id: tuition?.id ?? null, note: 'Second child — derived from the family, senior child first' },
+      { school_id: schoolId, academic_year_id: year.id, fee_category: null,          min_sibling_order: 3,    discount_type: 'percentage', discount_value: 20, fee_head_id: tuition?.id ?? null, note: 'Third child and beyond' },
     ])} concession rules`)
   }
 }
