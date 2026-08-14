@@ -133,22 +133,33 @@ async function insert<T = any>(table: string, rows: any[], chunk = 400): Promise
  * Safe to call straight after a fresh seed: it wipes the school's fee tables
  * before rebuilding, so running it twice is the same as running it once.
  */
-export async function seedFees() {
-  return main()
+export async function seedFees(schoolId?: string) {
+  return main(schoolId)
 }
 
-async function main() {
+async function main(schoolIdOverride?: string) {
   console.log('\n── Fee reseed ──────────────────────────────────────\n')
 
   const { data: schools } = await supabase.from('schools').select('id, name').order('created_at')
   const real = (schools ?? []).filter(s => !s.name.startsWith('__vitest'))
-  const school = explicitSchool
-    ? (schools ?? []).find(s => s.id === explicitSchool)
+  // The caller's school wins over guessing. seed.ts knows exactly which school
+  // it just built and says so — without that this fell back to "there must be
+  // precisely one real school", which is false the moment `seed -- --force`
+  // adds a second, and the fallback's response is process.exit(1): the seed
+  // would run to completion and then kill itself on its own last step.
+  const wanted = schoolIdOverride ?? explicitSchool
+  const school = wanted
+    ? (schools ?? []).find(s => s.id === wanted)
     : real.length === 1 ? real[0] : null
 
   if (!school) {
-    console.error(explicitSchool ? `No school ${explicitSchool}`
-      : `Found ${real.length} schools — pass --school <id>:\n` + real.map(s => `   ${s.id}  ${s.name}`).join('\n'))
+    const why = wanted
+      ? `No school ${wanted}`
+      : `Found ${real.length} schools — pass --school <id>:\n` + real.map(s => `   ${s.id}  ${s.name}`).join('\n')
+    // Thrown rather than exited, because this runs inside seed.ts too: a bare
+    // process.exit there would end the whole seed with no error and no clue.
+    if (schoolIdOverride) throw new Error(why)
+    console.error(why)
     process.exit(1)
   }
   console.log(`School: ${school.name}\n        ${school.id}\n`)

@@ -1366,7 +1366,7 @@ async function seed() {
   // is the same code `npm run seed:fees` runs; keeping one implementation is
   // what stops it drifting out of step with the schema again.
   console.log('3️⃣3️⃣  Building fee data...')
-  await seedFees()
+  await seedFees(schoolId)
 
   // ── Done ─────────────────────────────────────────────────
   const mins = Math.round((Date.now() - startedAt) / 600) / 100
