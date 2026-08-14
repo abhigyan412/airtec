@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import 'dotenv/config'
 import { supabase } from './shared/db/client'
+import { selectAll } from './shared/db/paged'
 import { periodsForFrequency } from './shared/utils/billingPeriod'
 import { lineBillsInPeriod } from './modules/fee/lib/resolve'
 
@@ -67,6 +68,23 @@ async function count(table: string, schoolId: string): Promise<number | null> {
 }
 
 async function wipe(table: string, schoolId: string, scoped = true): Promise<number> {
+  // fee_ledger_entries refuses DELETE by trigger — it is append-only, and a
+  // reseed is the one job that legitimately needs past it. fee_ledger_force_delete
+  // is the single sanctioned route (20260827000000); without it this script
+  // could not run at all against a school that already had postings, which is
+  // every school it is meant to regenerate.
+  if (table === 'fee_ledger_entries') {
+    const { data, error } = await supabase.rpc('fee_ledger_force_delete', { p_school_id: schoolId })
+    if (error) {
+      if (isMissing(error.message) || /could not find the function/i.test(error.message)) {
+        console.log('   ! fee_ledger_force_delete not in this database — apply migration 20260827000000')
+        return 0
+      }
+      throw new Error(`fee_ledger_entries clear: ${error.message}`)
+    }
+    return Number(data ?? 0)
+  }
+
   let removed = 0
   for (;;) {
     let q = supabase.from(table).select('id').limit(500)
@@ -149,10 +167,17 @@ async function main() {
     if (n) console.log(`   – ${t}: ${n}`)
   }
 
-  const [{ data: classes }, { data: students }, { data: years }, { data: staff }, { data: roles }] =
+  // Students are paged. A plain select stops at PostgREST's 1,000-row default
+  // with no error and no truncation warning, so on this school it returned
+  // 1,000 of 1,810 and quietly left 810 children with no fee assignment, no
+  // invoice and no bill — a school whose fee module simply did not know about
+  // 45% of its students. Nothing else read here can approach that limit: one
+  // row per class, one per academic year, three staff.
+  const [{ data: classes }, students, { data: years }, { data: staff }, { data: roles }] =
     await Promise.all([
       supabase.from('classes').select('id, name').eq('school_id', schoolId).order('name'),
-      supabase.from('students').select('id, class_id').eq('school_id', schoolId).eq('status', 'active'),
+      selectAll<any>('students', 'id, class_id',
+        q => q.eq('school_id', schoolId).eq('status', 'active')),
       supabase.from('academic_years').select('id, name, is_current, start_date, end_date').eq('school_id', schoolId),
       supabase.from('users').select('id').eq('school_id', schoolId).limit(3),
       supabase.from('roles').select('id, name').eq('school_id', schoolId),
@@ -339,6 +364,26 @@ async function main() {
   const invoices = await insert('fee_invoices', invoiceRows, 300)
   console.log(`   ✓ ${invoices.length} invoices`)
 
+  // Raising an invoice is what recognises the income and creates the debt —
+  // the accrual. Nothing here posted it before, so the ledger knew only about
+  // money that had arrived: receivable sat at zero however much was owed, and
+  // fee_reconciliation's receivable_vs_invoices invariant failed on every
+  // seeded database by the full outstanding balance. Mirrors postInvoice() in
+  // modules/fee/lib/ledger.ts.
+  const accrual: any[] = []
+  for (const inv of invoices as any[]) {
+    const net = money(Number(inv.total_amount))
+    if (net <= 0) continue
+    accrual.push(
+      { school_id: schoolId, source_type: 'invoice', source_id: inv.id, student_id: inv.student_id,
+        account_code: 'receivable', debit: net, credit: 0 },
+      { school_id: schoolId, source_type: 'invoice', source_id: inv.id, student_id: inv.student_id,
+        account_code: 'fee_income', debit: 0, credit: net },
+    )
+  }
+  await insert('fee_ledger_entries', accrual, 400)
+  console.log(`   ✓ ${accrual.length} accrual entries`)
+
   // ── Payments: ONE transaction per student, allocated across their invoices ──
   //
   // The whole point of the new model. A third pay in full, a third partially,
@@ -379,12 +424,18 @@ async function main() {
       payment_date: new Date(Date.now() - Math.floor(rnd(i + 3) * 120) * 86_400_000).toISOString(),
     })
 
-    // Double-sided: the asset account is debited, fee income credited.
+    // Asset debited, RECEIVABLE relieved — not income. Income was already
+    // recognised when the invoice was raised (see the accrual posting above);
+    // crediting it again here would count every rupee twice and, because
+    // receivable was never touched, leave the ledger claiming the school is
+    // owed nothing while its invoices say otherwise. That is exactly what
+    // fee_reconciliation's receivable_vs_invoices check caught on seeded data.
+    // Mirrors postPayment() in modules/fee/lib/ledger.ts.
     ledger.push(
       { school_id: schoolId, source_type: 'payment', source_id: paymentId, student_id: studentId,
         account_code: method === 'cash' ? 'cash' : 'bank', debit: amount, credit: 0 },
       { school_id: schoolId, source_type: 'payment', source_id: paymentId, student_id: studentId,
-        account_code: 'fee_income', debit: 0, credit: amount },
+        account_code: 'receivable', debit: 0, credit: amount },
     )
   })
 
@@ -425,7 +476,19 @@ async function main() {
     const c = (charges as any[])[i]
     if (c) await supabase.from('fee_adhoc_charges').update({ invoice_id: inv.id, status: 'billed' }).eq('id', c.id)
   }
-  console.log(`   ✓ ${charges.length} one-off charges (all billed)`)
+  // A one-off charge raised as an invoice is owed exactly like any other, so it
+  // accrues the same way — otherwise these would be the one slice of the
+  // outstanding balance the ledger could not account for.
+  await insert('fee_ledger_entries', (chargeInvoices as any[]).flatMap(inv => {
+    const amt = money(Number(inv.total_amount))
+    return amt <= 0 ? [] : [
+      { school_id: schoolId, source_type: 'invoice', source_id: inv.id, student_id: inv.student_id,
+        account_code: 'receivable', debit: amt, credit: 0 },
+      { school_id: schoolId, source_type: 'invoice', source_id: inv.id, student_id: inv.student_id,
+        account_code: 'fee_income', debit: 0, credit: amt },
+    ]
+  }), 400)
+  console.log(`   ✓ ${charges.length} one-off charges (all billed, accrued)`)
 
   // ── Concessions, ceilings, scholarships ──
   const roleBy = Object.fromEntries((roles ?? []).map(r => [r.name, r.id]))
