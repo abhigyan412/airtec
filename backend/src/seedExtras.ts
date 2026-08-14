@@ -1,0 +1,257 @@
+import 'dotenv/config'
+import { supabase } from './shared/db/client'
+
+// ═══════════════════════════════════════════════════════════════
+// The configuration a running school has already done.
+//
+// The main seed builds the things a school accumulates by operating —
+// students, attendance, marks, invoices. It never built the things a school
+// sets up once and then uses: exam time slots, shift patterns, PT slabs, RTE
+// rates, concession rules. Those tables were empty on a freshly seeded
+// database, so the screens that read them opened on an empty state and the
+// features they drive could not be shown at all.
+//
+// Separate from seed.ts because it is additive and idempotent: it can be run
+// against a school that already exists without touching anything else, which
+// is what makes it usable the evening before a demo.
+//
+//   npx tsx src/seedExtras.ts              # the one real school
+//   npx tsx src/seedExtras.ts --school <id>
+// ═══════════════════════════════════════════════════════════════
+
+const pick = <T,>(a: T[], i: number): T => a[i % a.length]
+
+async function insert(table: string, rows: any[]): Promise<number> {
+  if (!rows.length) return 0
+  const { data, error } = await supabase.from(table).insert(rows).select('id')
+  if (error) { console.log(`   ! ${table}: ${error.message}`); return 0 }
+  return (data ?? []).length
+}
+
+/** Skips a table that already has rows, so a second run is a no-op. */
+async function isEmpty(table: string, schoolId: string): Promise<boolean> {
+  const { count } = await supabase.from(table)
+    .select('id', { count: 'exact', head: true }).eq('school_id', schoolId)
+  return (count ?? 0) === 0
+}
+
+export async function seedExtras(schoolId: string) {
+  const [{ data: years }, { data: classes }, { data: staff }, { data: heads }] = await Promise.all([
+    supabase.from('academic_years').select('id, name, is_current, start_date').eq('school_id', schoolId),
+    supabase.from('classes').select('id, name, numeric_level').eq('school_id', schoolId).order('numeric_level'),
+    supabase.from('users').select('id, full_name, role').eq('school_id', schoolId).neq('role', 'parent').neq('role', 'student'),
+    supabase.from('fee_heads').select('id, name, code').eq('school_id', schoolId),
+  ])
+  const year = (years ?? []).find((y: any) => y.is_current) ?? (years ?? [])[0]
+  if (!year) throw new Error('No academic year — run the main seed first')
+  const teachers = (staff ?? []).filter((s: any) => s.role === 'teacher')
+  const admin = (staff ?? []).find((s: any) => s.role === 'school_admin') ?? (staff ?? [])[0]
+
+  // ── Exam settings: slots, then templates that reference them ──
+  let slotIds: string[] = []
+  if (await isEmpty('exam_time_slots', schoolId)) {
+    const { data } = await supabase.from('exam_time_slots').insert([
+      { school_id: schoolId, name: 'Morning (9:00–12:00)',   start_time: '09:00', end_time: '12:00' },
+      { school_id: schoolId, name: 'Mid-morning (10:00–12:00)', start_time: '10:00', end_time: '12:00' },
+      { school_id: schoolId, name: 'Afternoon (1:00–4:00)',  start_time: '13:00', end_time: '16:00' },
+      { school_id: schoolId, name: 'Practical (9:00–11:00)', start_time: '09:00', end_time: '11:00' },
+    ]).select('id')
+    slotIds = (data ?? []).map((s: any) => s.id)
+    console.log(`   ✓ ${slotIds.length} exam time slots`)
+  } else {
+    const { data } = await supabase.from('exam_time_slots').select('id').eq('school_id', schoolId)
+    slotIds = (data ?? []).map((s: any) => s.id)
+  }
+
+  if (await isEmpty('exam_templates', schoolId)) {
+    const defs: [string, string][] = [
+      ['Unit Test — Term 1', 'unit_test'], ['Half Yearly Examination', 'half_yearly'],
+      ['Annual Examination', 'annual'], ['Pre-Board', 'pre_board'],
+    ]
+    const { data: templates } = await supabase.from('exam_templates').insert(
+      defs.map(([name, exam_type]) => ({
+        school_id: schoolId, name, exam_type,
+        grading_system: exam_type === 'pre_board' ? 'grades' : 'marks',
+        created_by: admin?.id ?? null,
+      }))).select('id, name, exam_type')
+    console.log(`   ✓ ${(templates ?? []).length} exam templates`)
+
+    // A template is only useful once it says which subject sits in which slot.
+    // Senior classes only for Pre-Board, which is what a pre-board is.
+    const { data: subjects } = await supabase.from('subjects')
+      .select('class_id, name').eq('school_id', schoolId)
+    const byClass = new Map<string, string[]>()
+    for (const s of subjects ?? []) {
+      byClass.set(s.class_id, [...(byClass.get(s.class_id) ?? []), s.name])
+    }
+    const rows: any[] = []
+    for (const [ti, t] of (templates ?? []).entries()) {
+      const forClasses = (classes ?? []).filter((c: any) =>
+        t.exam_type === 'pre_board' ? c.numeric_level >= 10 : c.numeric_level >= 1)
+      for (const c of forClasses) {
+        for (const [si, name] of (byClass.get(c.id) ?? []).entries()) {
+          rows.push({
+            template_id: t.id, class_id: c.id, subject_name: name,
+            time_slot_id: slotIds.length ? pick(slotIds, ti + si) : null,
+            max_marks: t.exam_type === 'unit_test' ? 25 : 100,
+            pass_marks: t.exam_type === 'unit_test' ? 9 : 33,
+          })
+        }
+      }
+    }
+    console.log(`   ✓ ${await insert('exam_template_subjects', rows)} template subject rows`)
+  }
+
+  // ── HR configuration ──
+  if (await isEmpty('staff_shifts', schoolId)) {
+    console.log(`   ✓ ${await insert('staff_shifts', [
+      { school_id: schoolId, name: 'General (8:00–15:30)', start_time: '08:00', end_time: '15:30', off_days: [0] },
+      { school_id: schoolId, name: 'Early (7:30–14:00)',   start_time: '07:30', end_time: '14:00', off_days: [0] },
+      { school_id: schoolId, name: 'Administrative (9:30–17:30)', start_time: '09:30', end_time: '17:30', off_days: [0] },
+    ])} staff shifts`)
+  }
+
+  if (await isEmpty('professional_tax_slabs', schoolId)) {
+    // The Uttar Pradesh-style ladder: nothing under 15k, rising in bands.
+    console.log(`   ✓ ${await insert('professional_tax_slabs', [
+      { school_id: schoolId, min_gross: 0,     max_gross: 15000, amount: 0 },
+      { school_id: schoolId, min_gross: 15001, max_gross: 20000, amount: 150 },
+      { school_id: schoolId, min_gross: 20001, max_gross: 30000, amount: 175 },
+      { school_id: schoolId, min_gross: 30001, max_gross: null,  amount: 200 },
+    ])} professional tax slabs`)
+  }
+
+  if (await isEmpty('staff_documents', schoolId)) {
+    const DOCS: [string, string][] = [
+      ['contract', 'Appointment letter'], ['id_proof', 'Aadhaar card'],
+      ['certification', 'B.Ed certificate'], ['police_verification', 'Police verification'],
+      ['policy', 'Code of conduct — signed'],
+    ]
+    const rows = (staff ?? []).flatMap((s: any, i: number) =>
+      DOCS.slice(0, 2 + (i % 4)).map(([document_type, document_name], k) => ({
+        school_id: schoolId, user_id: s.id, document_type, document_name,
+        file_url: `https://example.invalid/staff/${s.id}/${document_type}.pdf`,
+        file_size: `${120 + k * 40} KB`, mime_type: 'application/pdf',
+        // A policy everyone must sign is the case the acknowledgment flag exists for.
+        requires_acknowledgment: document_type === 'policy',
+        acknowledged_at: document_type === 'policy' && i % 3 !== 0 ? new Date().toISOString() : null,
+        expiry_date: document_type === 'police_verification' ? '2027-03-31' : null,
+      })))
+    console.log(`   ✓ ${await insert('staff_documents', rows)} staff documents`)
+  }
+
+  if (await isEmpty('staff_loans', schoolId)) {
+    const rows = teachers.filter((_, i) => i % 7 === 0).map((t: any, i: number) => ({
+      school_id: schoolId, user_id: t.id,
+      principal_amount: 30000 + (i % 5) * 15000,
+      reason: pick(['Medical emergency', 'Home renovation', 'Child admission fee', 'Vehicle purchase'], i),
+      installment_amount: 2500 + (i % 3) * 500,
+      installments_total: 12, installments_paid: i % 9,
+      status: i % 6 === 0 ? 'settled' : 'active',
+      issued_by: admin?.id ?? null,
+    }))
+    console.log(`   ✓ ${await insert('staff_loans', rows)} staff loans`)
+  }
+
+  if (await isEmpty('staff_bonuses', schoolId)) {
+    const now = new Date()
+    // One row per user per month — the table's unique index says so.
+    const rows = (staff ?? []).filter((_, i) => i % 4 === 0).map((s: any, i: number) => ({
+      school_id: schoolId, user_id: s.id,
+      month: now.getMonth() + 1, year: now.getFullYear(),
+      amount: 3000 + (i % 6) * 1500,
+      reason: pick(['Festival bonus — Diwali', 'Performance incentive', 'Board results incentive', 'Long service award'], i),
+      created_by: admin?.id ?? null,
+    }))
+    console.log(`   ✓ ${await insert('staff_bonuses', rows)} staff bonuses`)
+  }
+
+  // ── Fees: the policy tables ──
+  if (await isEmpty('rte_rates', schoolId)) {
+    // Reimbursement is banded by class, which is why the table stores a range.
+    console.log(`   ✓ ${await insert('rte_rates', [
+      { school_id: schoolId, academic_year_id: year.id, class_from: 0, class_to: 5,  monthly_amount: 450, annual_allowance: 3000, note: 'Pre-primary and primary' },
+      { school_id: schoolId, academic_year_id: year.id, class_from: 6, class_to: 8,  monthly_amount: 600, annual_allowance: 3500, note: 'Upper primary' },
+      { school_id: schoolId, academic_year_id: year.id, class_from: 9, class_to: 12, monthly_amount: 750, annual_allowance: 4000, note: 'Secondary and senior secondary' },
+    ])} RTE rates`)
+  }
+
+  // ── Households ──
+  //
+  // The seed gives every child a unique parent phone, so backfillFamilies had
+  // nothing to match on and `families` stayed empty however many students
+  // existed — which meant the sibling concession, the one rule every Indian
+  // school actually runs, could not be shown working. Real schools are full of
+  // siblings, so the demo school gets some: pairs and the occasional trio,
+  // deliberately across different classes, sharing one father's phone.
+  if (await isEmpty('families', schoolId)) {
+    const { data: kids } = await supabase.from('students')
+      .select('id, first_name, last_name, class_id')
+      .eq('school_id', schoolId).eq('status', 'active').limit(600)
+    // Group by surname, then take children who are in DIFFERENT classes — two
+    // siblings in one section is possible but unusual, and pairing across
+    // classes is what makes the sibling-order logic visible.
+    const bySurname = new Map<string, any[]>()
+    for (const k of kids ?? []) bySurname.set(k.last_name, [...(bySurname.get(k.last_name) ?? []), k])
+
+    const households: any[][] = []
+    for (const [, group] of bySurname) {
+      const seen = new Set<string>()
+      const distinct = group.filter(g => !seen.has(g.class_id) && seen.add(g.class_id))
+      for (let i = 0; i + 1 < distinct.length && households.length < 140; i += 3) {
+        households.push(distinct.slice(i, i + (i % 7 === 0 ? 3 : 2)).filter(Boolean))
+      }
+    }
+
+    let linked = 0
+    for (const [i, hh] of households.entries()) {
+      if (hh.length < 2) continue
+      const surname = hh[0].last_name
+      const phone = `+91 ${9700000000 + i}`
+      const fatherName = `${pick(['Rajesh', 'Sunil', 'Anil', 'Vikas', 'Manoj', 'Deepak'], i)} ${surname}`
+
+      const { data: fam, error: famErr } = await supabase.from('families')
+        .insert({ school_id: schoolId, name: `${fatherName} household`, matched_on: 'father_phone' })
+        .select('id').single()
+      if (famErr) { console.log(`   ! families: ${famErr.message}`); break }
+
+      await supabase.from('students').update({ family_id: fam.id }).in('id', hh.map(h => h.id))
+      // The contact details have to agree with the grouping, or backfillFamilies
+      // would later propose splitting the household it is looking at.
+      await supabase.from('parents')
+        .update({ father_name: fatherName, father_phone: phone })
+        .in('student_id', hh.map(h => h.id))
+      linked += hh.length
+    }
+    console.log(`   ✓ ${households.filter(h => h.length >= 2).length} households covering ${linked} students`)
+  }
+
+  if (await isEmpty('fee_concession_rules', schoolId)) {
+    const tuition = (heads ?? []).find((h: any) => h.code === 'TUITION' || h.name === 'Tuition Fee')
+    console.log(`   ✓ ${await insert('fee_concession_rules', [
+      { school_id: schoolId, academic_year_id: year.id, fee_category: 'sibling',     discount_type: 'percentage', discount_value: 10, fee_head_id: tuition?.id ?? null, note: 'Second and subsequent child' },
+      { school_id: schoolId, academic_year_id: year.id, fee_category: 'staff_ward',  discount_type: 'percentage', discount_value: 50, fee_head_id: tuition?.id ?? null, note: 'Children of serving staff' },
+      { school_id: schoolId, academic_year_id: year.id, fee_category: 'rte',         discount_type: 'percentage', discount_value: 100, fee_head_id: null, note: 'Reimbursed by the state, never billed to the family' },
+      { school_id: schoolId, academic_year_id: year.id, fee_category: 'scholarship', discount_type: 'fixed',      discount_value: 5000, fee_head_id: tuition?.id ?? null, note: 'Merit scholarship, reviewed annually' },
+    ])} concession rules`)
+  }
+}
+
+async function main() {
+  const args = process.argv.slice(2)
+  const explicit = args.includes('--school') ? args[args.indexOf('--school') + 1] : null
+  const { data: schools } = await supabase.from('schools').select('id, name').order('created_at')
+  const real = (schools ?? []).filter(s => !s.name.startsWith('__vitest'))
+  const school = explicit ? (schools ?? []).find(s => s.id === explicit) : real.length === 1 ? real[0] : null
+  if (!school) {
+    console.error(explicit ? `No school ${explicit}` : `Found ${real.length} schools — pass --school <id>`)
+    process.exit(1)
+  }
+  console.log(`\n── Setup data for ${school.name} ──\n`)
+  await seedExtras(school.id)
+  console.log('\nDone.\n')
+}
+
+if (require.main === module) {
+  main().catch(e => { console.error(`\n✖ ${e.message}\n`); process.exit(1) })
+}

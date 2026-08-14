@@ -3,6 +3,7 @@ import { supabase } from './shared/db/client'
 import { seedDefaultRoles, LEGACY_ROLE_TO_RBAC_ROLE } from './modules/rbac/seed'
 import { defaultSectionNamesForClass, DEFAULT_CLASSES } from './shared/utils/helpers'
 import { seedFees } from './seedFees'
+import { seedExtras } from './seedExtras'
 import { avatarSvg } from './shared/utils/avatar'
 import type { NotificationType } from './shared/utils/notifications'
 
@@ -1367,6 +1368,16 @@ async function seed() {
   // what stops it drifting out of step with the schema again.
   console.log('3️⃣3️⃣  Building fee data...')
   await seedFees(schoolId)
+
+  // ── 34. The setup a running school has already done ──────
+  //
+  // Exam slots and templates, shift patterns, PT slabs, RTE rates, concession
+  // rules, staff documents and households. The seed built everything a school
+  // accumulates by operating but nothing it configures once, so these tables
+  // were empty on a fresh database and the screens reading them opened on an
+  // empty state.
+  console.log('3️⃣4️⃣  Adding school setup data...')
+  await seedExtras(schoolId)
 
   // ── Done ─────────────────────────────────────────────────
   const mins = Math.round((Date.now() - startedAt) / 600) / 100

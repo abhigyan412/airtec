@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { supabase } from './shared/db/client'
+import { selectAll } from './shared/db/paged'
 
 // Grouping existing students into households.
 //
@@ -45,14 +46,18 @@ async function main() {
   if (schoolErr) throw new Error(schoolErr.message)
 
   for (const school of schools ?? []) {
-    const { data: parents, error } = await supabase.from('parents')
-      .select('student_id, father_name, father_phone, mother_phone, father_aadhaar')
-      .eq('school_id', school.id)
-    if (error) throw new Error(error.message)
+    // Paged, both of them. A plain select stops at PostgREST's 1,000-row
+    // default without saying so, and this school has 1,880 parent rows against
+    // 1,810 active students — so the matcher saw about half the school and
+    // every child whose sibling happened to sit past row 1,000 was reported as
+    // an only child. Under-grouping is the safe direction, but silently is not.
+    const parents = await selectAll<any>('parents',
+      'student_id, father_name, father_phone, mother_phone, father_aadhaar',
+      q => q.eq('school_id', school.id))
 
-    const { data: students } = await supabase.from('students')
-      .select('id, first_name, last_name, family_id')
-      .eq('school_id', school.id).eq('status', 'active')
+    const students = await selectAll<any>('students',
+      'id, first_name, last_name, family_id',
+      q => q.eq('school_id', school.id).eq('status', 'active'))
 
     const active = new Set((students ?? []).map(s => s.id))
     const nameOf = new Map((students ?? []).map(s => [s.id, `${s.first_name} ${s.last_name}`]))
