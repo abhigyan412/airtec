@@ -38,6 +38,9 @@ const addDays = (iso: string, days: number) => {
 }
 
 const isMissing = (m: string) => /could not find the table|relation .* does not exist/i.test(m)
+/** Network, not data: the request never landed, so re-sending it is safe. */
+const isTransport = (m: string) =>
+  /fetch failed|network|ECONNRESET|ETIMEDOUT|EPIPE|socket hang up|terminated/i.test(m)
 const missingColumn = (m: string) => m.match(/could not find the '([^']+)' column/i)?.[1] ?? null
 
 // Parents only, children first.
@@ -119,6 +122,22 @@ async function insert<T = any>(table: string, rows: any[], chunk = 400): Promise
       slice = payload.slice(i, i + chunk)
       ;({ data, error } = await supabase.from(table).insert(slice).select())
     }
+    // A transport failure is not a data problem — the request never got an
+    // answer, so nothing was written and re-sending the same slice is safe.
+    // These only started appearing once the seed grew to ~1,800 students and
+    // the bulk loads got long enough to catch a blip, and losing a 20-minute
+    // run to one dropped connection is not a reasonable failure mode.
+    //
+    // Deliberately narrow: only 'fetch failed' and its kin retry. A constraint
+    // violation or a bad column still fails on the first attempt, because
+    // re-sending those would just fail slower.
+    for (let attempt = 1; error && isTransport(error.message) && attempt <= 4; attempt++) {
+      const waitMs = 1000 * 2 ** (attempt - 1)
+      console.log(`   … ${table}: ${error.message} — retry ${attempt}/4 in ${waitMs / 1000}s`)
+      await new Promise(r => setTimeout(r, waitMs))
+      ;({ data, error } = await supabase.from(table).insert(slice).select())
+    }
+
     if (error) throw new Error(`${table} insert: ${error.message}`)
     out.push(...((data ?? []) as T[]))
   }
