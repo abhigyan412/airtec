@@ -166,6 +166,70 @@ export async function seedExtras(schoolId: string) {
     console.log(`   ✓ ${await insert('staff_bonuses', rows)} staff bonuses`)
   }
 
+  // ── Who reports to whom ──
+  //
+  // staff_profiles.reporting_to has existed since the baseline schema and
+  // nothing has ever written to it — there is no UI for it, and the seed left
+  // it null for every member of staff. GET /hrms/staff/org-chart assembles a
+  // tree from that column, so the Org Chart page rendered 57 people as 57
+  // roots: a list, not a structure, and the one screen whose entire purpose is
+  // showing the hierarchy was the one screen that could not.
+  //
+  // Derived from the designations already seeded rather than invented: PGT is
+  // the senior grade in an Indian school, so the PGT of a subject heads it,
+  // TGT and PRT report to them, subject heads report to the Vice Principal,
+  // and the Vice Principal to the Principal.
+  const { data: profiles } = await supabase.from('staff_profiles')
+    .select('user_id, designation, department, reporting_to').eq('school_id', schoolId)
+  const unset = (profiles ?? []).filter((p: any) => !p.reporting_to)
+  if (profiles?.length && unset.length === profiles.length) {
+    const by = (d: string) => (profiles ?? []).find((p: any) => p.designation === d)
+    const principal = by('Principal'), vp = by('Vice Principal')
+    const accounts = by('Accounts Officer')
+    const top = vp?.user_id ?? principal?.user_id ?? null
+
+    // subject -> its most senior teacher
+    const GRADE = ['PGT', 'TGT', 'PRT']
+    const teachers = (profiles ?? []).filter((p: any) => GRADE.some(g => p.designation?.startsWith(g + ' ')))
+    const bySubject = new Map<string, any[]>()
+    for (const t of teachers) {
+      const subject = t.designation.slice(4)
+      bySubject.set(subject, [...(bySubject.get(subject) ?? []), t])
+    }
+
+    const updates: { user_id: string; reporting_to: string | null }[] = []
+    for (const [, group] of bySubject) {
+      const ranked = [...group].sort((a, b) =>
+        GRADE.indexOf(a.designation.slice(0, 3)) - GRADE.indexOf(b.designation.slice(0, 3)))
+      const head = ranked[0]
+      updates.push({ user_id: head.user_id, reporting_to: top })
+      for (const t of ranked.slice(1)) updates.push({ user_id: t.user_id, reporting_to: head.user_id })
+    }
+
+    // Non-teaching. The Fee Clerk reports to the Accounts Officer, not to the
+    // Principal — the one place the chart shows real depth outside teaching.
+    const nonTeaching: [string, string | null | undefined][] = [
+      ['Vice Principal', principal?.user_id],
+      ['Accounts Officer', principal?.user_id],
+      ['Fee Clerk', accounts?.user_id ?? principal?.user_id],
+      ['Admission Counselor', top], ['Student Counselor', top], ['Librarian', top],
+    ]
+    for (const [designation, manager] of nonTeaching) {
+      const p = by(designation)
+      if (p && manager) updates.push({ user_id: p.user_id, reporting_to: manager })
+    }
+
+    let done = 0
+    for (const u of updates) {
+      // Nobody reports to themselves, and the Principal reports to no one.
+      if (!u.reporting_to || u.reporting_to === u.user_id) continue
+      const { error } = await supabase.from('staff_profiles')
+        .update({ reporting_to: u.reporting_to }).eq('user_id', u.user_id).eq('school_id', schoolId)
+      if (!error) done++
+    }
+    console.log(`   ✓ ${done} reporting lines (org chart)`)
+  }
+
   // ── Fees: the policy tables ──
   if (await isEmpty('rte_rates', schoolId)) {
     // Banded by numeric_level, and the lowest band must start at -2: pre-primary
