@@ -134,10 +134,30 @@ export async function seedDefaultRoles(schoolId: string): Promise<Record<string,
 
   const permIdByCode = new Map((perms ?? []).map((p: any) => [p.permission_code, p.id]))
 
-  // Only insert mappings for roles that were just created (avoid clobbering
-  // any manually-edited permissions on pre-existing roles).
+  if (permIdByCode.size === 0) {
+    // The registry is populated by migrations, not by this function, so an
+    // empty one means the mappings below would all silently resolve to nothing
+    // and every role would come out with no permissions at all. Said out loud,
+    // because the symptom otherwise appears much later as "nobody can do
+    // anything" with no clue pointing back here.
+    console.warn(
+      '   ⚠️  permissions registry is empty — roles will have no permissions. ' +
+      'Re-apply the permission-registry migrations before seeding roles.')
+  }
+
+  // Roles that were just created, plus any existing role that has no mappings
+  // at all. The second case is repair, not clobbering: the guard here is meant
+  // to preserve permissions somebody edited by hand, and a role holding zero
+  // permissions is not an edit anyone made on purpose — it is a role that was
+  // created while the registry was missing, and it can do nothing until it is
+  // filled in.
+  const { data: mapped } = await supabase.from('role_permissions_v2').select('role_id')
+  const hasMappings = new Set((mapped ?? []).map((m: any) => m.role_id))
+  const needsMappings = Object.keys(DEFAULT_ROLE_PERMISSIONS).filter(name =>
+    missing.includes(name) || (roleIdByName[name] && !hasMappings.has(roleIdByName[name])))
+
   const rows: { role_id: string; permission_id: string }[] = []
-  for (const name of missing) {
+  for (const name of needsMappings) {
     const roleId = roleIdByName[name]
     for (const code of DEFAULT_ROLE_PERMISSIONS[name] ?? []) {
       const permId = permIdByCode.get(code)
