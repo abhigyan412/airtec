@@ -7,6 +7,7 @@ import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } fro
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { toLocalDateStr } from '../../shared/utils/academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudents } from '../../shared/utils/notifications'
+import { ensureResultFreezePublishWorkflowDefinition } from '../rbac/seed'
 
 const router = Router()
 router.use(authenticate)
@@ -496,6 +497,7 @@ router.post('/:id/start-freeze-workflow', requirePermissionV2('exam.freeze'),
             })
         }
 
+        await ensureResultFreezePublishWorkflowDefinition(school_id)
         const result = await startWorkflow({
             schoolId: school_id,
             workflowName: 'Result Freeze & Publish Workflow',
@@ -571,7 +573,7 @@ router.post('/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: R
     // Still needed for STEP_STATUS_MAP below — actOnWorkflow itself is the
     // sole authority on whether this actor may act on it.
     const beforeStatus = await getWorkflowStatus('exam', id, school_id)
-    const currentStepOrder = beforeStatus?.current_step?.step_order
+    const currentActionName = beforeStatus?.current_step?.action_name
 
     const result = await actOnWorkflow({
         instanceId: instance.id,
@@ -585,21 +587,21 @@ router.post('/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: R
         return res.status(400).json({ success: false, error: result.error })
     }
 
-    // Sync exams.status based on outcome.
-    // Actual seeded step order is: step1=Exam Controller/verify,
-    // step2=Principal/freeze, step3=Principal/publish (NOT
-    // freeze->verify->publish as might be assumed from the names).
+    // Sync exams.status based on outcome. Keyed off action_name (not
+    // step_order) so this can't drift out of sync with however this
+    // workflow's steps are actually seeded/reordered — same reasoning
+    // as the permission-check consolidation above.
     if (status === 'rejected') {
         // Sent back for correction — revert to result_declared so the
         // exam controller can fix marks and restart the workflow.
         await supabase.from('exams').update({ status: 'result_declared' }).eq('id', id).eq('school_id', school_id)
     } else if (status === 'approved') {
-        const STEP_STATUS_MAP: Record<number, string> = {
-            1: 'result_verified',  // step 1: Exam Controller / verify
-            2: 'result_frozen',    // step 2: Principal / freeze
-            3: 'result_published', // step 3: Principal / publish
+        const STEP_STATUS_MAP: Record<string, string> = {
+            freeze: 'result_frozen',
+            verify: 'result_verified',
+            publish: 'result_published',
         }
-        const newExamStatus = currentStepOrder ? STEP_STATUS_MAP[currentStepOrder] : undefined
+        const newExamStatus = currentActionName ? STEP_STATUS_MAP[currentActionName] : undefined
         if (newExamStatus) {
             await supabase.from('exams').update({ status: newExamStatus }).eq('id', id).eq('school_id', school_id)
 

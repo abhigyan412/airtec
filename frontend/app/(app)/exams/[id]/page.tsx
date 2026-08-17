@@ -422,6 +422,7 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
   const currentStep = workflow.current_step
   const approvals: any[] = workflow.approvals ?? []
   const status = workflow.status as 'in_progress' | 'approved' | 'rejected' | 'cancelled'
+  const canStart = ['school_admin', 'principal', 'teacher'].includes(user?.role ?? '')
 
   const roleMap: Record<string, string> = {
     school_admin: 'School Admin',
@@ -537,9 +538,14 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
         <div className="border-t border-border pt-4">
           <p className="text-sm text-muted-foreground">
             {status === 'approved' && 'Results have been published and are now visible to students and parents.'}
-            {status === 'rejected' && 'This workflow was rejected.'}
+            {status === 'rejected' && 'This workflow was sent back for correction.'}
             {status === 'cancelled' && 'This workflow was cancelled.'}
           </p>
+          {status === 'rejected' && canStart && (
+            <Button size="sm" className="mt-3" onClick={() => startMutation.mutate()} disabled={startMutation.isPending}>
+              {startMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Restart Workflow
+            </Button>
+          )}
         </div>
       )}
 

@@ -377,3 +377,24 @@ export async function ensureTransferCertificateWorkflowDefinition(schoolId: stri
     ],
   })
 }
+
+// Same gap as every workflow above — 'Result Freeze & Publish Workflow' is
+// referenced by name in POST /exams/:id/start-freeze-workflow but had no
+// seed anywhere, surfacing live as 'Workflow "Result Freeze & Publish
+// Workflow" not found or inactive for this school' the moment an Exam
+// Controller tried to start it after generating results. action_name
+// values are lowercase (not human-readable) because both the frontend
+// (exams/[id]/page.tsx's STEP_ICONS/STEP_LABELS and the
+// currentStep.action_name === 'publish' button-text branch) and the
+// backend (POST /:id/workflow-action's STEP_STATUS_MAP) key off these
+// exact strings.
+export async function ensureResultFreezePublishWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Result Freeze & Publish Workflow', module: 'exam', entityType: 'exam',
+    steps: [
+      { roleName: 'Exam Controller', actionName: 'freeze' },
+      { roleName: 'Principal', actionName: 'verify' },
+      { roleName: 'Principal', actionName: 'publish' },
+    ],
+  })
+}
