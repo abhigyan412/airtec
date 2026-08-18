@@ -4,10 +4,10 @@ import { supabase } from '../../shared/db/client'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
-import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
+import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId, fetchAllRows } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr, countWorkingDays } from '../../shared/utils/academicCalendar'
-import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
+import { createNotification, createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 import { buildStudentSearchFilter } from '../../shared/utils/studentSearch'
 import { getTeacherContext } from '../../shared/utils/teacherContext'
 import { ensureTransferCertificateWorkflowDefinition } from '../rbac/seed'
@@ -347,15 +347,150 @@ router.get('/timetable', asyncHandler(async (req: AuthRequest, res: Response) =>
   res.json({ success: true, data })
 }))
 
+const TIMETABLE_DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const timetableTargetKey = (p: any) => `${p.class_id}|${p.section_id ?? ''}|${p.day_of_week}|${p.period_number}`
+
 router.post('/timetable', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { periods } = req.body
     const school_id = req.user!.school_id
     if (!Array.isArray(periods) || !periods.length)
       return res.status(400).json({ success: false, error: 'periods array required' })
+
+    // Teacher double-booking guard (room guard follows below, same shape).
+    // Nothing else in this app stops the same teacher being assigned to
+    // two different classes at the same day/period — the frontend's own
+    // conflict check only ever sees the one class/section currently being
+    // viewed, so it's structurally blind to a clash in a different class.
+    // Checks both against what's already saved elsewhere (excluding the
+    // exact class/section/day/period slot(s) this save is itself replacing
+    // — that's an edit, not a new booking) and against the incoming batch,
+    // since a single bulk save building out a whole week can introduce a
+    // conflict entirely within itself.
+    const teacherIds = [...new Set(periods.filter((p: any) => p.teacher_id && !p.is_break).map((p: any) => p.teacher_id as string))]
+    if (teacherIds.length) {
+      const slotKey = (p: any) => `${p.teacher_id}|${p.day_of_week}|${p.period_number}`
+      const targetKey = timetableTargetKey
+
+      const [{ data: existing, error: existingErr }, { data: teacherRows }] = await Promise.all([
+        supabase.from('timetable_periods')
+          .select('teacher_id, class_id, section_id, day_of_week, period_number, classes(name), sections(name)')
+          .eq('school_id', school_id).in('teacher_id', teacherIds).eq('is_break', false),
+        supabase.from('users').select('id, full_name').in('id', teacherIds),
+      ])
+      if (existingErr) return res.status(500).json({ success: false, error: existingErr.message })
+      const nameById = new Map((teacherRows ?? []).map(t => [t.id, t.full_name]))
+
+      const incomingTargets = new Set(periods.map((p: any) => targetKey(p)))
+      const bySlot = new Map<string, any>()
+
+      for (const p of periods) {
+        if (!p.teacher_id || p.is_break) continue
+        const key = slotKey(p)
+        const dayName = TIMETABLE_DAY_NAMES[p.day_of_week - 1] ?? `day ${p.day_of_week}`
+
+        const dbClash = (existing ?? []).find(e =>
+          e.teacher_id === p.teacher_id && e.day_of_week === p.day_of_week && e.period_number === p.period_number &&
+          !incomingTargets.has(`${e.class_id}|${e.section_id ?? ''}|${e.day_of_week}|${e.period_number}`),
+        )
+        if (dbClash) {
+          return res.status(409).json({
+            success: false,
+            error: `${nameById.get(p.teacher_id) ?? 'This teacher'} already teaches ${(dbClash as any).classes?.name}${(dbClash as any).sections?.name ? ` - ${(dbClash as any).sections.name}` : ''} at P${p.period_number} on ${dayName}.`,
+          })
+        }
+
+        const inBatch = bySlot.get(key)
+        if (inBatch && targetKey(inBatch) !== targetKey(p)) {
+          return res.status(409).json({
+            success: false,
+            error: `${nameById.get(p.teacher_id) ?? 'This teacher'} is assigned to two different classes at P${p.period_number} on ${dayName} in this save.`,
+          })
+        }
+        bySlot.set(key, p)
+      }
+    }
+
+    // Room double-booking guard — same shape as the teacher check above,
+    // keyed on room instead. Only rooms actually set on an incoming period
+    // are checked; a blank room was never claiming anything to begin with.
+    const rooms = [...new Set(periods.filter((p: any) => p.room && !p.is_break).map((p: any) => p.room as string))]
+    if (rooms.length) {
+      const roomSlotKey = (p: any) => `${p.room}|${p.day_of_week}|${p.period_number}`
+      const targetKey = timetableTargetKey
+
+      const { data: existingByRoom, error: roomErr } = await supabase.from('timetable_periods')
+        .select('room, class_id, section_id, day_of_week, period_number, classes(name), sections(name)')
+        .eq('school_id', school_id).in('room', rooms).eq('is_break', false)
+      if (roomErr) return res.status(500).json({ success: false, error: roomErr.message })
+
+      const incomingTargets = new Set(periods.map((p: any) => targetKey(p)))
+      const roomBySlot = new Map<string, any>()
+
+      for (const p of periods) {
+        if (!p.room || p.is_break) continue
+        const key = roomSlotKey(p)
+        const dayName = TIMETABLE_DAY_NAMES[p.day_of_week - 1] ?? `day ${p.day_of_week}`
+
+        const dbClash = (existingByRoom ?? []).find(e =>
+          e.room === p.room && e.day_of_week === p.day_of_week && e.period_number === p.period_number &&
+          !incomingTargets.has(`${e.class_id}|${e.section_id ?? ''}|${e.day_of_week}|${e.period_number}`),
+        )
+        if (dbClash) {
+          return res.status(409).json({
+            success: false,
+            error: `Room ${p.room} is already booked for ${(dbClash as any).classes?.name}${(dbClash as any).sections?.name ? ` - ${(dbClash as any).sections.name}` : ''} at P${p.period_number} on ${dayName}.`,
+          })
+        }
+
+        const inBatch = roomBySlot.get(key)
+        if (inBatch && targetKey(inBatch) !== targetKey(p)) {
+          return res.status(409).json({
+            success: false,
+            error: `Room ${p.room} is assigned to two different classes at P${p.period_number} on ${dayName} in this save.`,
+          })
+        }
+        roomBySlot.set(key, p)
+      }
+    }
+
+    // Capture who taught each target slot BEFORE the upsert, so a
+    // genuinely new assignment can be told apart from an edit that left
+    // the teacher unchanged (room/subject tweak) — only the former should
+    // notify anyone.
+    const classIds = [...new Set(periods.map((p: any) => p.class_id as string))]
+    const { data: previousRows } = await supabase.from('timetable_periods')
+      .select('class_id, section_id, day_of_week, period_number, teacher_id')
+      .eq('school_id', school_id).in('class_id', classIds)
+    const previousTeacherByTarget = new Map((previousRows ?? []).map(p => [timetableTargetKey(p), p.teacher_id]))
+
     const rows = periods.map((p: any) => ({ ...p, school_id }))
-    const { data, error } = await supabase.from('timetable_periods').upsert(rows, { onConflict: 'class_id,section_id,day_of_week,period_number' }).select()
+    const { data, error } = await supabase.from('timetable_periods')
+      .upsert(rows, { onConflict: 'class_id,section_id,day_of_week,period_number' })
+      .select('*, classes(name), sections(name)')
     if (error) return res.status(400).json({ success: false, error: error.message })
+
+    // Best-effort: notify each teacher newly put on a period (new slot, or
+    // an edit that changed who teaches it) — never held responsible for
+    // the save itself, which has already succeeded by this point.
+    try {
+      const newlyAssigned = (data ?? []).filter((p: any) =>
+        p.teacher_id && !p.is_break && p.teacher_id !== previousTeacherByTarget.get(timetableTargetKey(p)),
+      )
+      for (const p of newlyAssigned) {
+        const dayName = TIMETABLE_DAY_NAMES[p.day_of_week - 1] ?? `day ${p.day_of_week}`
+        const classLabel = `${p.classes?.name ?? 'a class'}${p.sections?.name ? ` - ${p.sections.name}` : ''}`
+        await createNotification({
+          schoolId: school_id, userId: p.teacher_id, type: 'timetable_assigned',
+          title: 'New class assigned',
+          message: `You've been assigned ${p.subject_name} for ${classLabel} on ${dayName}, P${p.period_number} (${p.start_time?.slice(0, 5)}–${p.end_time?.slice(0, 5)}).`,
+          link: '/timetable', relatedEntityType: 'timetable_period', relatedEntityId: p.id,
+        })
+      }
+    } catch (notifyErr) {
+      console.error('Failed to create timetable assignment notifications:', notifyErr)
+    }
+
     res.json({ success: true, data, count: data?.length })
   })
 )
@@ -366,6 +501,114 @@ router.delete('/timetable/:period_id', requirePermissionV2('timetable.manage'),
     const { error } = await supabase.from('timetable_periods').delete().eq('id', period_id).eq('school_id', req.user!.school_id)
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true })
+  })
+)
+
+const BulkLunchSchema = z.object({
+  start_time: z.string().min(1),
+  end_time: z.string().min(1),
+  subject_name: z.string().min(1).default('Lunch'),
+  days: z.array(z.number().int().min(1).max(6)).min(1).default([1, 2, 3, 4, 5, 6]),
+  class_ids: z.array(z.string().uuid()).optional(),
+})
+
+// ── POST /timetable/bulk-lunch — add a break period (Lunch by default)
+// across every class/section, on every selected day, in one action.
+// period_number is a plain sequential integer with no natural "insert
+// between 4 and 5" operation, so this computes where the break actually
+// falls chronologically for EACH class/section/day independently (not
+// assumed uniform school-wide, even though it usually is) and shifts
+// every period at or after that point up by one to make room, before
+// inserting the break itself at the freed slot. All done in one
+// transaction-equivalent batch: the shifts are grouped and applied largest
+// -period-number-first so a mid-shift row never collides with a row that
+// hasn't moved yet (the naive one-statement-per-row-in-arbitrary-order
+// version of this hits the unique (class,section,day,period) constraint).
+router.post('/timetable/bulk-lunch', requirePermissionV2('timetable.manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const body = BulkLunchSchema.parse(req.body)
+    const school_id = req.user!.school_id
+
+    let classIds = body.class_ids
+    if (!classIds?.length) {
+      const { data: allClasses } = await supabase.from('classes').select('id').eq('school_id', school_id)
+      classIds = (allClasses ?? []).map(c => c.id)
+    }
+    if (!classIds.length) return res.status(400).json({ success: false, error: 'No classes found for this school' })
+
+    const { data: sectionRows } = await supabase.from('sections').select('id, class_id').in('class_id', classIds)
+    const combos: { class_id: string; section_id: string }[] = (sectionRows ?? []).map(s => ({ class_id: s.class_id, section_id: s.id }))
+    if (!combos.length) return res.status(400).json({ success: false, error: 'No sections found for the selected classes' })
+
+    const existing = await fetchAllRows<{ class_id: string; section_id: string | null; day_of_week: number; period_number: number; start_time: string; subject_name: string; is_break: boolean }>(
+      (from, to) => supabase.from('timetable_periods')
+        .select('class_id, section_id, day_of_week, period_number, start_time, subject_name, is_break', { count: 'exact' })
+        .eq('school_id', school_id).in('class_id', classIds!).order('id').range(from, to),
+    )
+
+    // Guard against re-running this on a day that already has a break with
+    // this exact name — upsert would otherwise silently overwrite whatever
+    // already occupies that slot instead of erroring.
+    const alreadyHasLunch = existing.some(p =>
+      p.is_break && p.subject_name === body.subject_name && body.days.includes(p.day_of_week) &&
+      combos.some(c => c.class_id === p.class_id && c.section_id === (p.section_id ?? '')),
+    )
+    if (alreadyHasLunch) {
+      return res.status(409).json({ success: false, error: `A "${body.subject_name}" break already exists on at least one selected day — remove it first if you're trying to move it.` })
+    }
+
+    // shiftsByOldNumber[oldPeriodNumber] = list of (class,section,day) combos
+    // whose period at that number needs to become oldPeriodNumber+1.
+    const shiftsByOldNumber = new Map<number, { class_id: string; section_id: string; day_of_week: number }[]>()
+    const inserts: any[] = []
+
+    for (const day of body.days) {
+      for (const { class_id, section_id } of combos) {
+        const dayPeriods = existing
+          .filter(p => p.class_id === class_id && (p.section_id ?? '') === section_id && p.day_of_week === day)
+          .sort((a, b) => a.period_number - b.period_number)
+
+        const insertionPoint = dayPeriods.find(p => p.start_time >= body.start_time)?.period_number
+          ?? (dayPeriods.length ? dayPeriods[dayPeriods.length - 1].period_number + 1 : 1)
+
+        for (const p of dayPeriods) {
+          if (p.period_number >= insertionPoint) {
+            if (!shiftsByOldNumber.has(p.period_number)) shiftsByOldNumber.set(p.period_number, [])
+            shiftsByOldNumber.get(p.period_number)!.push({ class_id, section_id, day_of_week: day })
+          }
+        }
+
+        inserts.push({
+          school_id, class_id, section_id, day_of_week: day, period_number: insertionPoint,
+          start_time: body.start_time, end_time: body.end_time, subject_name: body.subject_name,
+          teacher_id: null, room: null, is_break: true,
+        })
+      }
+    }
+
+    // Largest old period_number first, so a row moving into N+1 never
+    // collides with a not-yet-moved row still sitting at N+1. Chunked at
+    // 15 combos per request — a big school (many classes x 6 days) can
+    // produce enough targets for one combined .or() filter to risk
+    // hitting a URL length limit.
+    const CHUNK = 15
+    const descendingOldNumbers = [...shiftsByOldNumber.keys()].sort((a, b) => b - a)
+    for (const oldNumber of descendingOldNumbers) {
+      const targets = shiftsByOldNumber.get(oldNumber)!
+      for (let i = 0; i < targets.length; i += CHUNK) {
+        const batch = targets.slice(i, i + CHUNK)
+        const orFilter = batch.map(t => `and(class_id.eq.${t.class_id},section_id.eq.${t.section_id},day_of_week.eq.${t.day_of_week})`).join(',')
+        const { error: shiftErr } = await supabase.from('timetable_periods')
+          .update({ period_number: oldNumber + 1 })
+          .eq('school_id', school_id).eq('period_number', oldNumber).or(orFilter)
+        if (shiftErr) return res.status(500).json({ success: false, error: `Failed shifting period ${oldNumber}: ${shiftErr.message}` })
+      }
+    }
+
+    const { data: inserted, error: insertErr } = await supabase.from('timetable_periods').insert(inserts).select()
+    if (insertErr) return res.status(500).json({ success: false, error: insertErr.message })
+
+    res.json({ success: true, data: { periods_shifted: descendingOldNumbers.reduce((n, k) => n + shiftsByOldNumber.get(k)!.length, 0), lunch_periods_created: inserted?.length ?? 0 } })
   })
 )
 
@@ -771,18 +1014,42 @@ router.get('/promotions', asyncHandler(async (req: AuthRequest, res: Response) =
 // anything to, cluttering a picker meant for actual teaching staff) —
 // same reasoning as free-faculty/substitutes above. Resigned/terminated
 // staff are excluded too, for the same reason "Mark Attendance" already does.
+//
+// Also returns each teacher's subjects, same subjectsFor() precedence as
+// /timetable/substitutes (explicit staff_profiles.subjects first, falling
+// back to whatever's derived from their weekly timetable) — so
+// AddPeriodModal can filter the dropdown to only qualified teachers once
+// a subject is picked, without inventing a second definition of
+// "qualified" that could drift from what substitute-matching already uses.
 router.get('/timetable/teachers', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { data, error } = await supabase
-    .from('users')
-    .select('id, full_name, role, staff_profiles!staff_profiles_user_id_fkey(employment_status)')
-    .eq('school_id', req.user!.school_id)
-    .eq('role', 'teacher')
-    .order('full_name')
+  const school_id = req.user!.school_id
+  const [{ data, error }, weekPeriods] = await Promise.all([
+    supabase.from('users')
+      .select('id, full_name, role, staff_profiles!staff_profiles_user_id_fkey(employment_status, subjects)')
+      .eq('school_id', school_id).eq('role', 'teacher').order('full_name'),
+    fetchAllRows<{ teacher_id: string | null; subject_name: string; is_break: boolean }>(
+      (from, to) => supabase.from('timetable_periods')
+        .select('teacher_id, subject_name, is_break', { count: 'exact' })
+        .eq('school_id', school_id).order('id').range(from, to),
+    ),
+  ])
   if (error) return res.status(500).json({ success: false, error: error.message })
+
+  const derivedSubjectsByTeacher = new Map<string, Set<string>>()
+  for (const p of weekPeriods ?? []) {
+    if (!p.teacher_id || p.is_break) continue
+    if (!derivedSubjectsByTeacher.has(p.teacher_id)) derivedSubjectsByTeacher.set(p.teacher_id, new Set())
+    derivedSubjectsByTeacher.get(p.teacher_id)!.add(p.subject_name)
+  }
+
   const NON_ACTIVE = new Set(['resigned', 'suspended', 'terminated'])
   const active = (data ?? [])
     .filter(t => !NON_ACTIVE.has((t as any).staff_profiles?.employment_status))
-    .map(t => ({ id: t.id, full_name: t.full_name, role: t.role }))
+    .map(t => {
+      const explicit: string[] = (t as any).staff_profiles?.subjects ?? []
+      const subjects = explicit.length ? [...explicit].sort() : [...(derivedSubjectsByTeacher.get(t.id) ?? [])].sort()
+      return { id: t.id, full_name: t.full_name, role: t.role, subjects }
+    })
   res.json({ success: true, data: active })
 }))
 
@@ -848,10 +1115,14 @@ router.get('/timetable/free-faculty', requirePermissionV2('timetable.manage'),
     const teachersPresent = (teachers ?? []).filter(t => !absentToday.has(t.id))
     const dayPeriodsPresent = (dayPeriods ?? []).filter(p => !p.teacher_id || !absentToday.has(p.teacher_id))
 
-    // Every distinct period slot offered that day, for the period picker —
-    // deduped by period_number, keeping the first start/end seen for it.
+    // Every distinct TAUGHT period slot offered that day, for the period
+    // picker — deduped by period_number, keeping the first start/end seen
+    // for it. Breaks (Lunch, etc.) are excluded: "who's free at Lunch" is
+    // not a real substitute-finding question, and every teacher would
+    // trivially show as free anyway.
     const periodMap = new Map<number, { period_number: number; start_time: string; end_time: string }>()
     for (const p of dayPeriods ?? []) {
+      if (p.is_break) continue
       if (!periodMap.has(p.period_number)) {
         periodMap.set(p.period_number, { period_number: p.period_number, start_time: p.start_time, end_time: p.end_time })
       }
@@ -918,6 +1189,20 @@ router.get('/timetable/free-faculty', requirePermissionV2('timetable.manage'),
 // when) never talked to each other; this cross-references them live.
 // Same reasoning as free-faculty above — this surfaces staff attendance
 // status, not something to expose via the broadly-held timetable.view.
+//
+// Also returns morning_no_checkin: unlike `flagged` above (which only
+// ever shows what's wrong with the CURRENT period — a teacher who never
+// showed up for Period 1 stops being flagged the moment Period 4 starts,
+// even if Period 4 is unstaffed for an entirely different reason), this
+// is a cumulative, once-per-teacher check anchored to the school's own
+// Lunch break (the first is_break period today whose subject_name is
+// "Lunch", case-insensitive — see POST /timetable/bulk-lunch): once
+// lunch has started, any teacher who had a period earlier that morning
+// and still has no valid check-in today gets listed once, with every
+// morning period they missed, rather than disappearing after their own
+// period ends. Empty until lunch has actually started — asking "has
+// this teacher shown up yet" is meaningless before their day has really
+// begun.
 router.get('/timetable/attention-required', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
@@ -927,21 +1212,21 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
     const todayDate = toLocalDateStr(now)
 
     if (jsDay === 0) {
-      return res.json({ success: true, data: { date: todayDate, day_of_week: null, flagged: [] } })
+      return res.json({ success: true, data: { date: todayDate, day_of_week: null, flagged: [], morning_no_checkin: [] } })
     }
     const day_of_week = jsDay
 
-    const [{ data: periods, error: periodsErr }, { data: attendanceRows, error: attErr }] = await Promise.all([
+    const [{ data: todayPeriods, error: periodsErr }, { data: attendanceRows, error: attErr }] = await Promise.all([
       supabase.from('timetable_periods')
-        .select('id, teacher_id, period_number, start_time, end_time, subject_name, room, classes(name), sections(name)')
-        .eq('school_id', school_id).eq('day_of_week', day_of_week).eq('is_break', false)
-        .lte('start_time', nowTime).gte('end_time', nowTime),
+        .select('id, teacher_id, period_number, start_time, end_time, subject_name, room, is_break, classes(name), sections(name)')
+        .eq('school_id', school_id).eq('day_of_week', day_of_week),
       supabase.from('staff_attendance').select('user_id, status, check_in').eq('school_id', school_id).eq('date', todayDate),
     ])
     if (periodsErr) return res.status(500).json({ success: false, error: periodsErr.message })
     if (attErr) return res.status(500).json({ success: false, error: attErr.message })
 
     const attendanceByUser = new Map((attendanceRows ?? []).map(a => [a.user_id, a]))
+    const periods = (todayPeriods ?? []).filter(p => !p.is_break && p.start_time <= nowTime && p.end_time >= nowTime)
 
     const REASON_LABELS: Record<string, string> = {
       not_checked_in: 'Not checked in yet',
@@ -951,7 +1236,7 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
       checked_in_late: 'Checked in after this period started',
     }
 
-    const flagged = (periods ?? [])
+    const flagged = periods
       .filter(p => p.teacher_id)
       .map(p => {
         const att = attendanceByUser.get(p.teacher_id as string)
@@ -965,7 +1250,21 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
       })
       .filter((p): p is NonNullable<typeof p> => p !== null)
 
-    const teacherIds = [...new Set(flagged.map(f => f.teacher_id as string))]
+    // Morning no-checkin, anchored to lunch
+    const lunchPeriod = (todayPeriods ?? []).find(p => p.is_break && /lunch/i.test(p.subject_name))
+    const morningPeriods = lunchPeriod && nowTime >= lunchPeriod.start_time
+      ? (todayPeriods ?? []).filter(p => p.teacher_id && !p.is_break && p.start_time < lunchPeriod.start_time)
+      : []
+    const missingByTeacher = new Map<string, typeof morningPeriods>()
+    for (const p of morningPeriods) {
+      const att = attendanceByUser.get(p.teacher_id as string)
+      const checkedIn = !!att && att.status !== 'absent' && att.status !== 'on_leave' && !!att.check_in
+      if (checkedIn) continue
+      if (!missingByTeacher.has(p.teacher_id as string)) missingByTeacher.set(p.teacher_id as string, [])
+      missingByTeacher.get(p.teacher_id as string)!.push(p)
+    }
+
+    const teacherIds = [...new Set([...flagged.map(f => f.teacher_id as string), ...missingByTeacher.keys()])]
     const { data: teacherRows } = teacherIds.length
       ? await supabase.from('users').select('id, full_name').in('id', teacherIds)
       : { data: [] }
@@ -980,18 +1279,30 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
       reason: f.reason, reason_label: REASON_LABELS[f.reason as string],
     }))
 
-    const teacherPeriodsInProgress = (periods ?? []).filter(p => p.teacher_id).length
-    res.json({ success: true, data: { date: todayDate, day_of_week, periods_in_progress: teacherPeriodsInProgress, flagged: result } })
+    const morningNoCheckin = [...missingByTeacher.entries()].map(([teacher_id, missed]) => ({
+      teacher_id, teacher_name: nameById.get(teacher_id) ?? 'Unknown',
+      periods_missed: missed.map(p => ({
+        period_number: p.period_number, subject_name: p.subject_name,
+        class_name: (p as any).classes?.name, section_name: (p as any).sections?.name,
+        start_time: p.start_time,
+      })),
+    }))
+
+    const teacherPeriodsInProgress = periods.filter(p => p.teacher_id).length
+    res.json({
+      success: true,
+      data: { date: todayDate, day_of_week, periods_in_progress: teacherPeriodsInProgress, flagged: result, morning_no_checkin: morningNoCheckin },
+    })
   })
 )
 
 // ── GET /students/timetable/substitutes — the actual "who should cover
 // this" answer behind the Find Substitute button. A real suggestion, not
-// just re-showing the free-faculty list: candidates must (a) be marked
-// PRESENT today — not merely "not marked absent", since attention-required
-// itself fires on missing/incomplete check-ins and a substitute has to be
-// someone actually confirmed in the building — (b) have no class of their
-// own in this exact period, and (c) teach this subject somewhere on their
+// just re-showing the free-faculty list: candidates must (a) not be
+// confirmed absent — same rule as free-faculty, see absentToday below —
+// (b) have no class of their own in this exact period, and (c) teach this
+// subject per staff_profiles.subjects (the real, admin-settable source of
+// truth) or, for teachers nobody has set it for yet, somewhere on their
 // WEEKLY timetable (not just today's — a teacher who covers this subject
 // only on other days is still qualified to substitute it today). Falls
 // back to a same-period-free-but-different-subject pool when no subject
@@ -1009,52 +1320,78 @@ router.get('/timetable/substitutes', requirePermissionV2('timetable.manage'),
       return res.status(400).json({ success: false, error: 'day_of_week (1-6) and period_number are required' })
     }
 
-    const [{ data: teacherRows, error: teachersErr }, { data: weekPeriods, error: periodsErr }, { data: attendanceRows, error: attErr }] = await Promise.all([
+    const [{ data: teacherRows, error: teachersErr }, weekPeriods, { data: attendanceRows, error: attErr }] = await Promise.all([
       // teacher only, active only — same reasoning as free-faculty above:
       // a substitute has to be an actual teacher who's actually employed,
       // not an administrator or someone who's left.
-      supabase.from('users').select('id, full_name, role, staff_profiles!staff_profiles_user_id_fkey(employment_status)')
+      supabase.from('users').select('id, full_name, role, staff_profiles!staff_profiles_user_id_fkey(employment_status, subjects)')
         .eq('school_id', school_id).eq('role', 'teacher').order('full_name'),
       // The WHOLE week, not just this day — subject qualification and
       // "busy this exact period" both need to be derived from it, and
-      // fetching once avoids a second near-identical query.
-      supabase.from('timetable_periods')
-        .select('teacher_id, day_of_week, period_number, subject_name, is_break')
-        .eq('school_id', school_id),
+      // fetching once avoids a second near-identical query. A real
+      // school's week easily clears the 1000-row PostgREST cap (47
+      // sections x ~8 periods/day x 6 days ~= 2250 rows) — an unranged
+      // select here silently dropped some teachers' busy periods,
+      // which is why they wrongly showed up as "free" in the substitute
+      // list even though the same-day free-faculty query (well under
+      // 1000 rows) correctly excluded them. Paginate with fetchAllRows,
+      // same fix already applied to the principal dashboard's
+      // attendance/fee queries.
+      fetchAllRows<{ teacher_id: string | null; day_of_week: number; period_number: number; subject_name: string; is_break: boolean }>(
+        (from, to) => supabase.from('timetable_periods')
+          .select('teacher_id, day_of_week, period_number, subject_name, is_break', { count: 'exact' })
+          .eq('school_id', school_id).order('id').range(from, to),
+      ),
       supabase.from('staff_attendance').select('user_id, status').eq('school_id', school_id).eq('date', todayDate),
     ])
     if (teachersErr) return res.status(500).json({ success: false, error: teachersErr.message })
-    if (periodsErr) return res.status(500).json({ success: false, error: periodsErr.message })
     if (attErr) return res.status(500).json({ success: false, error: attErr.message })
     const NON_ACTIVE = new Set(['resigned', 'suspended', 'terminated'])
     const teachers = (teacherRows ?? []).filter(t => !NON_ACTIVE.has((t as any).staff_profiles?.employment_status))
 
-    const presentToday = new Set(
-      (attendanceRows ?? []).filter(a => a.status === 'present' || a.status === 'half_day').map(a => a.user_id),
+    // Excludes only confirmed-absent, same as free-faculty — not "requires
+    // an explicit present row". Requiring explicit presence used to mean a
+    // teacher with no attendance row yet (common mid-day, before everyone's
+    // checked in) was excluded here while still showing up as free on the
+    // free-faculty panel right next to it, which could empty out this list
+    // entirely even when free-faculty had a full page of qualified
+    // candidates. Matching free-faculty's rule keeps the two panels in
+    // sync — confirmed live via a school where "12 free, 2 teaching Art &
+    // Craft" on free-faculty produced "No one is available" here.
+    const absentToday = new Set(
+      (attendanceRows ?? []).filter(a => a.status === 'absent' || a.status === 'on_leave').map(a => a.user_id),
     )
     const busyThisPeriod = new Set(
       (weekPeriods ?? [])
         .filter(p => p.teacher_id && !p.is_break && p.day_of_week === day_of_week && p.period_number === period_number)
         .map(p => p.teacher_id as string),
     )
-    const subjectsByTeacher = new Map<string, Set<string>>()
+    // Fallback only — see subjectsFor() below, which prefers the explicit
+    // staff_profiles.subjects list (the real source of truth) and only
+    // falls back to this derived-from-the-timetable set for teachers
+    // nobody has set it for yet.
+    const derivedSubjectsByTeacher = new Map<string, Set<string>>()
     for (const p of weekPeriods ?? []) {
       if (!p.teacher_id || p.is_break) continue
-      if (!subjectsByTeacher.has(p.teacher_id)) subjectsByTeacher.set(p.teacher_id, new Set())
-      subjectsByTeacher.get(p.teacher_id)!.add(p.subject_name)
+      if (!derivedSubjectsByTeacher.has(p.teacher_id)) derivedSubjectsByTeacher.set(p.teacher_id, new Set())
+      derivedSubjectsByTeacher.get(p.teacher_id)!.add(p.subject_name)
+    }
+    const subjectsFor = (t: any): string[] => {
+      const explicit: string[] = (t as any).staff_profiles?.subjects ?? []
+      return explicit.length ? [...explicit].sort() : [...(derivedSubjectsByTeacher.get(t.id) ?? [])].sort()
     }
 
     const eligible = (teachers ?? []).filter(t =>
-      t.id !== exclude_teacher_id && presentToday.has(t.id) && !busyThisPeriod.has(t.id),
+      t.id !== exclude_teacher_id && !absentToday.has(t.id) && !busyThisPeriod.has(t.id),
     )
 
-    const decorate = (t: any) => ({ id: t.id, full_name: t.full_name, role: t.role, subjects: [...(subjectsByTeacher.get(t.id) ?? [])].sort() })
+    const decorate = (t: any) => ({ id: t.id, full_name: t.full_name, role: t.role, subjects: subjectsFor(t) })
 
     const qualified = subject_name
-      ? eligible.filter(t => subjectsByTeacher.get(t.id)?.has(subject_name)).map(decorate)
+      ? eligible.filter(t => subjectsFor(t).includes(subject_name)).map(decorate)
       : eligible.map(decorate)
     const otherFree = subject_name
-      ? eligible.filter(t => !subjectsByTeacher.get(t.id)?.has(subject_name)).map(decorate)
+      ? eligible.filter(t => !subjectsFor(t).includes(subject_name)).map(decorate)
       : []
 
     res.json({ success: true, data: { date: todayDate, day_of_week, period_number, subject_name: subject_name ?? null, suggestions: qualified, other_free: otherFree } })

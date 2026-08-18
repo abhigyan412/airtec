@@ -17,6 +17,7 @@ export type NotificationType =
   | 'tc_approved' | 'tc_rejected'
   | 'discount_approved' | 'discount_rejected'
   | 'homework_assigned'
+  | 'timetable_assigned'
   | 'exam_result_published'
   | 'fee_due_soon' | 'fee_overdue'
   | 'payslip_generated'

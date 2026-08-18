@@ -87,3 +87,52 @@ export async function resolveOwnStudentId(userId: string, role: string, schoolId
   const { data: parent } = await supabase.from('parents').select('student_id').eq('user_id', userId).eq('school_id', schoolId).maybeSingle()
   return parent?.student_id ?? null
 }
+
+// PostgREST silently caps an unranged select at 1000 rows. Pages through
+// with .range() instead. queryFn is expected to pass { count: 'exact' }
+// so the first page also reports the total, and — this is not optional —
+// end its chain with .order('id') before .range(). Postgres LIMIT/OFFSET
+// has no guaranteed row order without an explicit ORDER BY: two separate
+// .range() requests against the same unordered query can each pick a
+// different arbitrary ordering, so pages can silently overlap (duplicate
+// rows) or gap (missed rows) even though every page's own row count and
+// the overall total stay identical. That was live and confirmed here —
+// the low-attendance endpoint returned a different set of "below
+// threshold" students, sometimes none, on back-to-back calls against
+// completely unchanged data, with both fetch sizes (1069 students, 50400
+// attendance rows) reported identically every time. Only the row
+// *identities* were shuffling between pages. Adding .order('id') to
+// every call site fixed it. Every caller of this helper must sort by
+// something unique, or this bug comes back.
+//
+// Fired one page at a time (await in a loop), a 19k-row fetch took ~20
+// sequential round-trips — the dashboard endpoint was taking 29s end to
+// end. Pages are now requested in small concurrent batches instead —
+// far faster, without needing to fire everything at once.
+export async function fetchAllRows<T>(queryFn: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any; count?: number | null }>): Promise<T[]> {
+  const PAGE = 1000
+  const BATCH_CONCURRENCY = 6
+  const first = await queryFn(0, PAGE - 1)
+  if (first.error) throw new Error(first.error.message)
+  const firstPage = first.data ?? []
+  const total = first.count ?? null
+  if (total == null || firstPage.length < PAGE) return firstPage
+
+  const remainingPages = Math.ceil((total - PAGE) / PAGE)
+  const all: T[] = [...firstPage]
+  for (let batchStart = 0; batchStart < remainingPages; batchStart += BATCH_CONCURRENCY) {
+    const batchLength = Math.min(BATCH_CONCURRENCY, remainingPages - batchStart)
+    const batch = await Promise.all(
+      Array.from({ length: batchLength }, (_, j) => {
+        const pageIndex = batchStart + j
+        const from = PAGE * (pageIndex + 1)
+        return queryFn(from, from + PAGE - 1).then(r => {
+          if (r.error) throw new Error(r.error.message)
+          return r.data ?? []
+        })
+      }),
+    )
+    all.push(...batch.flat())
+  }
+  return all
+}

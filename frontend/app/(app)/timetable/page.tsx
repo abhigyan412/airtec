@@ -54,6 +54,8 @@ export default function TimetablePage() {
   const [gridOrList,      setGridOrList]      = useState<'grid'|'list'>('grid')
   const [showAdd,         setShowAdd]         = useState(false)
   const [addingDay,       setAddingDay]       = useState(1)
+  const [lockedPeriod,    setLockedPeriod]    = useState<{ number: number; start: string; end: string } | null>(null)
+  const [showBulkLunch,   setShowBulkLunch]   = useState(false)
   const [showPrint,       setShowPrint]       = useState(false)
   const qc = useQueryClient()
 
@@ -120,6 +122,14 @@ export default function TimetablePage() {
   const allPeriods = Array.from(new Set<number>((timetableData ?? []).map((p: any) => p.period_number as number))).sort((a, b) => Number(a) - Number(b))
   const timeByPeriod: Record<number, string> = {}
   for (const p of timetableData ?? []) timeByPeriod[p.period_number] = `${p.start_time?.slice(0,5)}–${p.end_time?.slice(0,5)}`
+  // A break (Lunch, etc.) occupies a period_number slot like any other row
+  // for scheduling purposes, but it was never a taught period — labeling
+  // its row "P5" implied otherwise. Rows entirely made of breaks show
+  // their own name instead of a period number.
+  const breakLabelByPeriod: Record<number, string> = {}
+  for (const p of timetableData ?? []) {
+    if (p.is_break) breakLabelByPeriod[p.period_number] = p.subject_name
+  }
 
   // Conflict detection — teacher double booked
   const conflicts: Set<string> = new Set()
@@ -208,9 +218,18 @@ export default function TimetablePage() {
                 <Printer className="w-4 h-4" /> Print
               </Button>
             )}
+            {viewMode !== 'free' && canManage && (
+              <Button variant="outline" onClick={() => setShowBulkLunch(true)}>
+                <Clock className="w-4 h-4" /> Set Lunch Break
+              </Button>
+            )}
           </>
         }
       />
+
+      {showBulkLunch && (
+        <BulkLunchModal onClose={() => { setShowBulkLunch(false); qc.invalidateQueries({ queryKey: ['timetable'] }) }} />
+      )}
 
       {viewMode === 'free' ? (
         <FreeFacultyView />
@@ -320,7 +339,7 @@ export default function TimetablePage() {
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-foreground">{DAY_SHORT[idx]}</span>
                         {viewMode === 'class' && canManage && (
-                          <button onClick={() => { setAddingDay(idx + 1); setShowAdd(true) }} aria-label={`Add period on ${day}`}
+                          <button onClick={() => { setAddingDay(idx + 1); setLockedPeriod(null); setShowAdd(true) }} aria-label={`Add period on ${day}`}
                             className="-my-2 flex h-9 w-9 items-center justify-center rounded-md text-primary/60 transition-colors hover:bg-accent hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                             <Plus className="w-3.5 h-3.5" />
                           </button>
@@ -334,7 +353,9 @@ export default function TimetablePage() {
                 {allPeriods.map((periodNum) => (
                   <tr key={periodNum} className="border-b border-border last:border-b-0">
                     <td className="px-4 py-2 border-r border-border sticky left-0 bg-card z-10">
-                      <p className="text-xs font-bold text-foreground">P{periodNum}</p>
+                      <p className="text-xs font-bold text-foreground">
+                        {breakLabelByPeriod[Number(periodNum)] ?? `P${periodNum}`}
+                      </p>
                       <p className="text-xs text-muted-foreground">{timeByPeriod[Number(periodNum)]}</p>
                     </td>
                     {[1,2,3,4,5,6].map(dayNum => {
@@ -370,7 +391,12 @@ export default function TimetablePage() {
                               )}
                             </div>
                           ) : viewMode === 'class' && canManage ? (
-                            <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }} aria-label={`Add period on ${DAY_SHORT[dayNum - 1]}, period ${periodNum}`}
+                            <button onClick={() => {
+                              setAddingDay(dayNum)
+                              const known = (timetableData ?? []).find((p: any) => p.period_number === periodNum)
+                              setLockedPeriod(known ? { number: periodNum, start: known.start_time?.slice(0, 5), end: known.end_time?.slice(0, 5) } : null)
+                              setShowAdd(true)
+                            }} aria-label={`Add period on ${DAY_SHORT[dayNum - 1]}, period ${periodNum}`}
                               className="w-full h-14 border-2 border-dashed border-border rounded-xl text-muted-foreground/40 hover:border-primary/40 hover:text-primary/60 transition-all flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                               <Plus className="w-4 h-4" />
                             </button>
@@ -392,7 +418,7 @@ export default function TimetablePage() {
                           ? 'This class has no timetable for the week. Add a period to any day to start building it.'
                           : 'This teacher has no periods assigned this week.'}
                         action={viewMode === 'class' && canManage ? (
-                          <Button onClick={() => { setAddingDay(1); setShowAdd(true) }}>
+                          <Button onClick={() => { setAddingDay(1); setLockedPeriod(null); setShowAdd(true) }}>
                             <Plus className="w-4 h-4" /> Add Period
                           </Button>
                         ) : undefined}
@@ -424,7 +450,7 @@ export default function TimetablePage() {
                 <div className="flex items-center justify-between px-5 py-3 bg-muted/50 border-b border-border">
                   <h3 className="font-semibold text-foreground text-sm">{day}</h3>
                   {viewMode === 'class' && canManage && (
-                    <button onClick={() => { setAddingDay(dayNum); setShowAdd(true) }}
+                    <button onClick={() => { setAddingDay(dayNum); setLockedPeriod(null); setShowAdd(true) }}
                       className="-my-1.5 flex h-9 items-center gap-1 rounded-md px-2 text-xs font-medium text-primary transition-colors hover:bg-accent hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                       <Plus className="w-3.5 h-3.5" /> Add Period
                     </button>
@@ -453,7 +479,7 @@ export default function TimetablePage() {
                               </button>
                             )}
                           </div>
-                          <span className="opacity-70">P{p.period_number} · {p.start_time?.slice(0,5)}–{p.end_time?.slice(0,5)}</span>
+                          <span className="opacity-70">{!p.is_break && `P${p.period_number} · `}{p.start_time?.slice(0,5)}–{p.end_time?.slice(0,5)}</span>
                           {viewMode === 'teacher' && p.classes?.name && <span className="font-medium opacity-80">{p.classes.name}</span>}
                           {p.room && <span className="opacity-50">{p.room}</span>}
                         </div>
@@ -475,7 +501,7 @@ export default function TimetablePage() {
           sectionId={selectedSection || undefined}
           dayOfWeek={addingDay}
           existingPeriods={byDay[addingDay] ?? []}
-          allPeriods={timetableData ?? []}
+          lockedPeriod={lockedPeriod}
           onClose={() => { setShowAdd(false); qc.invalidateQueries({ queryKey: ['timetable'] }) }}
         />
       )}
@@ -528,22 +554,22 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (dayOf
   }
 
   const flagged: any[] = data?.flagged ?? []
+  const morningNoCheckin: any[] = data?.morning_no_checkin ?? []
   const periodsInProgress: number = data?.periods_in_progress ?? 0
 
-  // A school day, but no period is running this exact minute (before
-  // first bell, during a gap, after the last period) — distinct from
-  // "classes in session and all covered," so it needs its own message
-  // rather than silently looking identical to "all good."
-  if (periodsInProgress === 0) {
-    return (
-      <div className="bg-muted/50 border border-border rounded-2xl px-5 py-4 flex items-center gap-3">
-        <Clock className="w-4 h-4 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">No class is in session right now — check back once periods start.</p>
-      </div>
-    )
-  }
-
-  if (flagged.length === 0) {
+  // Nothing live right now AND nothing lingering from this morning either
+  // — the two states below stay distinct rather than collapsing into one
+  // generic "nothing to see," since "no class running this minute" and
+  // "everything running right now is covered" mean different things.
+  if (flagged.length === 0 && morningNoCheckin.length === 0) {
+    if (periodsInProgress === 0) {
+      return (
+        <div className="bg-muted/50 border border-border rounded-2xl px-5 py-4 flex items-center gap-3">
+          <Clock className="w-4 h-4 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">No class is in session right now — check back once periods start.</p>
+        </div>
+      )
+    }
     return (
       <div className="bg-success/10 border border-success/30 rounded-2xl px-5 py-4 flex items-center gap-3">
         <UserCheck className="w-4 h-4 text-success" />
@@ -553,32 +579,62 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (dayOf
   }
 
   return (
-    <div className="bg-destructive/10 border border-destructive/30 rounded-2xl p-5">
-      <div className="flex items-center gap-2 mb-4">
-        <AlertTriangle className="w-4 h-4 text-destructive" />
-        <h3 className="font-semibold text-destructive">Classes Needing Immediate Attention</h3>
-        <span className="text-xs text-destructive/70">({flagged.length} right now)</span>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {flagged.map((f: any) => (
-          <div key={f.period_id} className="bg-card rounded-xl border border-destructive/20 p-4 flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-foreground">
-                {f.class_name}{f.section_name ? ` - ${f.section_name}` : ''} · {f.subject_name}
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                P{f.period_number} · {f.start_time?.slice(0, 5)}–{f.end_time?.slice(0, 5)} · {f.teacher_name}{f.room ? ` · ${f.room}` : ''}
-              </p>
-              <span className={cn('inline-block mt-2 px-2 py-0.5 rounded-full text-[11px] font-semibold', REASON_STYLES[f.reason] ?? 'bg-muted text-muted-foreground')}>
-                {f.reason_label}
-              </span>
-            </div>
-            <Button size="sm" onClick={() => onFindSubstitute(data.day_of_week, f)}>
-              Find Substitute
-            </Button>
+    <div className="space-y-3">
+      {flagged.length > 0 && (
+        <div className="bg-destructive/10 border border-destructive/30 rounded-2xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <AlertTriangle className="w-4 h-4 text-destructive" />
+            <h3 className="font-semibold text-destructive">Classes Needing Immediate Attention</h3>
+            <span className="text-xs text-destructive/70">({flagged.length} right now)</span>
           </div>
-        ))}
-      </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {flagged.map((f: any) => (
+              <div key={f.period_id} className="bg-card rounded-xl border border-destructive/20 p-4 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-foreground">
+                    {f.class_name}{f.section_name ? ` - ${f.section_name}` : ''} · {f.subject_name}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    P{f.period_number} · {f.start_time?.slice(0, 5)}–{f.end_time?.slice(0, 5)} · {f.teacher_name}{f.room ? ` · ${f.room}` : ''}
+                  </p>
+                  <span className={cn('inline-block mt-2 px-2 py-0.5 rounded-full text-[11px] font-semibold', REASON_STYLES[f.reason] ?? 'bg-muted text-muted-foreground')}>
+                    {f.reason_label}
+                  </span>
+                </div>
+                <Button size="sm" onClick={() => onFindSubstitute(data.day_of_week, f)}>
+                  Find Substitute
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cumulative, unlike the block above — stays listed past their own
+          period ending, since "never showed up this morning" doesn't stop
+          being true just because a later period started. */}
+      {morningNoCheckin.length > 0 && (
+        <div className="bg-warning/10 border border-warning/30 rounded-2xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <AlertTriangle className="w-4 h-4 text-warning" />
+            <h3 className="font-semibold text-warning">Not Checked In Since This Morning</h3>
+            <span className="text-xs text-warning/70">({morningNoCheckin.length})</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {morningNoCheckin.map((m: any) => (
+              <div key={m.teacher_id} className="bg-card rounded-xl border border-warning/20 p-4">
+                <p className="text-sm font-semibold text-foreground">{m.teacher_name}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Missed {m.periods_missed.length} period{m.periods_missed.length !== 1 ? 's' : ''} this morning:{' '}
+                  {m.periods_missed.map((p: any) =>
+                    `P${p.period_number} ${p.subject_name}${p.class_name ? ` (${p.class_name}${p.section_name ? ` - ${p.section_name}` : ''})` : ''}`,
+                  ).join(', ')}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -836,7 +892,7 @@ function SubstituteModal({ flagged, onClose }: { flagged: any; onClose: () => vo
                     <BookOpen className="w-3 h-3" /> {t.subjects.join(', ')}
                   </p>
                 </div>
-                <span className="text-[11px] font-semibold text-success bg-success/10 rounded-full px-2 py-0.5">Present</span>
+                <span className="text-[11px] font-semibold text-success bg-success/10 rounded-full px-2 py-0.5">Free</span>
               </div>
             ))}
           </div>
@@ -855,7 +911,7 @@ function SubstituteModal({ flagged, onClose }: { flagged: any; onClose: () => vo
                     </p>
                   )}
                 </div>
-                <span className="text-[11px] font-semibold text-success bg-success/10 rounded-full px-2 py-0.5">Present</span>
+                <span className="text-[11px] font-semibold text-success bg-success/10 rounded-full px-2 py-0.5">Free</span>
               </div>
             ))}
           </div>
@@ -872,14 +928,22 @@ function SubstituteModal({ flagged, onClose }: { flagged: any; onClose: () => vo
 }
 
 // ── ADD PERIOD MODAL ──────────────────────────────────────────
-function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPeriods, onClose }: {
-  classId: string; sectionId?: string; dayOfWeek: number; existingPeriods: any[]; allPeriods: any[]; onClose: () => void
+// lockedPeriod is set when this was opened from a specific empty grid
+// cell (as opposed to the day header's generic "Add Period" button) — the
+// slot is already determined by which cell was clicked, so period number
+// and start/end time are pre-filled from it and shown read-only instead
+// of asking the admin to re-enter values the grid already told them.
+function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, lockedPeriod, onClose }: {
+  classId: string; sectionId?: string; dayOfWeek: number; existingPeriods: any[]
+  lockedPeriod?: { number: number; start: string; end: string } | null; onClose: () => void
 }) {
   const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
   const nextPeriod = existingPeriods.length > 0 ? Math.max(...existingPeriods.map(p => p.period_number)) + 1 : 1
   const lastEnd = existingPeriods.length > 0 ? existingPeriods[existingPeriods.length-1]?.end_time?.slice(0,5) ?? '08:00' : '08:00'
 
-  const [form, setForm] = useState({ day_of_week: dayOfWeek, period_number: nextPeriod, start_time: lastEnd, end_time: '', subject_name: '', room: '', is_break: false })
+  const [form, setForm] = useState(lockedPeriod
+    ? { day_of_week: dayOfWeek, period_number: lockedPeriod.number, start_time: lockedPeriod.start, end_time: lockedPeriod.end, subject_name: '', room: '', is_break: false }
+    : { day_of_week: dayOfWeek, period_number: nextPeriod, start_time: lastEnd, end_time: '', subject_name: '', room: '', is_break: false })
   const [teacherId, setTeacherId] = useState('')
   const [loading, setLoading] = useState(false)
   const [conflict, setConflict] = useState<string | null>(null)
@@ -898,23 +962,71 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
     queryFn: () => classesApi.subjects.list(classId).then(r => r.data),
   })
 
+  // The selected teacher's FULL school-wide schedule — this modal only
+  // ever has this one class/section's periods loaded (existingPeriods),
+  // so without a separate fetch a clash in a different class would go
+  // undetected here until the save itself gets rejected by the backend.
+  const { data: teacherSchedule } = useQuery({
+    queryKey: ['teacher-schedule', teacherId],
+    queryFn: () => timetableApi.get({ teacher_id: teacherId }).then(r => r.data),
+    enabled: !!teacherId,
+  })
+
+  // Who's already teaching something else, anywhere in the school, at
+  // this exact day+period — reuses the same free-faculty endpoint the
+  // Free Faculty page and substitute-finder already rely on for "who's
+  // busy at this slot", so this dropdown can't disagree with them.
+  const { data: freeFacultyData } = useQuery({
+    queryKey: ['add-period-busy', form.day_of_week, form.period_number],
+    queryFn: () => timetableApi.freeFaculty(form.day_of_week, form.period_number).then(r => r.data),
+    enabled: !form.is_break && !!form.day_of_week && !!form.period_number,
+  })
+  const busyTeacherIds = new Set((freeFacultyData?.busy ?? []).map((b: any) => b.teacher_id))
+
   const calcEnd = (start: string, mins = 45) => {
     const [h, m] = start.split(':').map(Number)
     const t = h * 60 + m + mins
     return `${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}`
   }
 
-  const checkConflict = (tid: string, day: number, period: number) => {
-    if (!tid) { setConflict(null); return }
-    const clash = allPeriods.find((p: any) =>
-      p.teacher_id === tid && p.day_of_week === day && p.period_number === period && !p.is_break
+  // Busy (already teaching another class this slot) is a hard exclusion —
+  // never suggest a double-booking, even in the "nobody qualifies" fallback
+  // below. Qualification on top of that still degrades gracefully so a
+  // genuinely new subject/slot combo doesn't dead-end the picker.
+  const availableTeachers = (teachersData ?? []).filter((t: any) => !busyTeacherIds.has(t.id))
+  const qualifiedTeachers = form.subject_name
+    ? availableTeachers.filter((t: any) => (t.subjects ?? []).includes(form.subject_name))
+    : availableTeachers
+  const noQualifiedTeacher = !!form.subject_name && qualifiedTeachers.length === 0 && availableTeachers.length > 0
+  const teacherOptions = noQualifiedTeacher ? availableTeachers : qualifiedTeachers
+
+  // Only offer subjects that have at least one available (qualified, not
+  // busy this slot) teacher — falls back to the full list if that would
+  // otherwise leave nothing selectable at all (e.g. this school's busiest
+  // slot, where literally everyone is already teaching something).
+  const allSubjectOptions = subjectsData ?? []
+  const availableSubjectOptions = allSubjectOptions.filter((s: any) =>
+    (teachersData ?? []).some((t: any) => !busyTeacherIds.has(t.id) && (t.subjects ?? []).includes(s.name)),
+  )
+  const noAvailableSubject = availableSubjectOptions.length === 0 && allSubjectOptions.length > 0
+  const subjectOptions = noAvailableSubject ? allSubjectOptions : availableSubjectOptions
+
+  // Re-derives whenever the teacher, day, period, or their fetched
+  // schedule changes — an imperative check-on-select can't see the result
+  // of a query that hasn't resolved yet.
+  useEffect(() => {
+    if (!teacherId) { setConflict(null); return }
+    const clash = (teacherSchedule ?? []).find((p: any) =>
+      p.teacher_id === teacherId && p.day_of_week === form.day_of_week && p.period_number === form.period_number && !p.is_break &&
+      !(p.class_id === classId && (p.section_id ?? '') === (sectionId ?? '')),
     )
     if (clash) {
-      setConflict(`${(teachersData ?? []).find((t: any) => t.id === tid)?.full_name ?? 'This teacher'} already has ${clash.subject_name} at this slot`)
+      setConflict(`${(teachersData ?? []).find((t: any) => t.id === teacherId)?.full_name ?? 'This teacher'} already teaches ${clash.classes?.name}${clash.sections?.name ? ` - ${clash.sections.name}` : ''} at this slot`)
     } else {
       setConflict(null)
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacherId, form.day_of_week, form.period_number, teacherSchedule])
 
   const handleSave = async () => {
     if (!form.subject_name && !form.is_break) return toast.error('Subject name required')
@@ -959,26 +1071,39 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
               <div className="space-y-1.5">
                 <Label>Subject *</Label>
                 <Select value={form.subject_name || undefined}
-                  onValueChange={v => setForm(f => ({ ...f, subject_name: v }))}>
+                  onValueChange={v => { setForm(f => ({ ...f, subject_name: v })); setTeacherId('') }}>
                   <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Select subject..." /></SelectTrigger>
                   <SelectContent>
-                    {(subjectsData ?? []).map((s: any) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
+                    {subjectOptions.map((s: any) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                {(subjectsData ?? []).length === 0 && (
+                {allSubjectOptions.length === 0 ? (
                   <p className="text-xs text-warning mt-1.5">No subjects set up for this class yet — add some in Settings → Classes & Sections.</p>
+                ) : noAvailableSubject && (
+                  <p className="text-xs text-muted-foreground mt-1.5">No subject has a free teacher for this slot — showing everyone.</p>
                 )}
               </div>
               <div className="space-y-1.5">
                 <Label>Teacher</Label>
                 <Select value={teacherId || 'none'}
-                  onValueChange={v => { const tid = v === 'none' ? '' : v; setTeacherId(tid); checkConflict(tid, form.day_of_week, form.period_number) }}>
+                  onValueChange={v => setTeacherId(v === 'none' ? '' : v)}>
                   <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">No teacher assigned</SelectItem>
-                    {(teachersData ?? []).map((t: any) => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
+                    {teacherOptions.map((t: any) => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                {/* Once a subject is picked, only teachers qualified for it
+                    (per staff_profiles.subjects, or derived from their
+                    weekly timetable when that hasn't been set) are listed —
+                    same qualification rule /timetable/substitutes uses, so
+                    "who can teach this" means the same thing everywhere in
+                    the app. Falls back to showing everyone when nobody
+                    qualifies yet, so a brand-new subject doesn't leave the
+                    dropdown empty with no way to assign anyone. */}
+                {noQualifiedTeacher && (
+                  <p className="text-xs text-muted-foreground mt-1.5">No teacher is set up for {form.subject_name} yet — showing everyone.</p>
+                )}
                 {conflict && (
                   <p className="text-xs text-destructive mt-1.5 flex items-center gap-1">
                     <AlertTriangle className="w-3 h-3" /> {conflict}
@@ -1007,19 +1132,22 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label>Period No.</Label>
-              <Input type="number" min="1" max="12" value={form.period_number}
-                onChange={e => { const v = Number(e.target.value); setForm(f => ({ ...f, period_number: v })); checkConflict(teacherId, form.day_of_week, v) }} />
+              <Input type="number" min="1" max="12" value={form.period_number} disabled={!!lockedPeriod}
+                onChange={e => setForm(f => ({ ...f, period_number: Number(e.target.value) }))} />
             </div>
             <div className="space-y-1.5">
               <Label>Start</Label>
-              <Input type="time" value={form.start_time}
+              <Input type="time" value={form.start_time} disabled={!!lockedPeriod}
                 onChange={e => setForm(f => ({ ...f, start_time: e.target.value, end_time: calcEnd(e.target.value, f.is_break ? 30 : 45) }))} />
             </div>
             <div className="space-y-1.5">
               <Label>End</Label>
-              <Input type="time" value={form.end_time} onChange={e => setForm(f => ({ ...f, end_time: e.target.value }))} />
+              <Input type="time" value={form.end_time} disabled={!!lockedPeriod} onChange={e => setForm(f => ({ ...f, end_time: e.target.value }))} />
             </div>
           </div>
+          {lockedPeriod && (
+            <p className="text-xs text-muted-foreground -mt-2">Locked to the slot you clicked — cancel and use "Add Period" in the day header instead if you meant a different period.</p>
+          )}
 
           {/* Day picker */}
           <div className="space-y-1.5">
@@ -1028,7 +1156,7 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, allPer
               {/* Single letters repeat (Tue/Thu), so each button carries the
                   full day name for screen readers. */}
               {['M','T','W','T','F','S'].map((d, i) => (
-                <button key={i} onClick={() => { setForm(f => ({ ...f, day_of_week: i+1 })); checkConflict(teacherId, i+1, form.period_number) }}
+                <button key={i} onClick={() => setForm(f => ({ ...f, day_of_week: i+1 }))}
                   aria-label={DAYS[i]} aria-pressed={form.day_of_week === i+1}
                   className={cn('h-9 rounded-lg text-xs font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                     form.day_of_week === i+1 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70')}>
@@ -1123,6 +1251,111 @@ function PrintModal({ timetableData, label, viewMode, onClose }: {
             <Button className="flex-1" onClick={handlePrint}>Open Print Preview</Button>
           </div>
         </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── BULK LUNCH MODAL ──────────────────────────────────────────
+// Adds a break period (Lunch by default) across every selected
+// class/section on every selected day in one action, instead of clicking
+// through Add Period 96 times. The backend shifts every existing period
+// at or after the chosen time to make room, so this can be dropped in
+// mid-schedule (e.g. between Period IV and V) without overwriting
+// whatever already occupies that slot number.
+function BulkLunchModal({ onClose }: { onClose: () => void }) {
+  const [startTime, setStartTime] = useState('')
+  const [endTime, setEndTime] = useState('')
+  const [label, setLabel] = useState('Lunch')
+  const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5, 6])
+  const [selectedClasses, setSelectedClasses] = useState<string[] | null>(null) // null = all classes
+  const [loading, setLoading] = useState(false)
+
+  const { data: classesData } = useQuery({
+    queryKey: ['classes'],
+    queryFn: () => admissionApi.classes().then(r => r.data),
+  })
+
+  const toggleDay = (d: number) => setDays(cur => cur.includes(d) ? cur.filter(x => x !== d) : [...cur, d].sort())
+  const toggleClass = (id: string) => setSelectedClasses(cur => {
+    const base = cur ?? (classesData ?? []).map((c: any) => c.id)
+    return base.includes(id) ? base.filter((x: string) => x !== id) : [...base, id]
+  })
+  const isClassChecked = (id: string) => selectedClasses === null || selectedClasses.includes(id)
+
+  const handleSave = async () => {
+    if (!startTime || !endTime) return toast.error('Start and end time required')
+    if (!days.length) return toast.error('Select at least one day')
+    setLoading(true)
+    try {
+      const r = await timetableApi.bulkLunch({
+        start_time: startTime, end_time: endTime, subject_name: label, days,
+        class_ids: selectedClasses ?? undefined,
+      })
+      toast.success(`${label} added across ${r.data.lunch_periods_created} class/day slots (${r.data.periods_shifted} existing periods shifted to make room)`)
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Failed to add lunch break')
+    } finally { setLoading(false) }
+  }
+
+  return (
+    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Set Lunch Break — Whole School</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Start</Label>
+              <Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>End</Label>
+              <Input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Label</Label>
+            <Input value={label} onChange={e => setLabel(e.target.value)} placeholder="Lunch" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Days</Label>
+            <div className="grid grid-cols-6 gap-1">
+              {['M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+                <button key={i} onClick={() => toggleDay(i + 1)} aria-label={DAYS[i]} aria-pressed={days.includes(i + 1)}
+                  className={cn('h-9 rounded-lg text-xs font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                    days.includes(i + 1) ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70')}>
+                  {d}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>Classes</Label>
+              <button type="button" onClick={() => setSelectedClasses(selectedClasses === null ? [] : null)}
+                className="text-xs font-medium text-primary hover:underline">
+                {selectedClasses === null ? 'Clear all' : 'Select all'}
+              </button>
+            </div>
+            <div className="max-h-40 overflow-y-auto rounded-xl border border-border p-2 grid grid-cols-2 gap-1">
+              {(classesData ?? []).map((c: any) => (
+                <label key={c.id} className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-accent text-sm cursor-pointer">
+                  <input type="checkbox" checked={isClassChecked(c.id)} onChange={() => toggleClass(c.id)} className="accent-primary" />
+                  {c.name}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={loading}>
+            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Add {label || 'Break'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
