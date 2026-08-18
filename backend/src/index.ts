@@ -32,6 +32,10 @@ import academicsRoutes from './modules/academics/routes'
 import notificationsRoutes from './modules/notifications/routes'
 import teacherRoutes from './modules/teacher/routes'
 import principalRoutes from './modules/principal/routes'
+import timetableRoutes from './modules/timetable/routes'
+import {
+  runAcknowledgementSweep, runMorningSweep, runUnfilledSweep, runWorkloadSweep,
+} from './modules/timetable/services/escalation'
 
 
 
@@ -135,6 +139,7 @@ app.use('/api/academics', academicsRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/teacher', teacherRoutes)
 app.use('/api/principal', principalRoutes)
+app.use('/api/timetable', timetableRoutes)
 
 app.use(notFoundHandler)
 app.use(errorHandler)
@@ -215,6 +220,59 @@ cron.schedule('15 8 * * *', () => {
   runAbscondedSweep()
     .then(result => console.log(`[absconded] flagged:${result.flagged} auto-set:${result.autoSet}`))
     .catch(err => console.error('[absconded] failed:', err))
+})
+
+// ── Timetable ───────────────────────────────────────────────────
+//
+// Acknowledgement chasing, every 5 minutes during the school day. An
+// arrangement nobody has acknowledged looks exactly like a handled one
+// from the office, right up until thirty children sit unsupervised, so
+// the reminder-then-escalate clock has to run without anyone
+// remembering to look. Reminder and escalation thresholds are per
+// school (timetable_settings); this tick only decides how often the
+// clock is read.
+//
+// 06:00-16:00 Mon-Sat only: outside those hours there is nothing to
+// escalate to, and waking every five minutes all night to find nothing
+// is pure noise in the logs.
+cron.schedule('*/5 6-16 * * 1-6', () => {
+  runAcknowledgementSweep()
+    .then(r => {
+      if (r.reminded || r.escalated) {
+        console.log(`[timetable-ack] reminded ${r.reminded}, escalated ${r.escalated} across ${r.schools} school(s)`)
+      }
+    })
+    .catch(err => console.error('[timetable-ack] failed:', err?.message))
+})
+
+// The morning routine: pull approved leave into today's arrangement
+// queue, then flag teachers with a class under way and no check-in.
+// 06:45, before the first bell, so cover can be arranged rather than
+// discovered. Same manual-trigger caveat as every other sweep here —
+// POST /api/timetable/absences/sync-leave and .../absences/detect are
+// the per-school equivalents.
+cron.schedule('45 6 * * 1-6', () => {
+  runMorningSweep()
+    .then(r => console.log(`[timetable-morning] ${r.schools} school(s): ${r.leaveSynced} leave absence(s) synced, ${r.detected} proposed from attendance`))
+    .catch(err => console.error('[timetable-morning] failed:', err?.message))
+})
+
+// Periods still uncovered, checked twice: once at first bell and once
+// after the morning break. Deliberately not hourly — a manager who is
+// already working through the queue does not need reminding of it.
+cron.schedule('0 8,11 * * 1-6', () => {
+  runUnfilledSweep()
+    .then(r => { if (r.alerted) console.log(`[timetable-unfilled] ${r.alerted} period(s) across ${r.schools} school(s)`) })
+    .catch(err => console.error('[timetable-unfilled] failed:', err?.message))
+})
+
+// Workload breaches, Mondays at 07:30. Weekly rather than daily because
+// a teaching load only changes when the timetable does, and a daily
+// repeat of the same three names is how an alert gets muted.
+cron.schedule('30 7 * * 1', () => {
+  runWorkloadSweep()
+    .then(r => { if (r.alerted) console.log(`[timetable-workload] ${r.alerted} teacher(s) over limit across ${r.schools} school(s)`) })
+    .catch(err => console.error('[timetable-workload] failed:', err?.message))
 })
 
 app.listen(PORT, () => {

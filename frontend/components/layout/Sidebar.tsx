@@ -9,6 +9,7 @@ import {
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
   Network, UserCheck2, Send, Grid3X3, User, Layers, Receipt, Tag, FileText, Lock,
+  SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -99,6 +100,16 @@ const NAV: NavItem[] = [
       { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view' },
       { label: 'Teacher View', href: '/timetable?view=teacher', icon: User, permission: 'timetable.view', indent: true },
       { label: 'Free Faculty', href: '/timetable?view=free', icon: UserCheck, roles: ['principal', 'school_admin'], indent: true },
+      // Every teacher's own page: their week, the cover they have been
+      // given, and their reserved periods. Gated on nothing but a login,
+      // because it only ever shows the caller their own data — the
+      // handler resolves identity from the token and ignores any id.
+      { label: 'My Week', href: '/timetable/my-week', icon: CalendarClock },
+      { label: 'Arrangements', href: '/timetable/arrangements', icon: UserCheck2, permission: 'arrangement.view' },
+      { label: 'Workload', href: '/timetable/workload', icon: Gauge, permission: 'timetable.workload_view' },
+      { label: 'Generate', href: '/timetable/generate', icon: Wand2, permission: 'timetable.generate' },
+      { label: 'Import', href: '/timetable/import', icon: FileSpreadsheet, permission: 'timetable.import' },
+      { label: 'Setup', href: '/timetable/setup', icon: SlidersHorizontal, permission: 'timetable.view', lockUnless: 'timetable.setup_manage' },
     ],
   },
   { label: 'Homework', href: '/homework', icon: NotebookPen, permission: 'homework.view' },

@@ -4,7 +4,22 @@ import { seedDefaultRoles, LEGACY_ROLE_TO_RBAC_ROLE } from './modules/rbac/seed'
 import { defaultSectionNamesForClass, DEFAULT_CLASSES } from './shared/utils/helpers'
 import { seedFees } from './seedFees'
 import { seedExtras } from './seedExtras'
+// The curriculum, the shape of the school day and the scheduling logic all
+// live in seedTimetable.ts. Not for tidiness: seed.ts runs on import
+// (`seed().catch(...)` at the foot of this file), so nothing here can be
+// imported by a test. Keeping the parts that can be *wrong* rather than
+// merely absent in a pure module means seedTimetable.test.ts asserts the
+// real constants instead of a copy that drifts.
+import {
+  STREAM_PLANS, allSubjectAllocations, planFor,
+  subjectsFor, classSubjects,
+  REGULAR_DAY, SATURDAY_DAY, SCHOOL_DAYS, shapeFor, teachingIn,
+  REGULAR_TEACHING, WEEKLY_TEACHING_PERIODS,
+  benchFor, buildTimetable, LayoutSlot,
+} from './seedTimetable'
 import { avatarSvg } from './shared/utils/avatar'
+import { createClient } from '@supabase/supabase-js'
+import WebSocket from 'ws'
 import type { NotificationType } from './shared/utils/notifications'
 
 // ═══════════════════════════════════════════════════════════════
@@ -24,6 +39,14 @@ import type { NotificationType } from './shared/utils/notifications'
 // unless --force. To rebuild fee data on an EXISTING school, use seedFees.ts
 // (`npm run seed:fees`), which works in place.
 // ═══════════════════════════════════════════════════════════════
+
+// Auth accounts live outside public.users and nothing cascades to them,
+// so --reset has to delete them explicitly.
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { autoRefreshToken: false, persistSession: false }, realtime: { transport: WebSocket as any } },
+)
 
 // ── Tunables ─────────────────────────────────────────────────
 // 47 sections = 13 classes (Nursery→Class 10) × A/B/C + 2 senior classes × 4
@@ -127,37 +150,6 @@ const LAST_NAMES = ['Sharma', 'Verma', 'Gupta', 'Singh', 'Mishra', 'Agarwal', 'T
 const FATHER_NAMES = ['Rajesh', 'Suresh', 'Mahesh', 'Ramesh', 'Dinesh', 'Ganesh', 'Naresh', 'Umesh', 'Lokesh', 'Yogesh', 'Mukesh', 'Hitesh', 'Rakesh', 'Paresh', 'Jignesh', 'Alpesh', 'Bhavesh', 'Ritesh', 'Nilesh', 'Kamlesh', 'Harish', 'Manish', 'Girish', 'Satish', 'Jagdish', 'Ashok', 'Vinod', 'Pramod', 'Sanjay', 'Anil']
 const MOTHER_NAMES = ['Sunita', 'Anita', 'Kavita', 'Savita', 'Rekha', 'Meena', 'Geeta', 'Seema', 'Neeta', 'Rita', 'Poonam', 'Shobha', 'Usha', 'Lata', 'Asha', 'Nirmala', 'Pushpa', 'Sarita', 'Vandana', 'Archana']
 
-// ── Curriculum ───────────────────────────────────────────────
-// Nursery/LKG/UKG sit at numeric_level 0 and below. Without their own list they
-// would inherit the primary timetable and be taught EVS and General Knowledge.
-const PRE_PRIMARY_SUBJECTS = ['English', 'Hindi', 'Numbers', 'Rhymes & Story', 'Art & Craft']
-const PRIMARY_SUBJECTS = ['English', 'Hindi', 'Mathematics', 'EVS', 'General Knowledge', 'Art & Craft']
-const MIDDLE_SUBJECTS = ['English', 'Hindi', 'Mathematics', 'Science', 'Social Science', 'Computer Science']
-const STREAM_SUBJECTS: Record<string, string[]> = {
-  PCM: ['English', 'Physics', 'Chemistry', 'Mathematics', 'Computer Science'],
-  PCB: ['English', 'Physics', 'Chemistry', 'Biology', 'Physical Education'],
-  Commerce: ['English', 'Accountancy', 'Business Studies', 'Economics', 'Mathematics'],
-  Humanities: ['English', 'History', 'Political Science', 'Geography', 'Economics'],
-}
-/** Subjects actually taught to one section (stream-aware for 11–12). */
-/**
- * What one section is actually taught. Must stay a subset of classSubjects()
- * for the same level — the timetable, exams and homework built from this all
- * store subject_name, and a name outside the class's own subject catalogue is
- * a period nobody can trace back to a subject.
- */
-function subjectsFor(level: number, sectionName: string): string[] {
-  if (level >= 11) return STREAM_SUBJECTS[sectionName] ?? STREAM_SUBJECTS.PCM
-  if (level <= 0) return PRE_PRIMARY_SUBJECTS
-  return level <= 5 ? PRIMARY_SUBJECTS : MIDDLE_SUBJECTS
-}
-/** Everything examinable at a class level — the union across streams. */
-function classSubjects(level: number): string[] {
-  if (level >= 11) return Array.from(new Set(Object.values(STREAM_SUBJECTS).flat()))
-  if (level <= 0) return PRE_PRIMARY_SUBJECTS
-  return level <= 5 ? PRIMARY_SUBJECTS : MIDDLE_SUBJECTS
-}
-
 // ── Image generation (no deps): initials avatars + a school logo,
 //    uploaded to Supabase Storage so photo_url points at a real file. ──
 function logoSvg(): string {
@@ -219,7 +211,85 @@ async function seed() {
   const { data: existing } = await supabase.from('schools').select('id, name')
   const realSchools = (existing ?? []).filter(x => !x.name.startsWith('__vitest'))
 
-  if (realSchools.length && !process.argv.includes('--force')) {
+  if (realSchools.length && process.argv.includes('--reset')) {
+    // A genuine reseed: tear the old demo school down first.
+    //
+    // --force ADDS a second school, which is almost never what "reseed"
+    // means and leaves the first one's students, invoices and timetable
+    // in place alongside the new lot. This removes them.
+    console.log('♻️  --reset: removing the existing demo school(s) first\n')
+    for (const old of realSchools) {
+      console.log(`   ${old.name} (${old.id})`)
+
+      // Auth accounts are not rows in public.users and nothing cascades to
+      // them. Left behind, they collide with the new seed's emails and
+      // every staff insert fails with "email already registered".
+      const { data: staleUsers } = await supabase.from('users').select('id').eq('school_id', old.id)
+      let removedAuth = 0
+      for (const u of staleUsers ?? []) {
+        const { error } = await supabaseAdmin.auth.admin.deleteUser(u.id)
+        if (!error) removedAuth++
+      }
+
+      // The teardown runs from here, one DELETE per table per pass.
+      //
+      // school_force_delete does the same job server-side and does it
+      // correctly, but in a single transaction — which is exactly what
+      // the API gateway will not allow for ~100k rows, whatever the
+      // database's own statement_timeout says. Issuing each DELETE as its
+      // own request keeps every statement small, and retrying on foreign
+      // key violations lets the order sort itself out rather than
+      // requiring a hand-maintained dependency list.
+      //
+      // The append-only ledger goes first through its own sanctioned door
+      // (fee_ledger_force_delete, 20260827000000); nothing else can touch
+      // it, cascade included.
+      const { error: ledgerErr } =
+        await supabase.rpc('fee_ledger_force_delete', { p_school_id: old.id })
+      if (ledgerErr) {
+        console.error(`\n✖ Could not clear the fee ledger: ${ledgerErr.message}`)
+        process.exit(1)
+      }
+
+      const { data: scoped, error: listErr } = await supabase.rpc('school_scoped_tables')
+      if (listErr) {
+        console.error(`\n✖ Could not list the school's tables: ${listErr.message}`)
+        process.exit(1)
+      }
+
+      let pending: string[] = (scoped as string[]) ?? []
+      let cleared = 0
+      for (let pass = 1; pass <= 12 && pending.length; pass++) {
+        const stillBlocked: string[] = []
+        let progressed = false
+        for (const table of pending) {
+          const { error } = await supabase.from(table).delete().eq('school_id', old.id)
+          if (!error) { progressed = true; cleared++; continue }
+          // 23503 is a foreign key violation: something downstream still
+          // points here. Retry once this pass has cleared it.
+          if (/foreign key|violates/i.test(error.message)) stillBlocked.push(table)
+          else { progressed = true }   // nothing to delete, or not our problem
+        }
+        if (!progressed) break
+        pending = stillBlocked
+        if (pending.length) process.stdout.write(`     pass ${pass}: ${pending.length} table(s) still blocked\r`)
+      }
+      if (pending.length) {
+        console.error(`\n✖ Could not clear: ${pending.join(', ')}`)
+        process.exit(1)
+      }
+
+      const { data: summary, error: delErr } =
+        await supabase.rpc('school_force_delete', { p_school_id: old.id })
+      if (delErr) {
+        console.error(`\n✖ Could not remove ${old.name}: ${delErr.message}`)
+        process.exit(1)
+      }
+      const s = summary as any
+      console.log(`     cleared ${cleared} table(s), removed ${s?.users ?? 0} users ` +
+        `and ${removedAuth} auth account(s)          \n`)
+    }
+  } else if (realSchools.length && !process.argv.includes('--force')) {
     console.error('\n✖ This database already has a school:\n')
     realSchools.forEach(x => console.error(`   ${x.id}  ${x.name}`))
     console.error(`
@@ -227,8 +297,9 @@ async function seed() {
   and payment would be duplicated under a second school.
 
   What you probably want:
+     npm run seed -- --reset    replace it: delete the old school, seed a fresh one
      npm run seed:fees          regenerate fee data on the existing school
-     npm run seed -- --force    really do add a second school
+     npm run seed -- --force    really do add a SECOND school alongside it
 `)
     process.exit(1)
   }
@@ -365,15 +436,32 @@ async function seed() {
     Economics: 'ECO', History: 'HIS', 'Political Science': 'POL', Geography: 'GEO',
     'Physical Education': 'PE', 'Art & Craft': 'ART', 'General Knowledge': 'GK',
     Music: 'MUS', Numbers: 'NUM', 'Rhymes & Story': 'RHY',
+    Games: 'GMS', Library: 'LIB',
   }
-  const ELECTIVES = new Set(['Physical Education', 'Art & Craft', 'General Knowledge', 'Music'])
+  const ELECTIVES = new Set(['Physical Education', 'Art & Craft', 'General Knowledge', 'Music', 'Games', 'Library'])
+  // Subjects carry their scheduling metadata from the curriculum: where
+  // they have to happen and when they are best placed. Without it the
+  // setup screen looks configured but the generator has nothing to weigh,
+  // and every subject is treated as an interchangeable classroom hour.
+  const allocations = allSubjectAllocations()
   const subjectRows = classes.flatMap(cls =>
-    classSubjects(cls.numeric_level).map(name => ({
-      school_id: schoolId, class_id: cls.id, name,
-      code: SUBJECT_CODES[name] ?? name.slice(0, 3).toUpperCase(),
-      is_elective: ELECTIVES.has(name),
-    })))
-  await ins('subjects', subjectRows)
+    classSubjects(cls.numeric_level).map(name => {
+      const meta = allocations.get(name)
+      return {
+        school_id: schoolId, class_id: cls.id, name,
+        code: SUBJECT_CODES[name] ?? name.slice(0, 3).toUpperCase(),
+        is_elective: ELECTIVES.has(name),
+        subject_type: meta?.type ?? 'core',
+        room_type: meta?.room ?? null,
+        placement: meta?.placement ?? null,
+      }
+    }))
+  const subjectsIns = await ins('subjects', subjectRows)
+  // (class_id, subject name) -> subjects.id. The timetable stores both
+  // subject_id and subject_name: the id is what the new module joins on,
+  // the name is the display cache the older screens still read.
+  const subjectIdOf = new Map<string, string>(
+    subjectsIns.map((r: any) => [`${r.class_id}|${r.name}`, r.id]))
   console.log(`   ✅ ${subjectRows.length} subjects across ${classes.length} classes\n`)
 
   // ── 11. Staff (auth users + profiles + photos) ───────────
@@ -385,17 +473,37 @@ async function seed() {
   // teachers are handed out one per section below: with fewer teachers than
   // sections the assignment wraps and somebody becomes homeroom teacher of two
   // classes at once, which is not a thing.
-  const teacherSpecialities = [
-    'Mathematics', 'Mathematics', 'Mathematics', 'Mathematics', 'English', 'English', 'English', 'English',
-    'Hindi', 'Hindi', 'Hindi', 'Science', 'Science', 'Science', 'Social Science', 'Social Science', 'Social Science',
-    'Computer Science', 'Computer Science', 'Physics', 'Physics', 'Chemistry', 'Chemistry', 'Biology',
-    'Accountancy', 'Business Studies', 'Economics', 'History', 'Political Science', 'Geography',
-    'EVS', 'EVS', 'General Knowledge', 'Art & Craft', 'Physical Education', 'Music', 'English', 'Mathematics',
-    // The pre-primary wing and the third section added across Nursery–Class 10.
-    'English', 'English', 'Hindi', 'Hindi', 'Mathematics', 'Mathematics',
-    'EVS', 'General Knowledge', 'Art & Craft', 'Music', 'Science', 'Social Science',
-  ]
-  const staffDefs: { name: string; role: string; designation: string; dept: string; subject: string | null }[] = [
+  //
+  // The bench is computed from demand, not hand-tuned, because this number
+  // is load-bearing and the old one was wrong.
+  //
+  // 47 sections × 38 teaching periods = 1,786 periods to staff each week.
+  // The old pool of 50 put every teacher at 35.7 of their 38 available
+  // periods — 94% utilisation. That only worked because the old layout
+  // picked whoever happened to be free for each individual slot, so Class
+  // 5A's Maths was taught by a different person on Monday and Tuesday.
+  //
+  // The timetable module cannot work that way: one teacher per subject per
+  // section is the invariant its substitute ranking, workload report and
+  // generator all rest on. Binding a teacher to a section+subject makes 94%
+  // unschedulable — and, worse for a demo, leaves nobody free to cover an
+  // absence, so the arrangements screen would look broken on arrival.
+  //
+  // benchFor() derives the count from the curriculum, so changing the
+  // subject lists above cannot silently make the timetable infeasible.
+  // seedTimetable.test.ts asserts the result at full size.
+  const layoutSections = sections.map(sec => ({
+    id: sec.id, classId: sec.class_id, name: sec.name, level: levelOf(sec),
+  }))
+  // 0.75 lands the school at ~79 teachers carrying a median of 28
+  // periods a week out of 44 — which is what an Indian school with 47
+  // sections actually looks like, and still leaves everyone around
+  // sixteen free periods, so cover is a real choice rather than a
+  // formality. Lower targets produced a suspiciously flat 21-23 for
+  // everybody; higher ones start starving the arrangement queue.
+  const teacherSpecialities = benchFor(layoutSections, subjectsFor, WEEKLY_TEACHING_PERIODS, 0.75)
+
+  const staffDefs: { name: string; role: string; designation: string; dept: string; subject: string | null; minLevel?: number; maxLevel?: number }[] = [
     { name: 'Ramesh Chandra', role: 'principal', designation: 'Principal', dept: 'Administration', subject: null },
     { name: 'Sunita Rao', role: 'principal', designation: 'Vice Principal', dept: 'Administration', subject: null },
     { name: 'Manoj Agrawal', role: 'accountant', designation: 'Accounts Officer', dept: 'Accounts', subject: null },
@@ -405,22 +513,26 @@ async function seed() {
     { name: 'Neha Bansal', role: 'teacher', designation: 'Librarian', dept: 'Library', subject: null },
   ]
   const teacherFirst = [...MALE_NAMES.slice(10), ...FEMALE_NAMES.slice(10)]
-  teacherSpecialities.forEach((subject, i) => {
+  teacherSpecialities.forEach((member, i) => {
+    const subject = member.subject
     const name = `${pick(teacherFirst, i * 3 + 1)} ${pick(LAST_NAMES, i * 5 + 2)}`
-    const senior = i % 3 === 0
     staffDefs.push({
       name, role: 'teacher',
-      designation: `${senior ? 'PGT' : i % 3 === 1 ? 'TGT' : 'PRT'} ${subject}`,
+      // PRT / TGT / PGT is not decoration: the bench is sized per stage
+      // and the layout only gives a teacher sections inside their range,
+      // so the label on the profile matches the timetable.
+      designation: `${member.designation} ${subject}`,
       dept: ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'Science', 'EVS'].includes(subject) ? 'Science & Maths'
         : ['English', 'Hindi'].includes(subject) ? 'Languages'
           : ['History', 'Political Science', 'Geography', 'Economics', 'Social Science'].includes(subject) ? 'Humanities'
             : ['Accountancy', 'Business Studies'].includes(subject) ? 'Commerce'
               : ['Computer Science'].includes(subject) ? 'Computer' : 'Co-curricular',
       subject,
+      minLevel: member.minLevel, maxLevel: member.maxLevel,
     })
   })
 
-  const staff: { id: string; name: string; role: string; designation: string; dept: string; subject: string | null; photo: string | null }[] = []
+  const staff: { id: string; name: string; role: string; designation: string; dept: string; subject: string | null; photo: string | null; minLevel?: number; maxLevel?: number }[] = []
   const usedEmails = new Set<string>(['admin@dpslucknow.com'])
   const staffPhotos = await mapLimit(staffDefs, UPLOAD_CONCURRENCY, (s, i) =>
     // Same gender rule the staff_profiles rows use below, so the face
@@ -440,7 +552,7 @@ async function seed() {
     const uid = au?.user?.id
     if (!uid) continue
     const photo = staffPhotos[i]
-    staff.push({ id: uid, name: s.name, role: s.role, designation: s.designation, dept: s.dept, subject: s.subject, photo })
+    staff.push({ id: uid, name: s.name, role: s.role, designation: s.designation, dept: s.dept, subject: s.subject, photo, minLevel: s.minLevel, maxLevel: s.maxLevel })
     staffUserRows.push({ id: uid, school_id: schoolId, full_name: s.name, email, role: s.role, avatar_url: photo, phone: `+91 ${9500000000 + i}` })
     staffProfileRows.push({
       school_id: schoolId, user_id: uid, employee_id: `EMP${String(i + 1).padStart(3, '0')}`,
@@ -823,51 +935,402 @@ async function seed() {
   const attCount = await insQuiet('attendance', attRows, 1000)
   console.log(`   ✅ ${attCount} attendance records over ${attDates.length} working days\n`)
 
-  // ── 21. Timetable (all sections, conflict-free) ──────────
-  console.log('2️⃣1️⃣  Creating timetable...')
-  const periods: [string, string, boolean][] = [
-    ['09:00', '09:40', false], ['09:40', '10:20', false], ['10:20', '11:00', false],
-    ['11:00', '11:20', true],  // short break
-    ['11:20', '12:00', false], ['12:00', '12:40', false], ['12:40', '13:20', false], ['13:20', '14:00', false],
+  // ── 21. Timetable + the setup the module runs on ─────────
+  //
+  // This produces the whole timetable picture, not just a grid of
+  // subject names: day shapes, rooms, a weekly plan, one teacher bound to
+  // each section+subject, teacher capabilities and workload limits.
+  //
+  // Why all of it: a grid alone renders, but nothing can reason about it.
+  // Without day templates there is no notion of how long a day is, so the
+  // workload report computes zero free periods for everyone and the
+  // booking screen offers no slots. Without a plan, generation is
+  // impossible. Without capabilities, every substitute suggestion
+  // degrades to "whoever is free". A demo school that can only draw the
+  // timetable is a demo of the least interesting half of the module.
+  console.log('2️⃣1️⃣  Creating timetable, day shapes, plan & teacher profiles...')
+
+  // ── 21a. Rooms ────────────────────────────────────────────
+  //
+  // A homeroom each, plus the shared spaces that genuinely clash — and
+  // enough of them. One computer lab cannot host the 150 Computer Science
+  // periods this curriculum asks for in a 44-period week; a school with
+  // 47 sections has three or four. Getting the count wrong is what makes
+  // a room model decorative rather than real.
+  const SHARED_ROOMS = [
+    { name: 'Computer Lab 1', room_type: 'computer_lab', capacity: 40, capacity_groups: 1 },
+    { name: 'Computer Lab 2', room_type: 'computer_lab', capacity: 40, capacity_groups: 1 },
+    { name: 'Computer Lab 3', room_type: 'computer_lab', capacity: 40, capacity_groups: 1 },
+    { name: 'Computer Lab 4', room_type: 'computer_lab', capacity: 30, capacity_groups: 1 },
+    { name: 'Physics Lab', room_type: 'science_lab', capacity: 40, capacity_groups: 1 },
+    { name: 'Chemistry Lab', room_type: 'science_lab', capacity: 40, capacity_groups: 1 },
+    { name: 'Biology Lab', room_type: 'science_lab', capacity: 40, capacity_groups: 1 },
+    { name: 'Library', room_type: 'library', capacity: 80, capacity_groups: 2 },
+    { name: 'Art Room 1', room_type: 'art_room', capacity: 40, capacity_groups: 1 },
+    { name: 'Art Room 2', room_type: 'art_room', capacity: 40, capacity_groups: 1 },
+    { name: 'Music Room', room_type: 'music_room', capacity: 40, capacity_groups: 1 },
+    { name: 'Main Ground', room_type: 'ground', capacity: 200, capacity_groups: 3 },
+    { name: 'Junior Play Area', room_type: 'ground', capacity: 100, capacity_groups: 2 },
+    { name: 'Auditorium', room_type: 'auditorium', capacity: 300, capacity_groups: 1 },
   ]
-  const busy = new Map<string, Set<string>>()   // `${day}-${period}` → teacher ids
-  // Periods already assigned per teacher. Picking the *least loaded*
-  // free candidate rather than the first one both spreads the workload
-  // realistically and guarantees nobody ends up with an empty timetable
-  // — the "my periods" and substitute-finder screens need every teacher
-  // to resolve to something.
-  const load = new Map<string, number>(teachers.map(t => [t.id, 0]))
-  const leastLoaded = (pool: typeof teachers, taken: Set<string>) =>
-    pool.filter(t => !taken.has(t.id)).sort((a, b) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0))[0]
-  const ttRows: any[] = []
-  sections.forEach((sec, secIdx) => {
-    const lvl = levelOf(sec)
-    const taught = subjectsFor(lvl, sec.name)
-    const room = `Room ${101 + secIdx}`
-    for (let day = 1; day <= 6; day++) {
-      const dayPeriods = day === 6 ? periods.slice(0, 4) : periods   // Saturday is a half day
-      dayPeriods.forEach(([st, en, isBreak], p) => {
-        if (isBreak) {
-          ttRows.push({ school_id: schoolId, class_id: sec.class_id, section_id: sec.id, academic_year_id: ay.id, day_of_week: day, period_number: p + 1, start_time: st, end_time: en, subject_name: 'Break', teacher_id: null, room, is_break: true })
-          return
-        }
-        const subject = pick(taught, secIdx + day * 2 + p * 3)
-        const key = `${day}-${p}`
-        const taken = busy.get(key) ?? new Set<string>()
-        const chosen = leastLoaded(subjectTeachers(subject), taken) ?? leastLoaded(teachers, taken)
-        if (chosen) { taken.add(chosen.id); load.set(chosen.id, (load.get(chosen.id) ?? 0) + 1) }
-        busy.set(key, taken)
-        ttRows.push({
-          school_id: schoolId, class_id: sec.class_id, section_id: sec.id, academic_year_id: ay.id,
-          day_of_week: day, period_number: p + 1, start_time: st, end_time: en,
-          subject_name: subject, teacher_id: chosen?.id ?? null, room, is_break: false,
-        })
+  const rooms = await ins('classrooms', [
+    ...sections.map((_sec, i) => ({
+      school_id: schoolId, name: `Room ${101 + i}`, room_type: 'classroom',
+      capacity: 40, capacity_groups: 1,
+    })),
+    ...SHARED_ROOMS.map(r => ({ school_id: schoolId, ...r })),
+  ])
+  const homeRoomOf = new Map<string, string>(
+    sections.map((sec, i) => [sec.id, rooms[i]?.id]).filter(([, id]) => !!id) as [string, string][])
+
+  // Shared rooms by type, each with how many groups it can hold at once.
+  const sharedByType = new Map<string, { id: string; capacityGroups: number }[]>()
+  for (const room of rooms.slice(sections.length)) {
+    const list = sharedByType.get(room.room_type) ?? []
+    list.push({ id: room.id, capacityGroups: room.capacity_groups ?? 1 })
+    sharedByType.set(room.room_type, list)
+  }
+
+  // ── 21b. Day shapes ───────────────────────────────────────
+  const dayTemplates = await ins('day_templates', [
+    { school_id: schoolId, name: 'Regular day', template_type: 'regular', status: 'active',
+      notes: `${teachingIn(REGULAR_DAY)} teaching periods, break after period 3` },
+    { school_id: schoolId, name: 'Saturday (half day)', template_type: 'saturday', status: 'active',
+      notes: `${teachingIn(SATURDAY_DAY)} teaching periods` },
+  ])
+  const regularId = dayTemplates.find((t: any) => t.template_type === 'regular')?.id
+  const saturdayId = dayTemplates.find((t: any) => t.template_type === 'saturday')?.id
+  const templateForDay = (day: number) => (day === 6 ? saturdayId : regularId)
+
+  const slotDefRow = (templateId: string, slot: LayoutSlot, i: number) => ({
+    school_id: schoolId, day_template_id: templateId, slot_index: i + 1, kind: slot.kind,
+    period_number: slot.periodNumber, start_time: slot.start, end_time: slot.end,
+    label: slot.kind === 'period' ? null : (slot.label ?? 'Break'),
+  })
+  await ins('period_slot_defs', [
+    ...REGULAR_DAY.map((slot, i) => slotDefRow(regularId, slot, i)),
+    ...SATURDAY_DAY.map((slot, i) => slotDefRow(saturdayId, slot, i)),
+  ])
+  await insQuiet('section_day_templates', sections.flatMap(sec =>
+    SCHOOL_DAYS.map(day => ({
+      school_id: schoolId, section_id: sec.id, day_of_week: day,
+      day_template_id: templateForDay(day),
+    }))))
+
+  // ── 21c. Plan + grid, via the tested layout ───────────────
+  //
+  // buildTimetable lives in seedTimetable.ts rather than here because it
+  // is the one part of this seed that can produce data which is wrong
+  // rather than merely absent, and it has a test asserting the invariants
+  // at full size. See the header of that file.
+  const layout = buildTimetable({
+    sections: layoutSections,
+    teachers: teachers.map(t => ({ id: t.id, subject: t.subject, minLevel: t.minLevel, maxLevel: t.maxLevel })),
+    subjectsFor, shapeFor, days: SCHOOL_DAYS,
+  })
+
+  // Specialist rooms, booked per slot. A subject that declares a room type
+  // gets one of that type if a group-slot is still free at that moment,
+  // and otherwise falls back to the section's own room — which is exactly
+  // what a school does when the labs are full, and what the app reports
+  // as ROOM_FALLBACK rather than as a clash.
+  const roomUse = new Map<string, number>()
+  let fellBackToHomeroom = 0
+  const roomFor = (entry: { day: number; periodNumber: number; sectionId: string; subject: string }) => {
+    const needed = allocations.get(entry.subject)?.room
+    const home = homeRoomOf.get(entry.sectionId) ?? null
+    if (!needed) return home
+    for (const room of sharedByType.get(needed) ?? []) {
+      const key = `${room.id}|${entry.day}|${entry.periodNumber}`
+      const used = roomUse.get(key) ?? 0
+      if (used < room.capacityGroups) { roomUse.set(key, used + 1); return room.id }
+    }
+    fellBackToHomeroom++
+    return home
+  }
+
+  const ttRows: any[] = [
+    ...layout.entries.map(e => ({
+      school_id: schoolId, class_id: e.classId, section_id: e.sectionId, academic_year_id: ay.id,
+      day_of_week: e.day, period_number: e.periodNumber,
+      start_time: e.start, end_time: e.end,
+      subject_id: subjectIdOf.get(`${e.classId}|${e.subject}`) ?? null,
+      subject_name: e.subject,
+      teacher_id: e.teacherId,
+      room_id: roomFor(e),
+      is_break: false,
+    })),
+    ...layout.breaks.map(b => ({
+      school_id: schoolId, class_id: b.classId, section_id: b.sectionId, academic_year_id: ay.id,
+      day_of_week: b.day, period_number: b.periodNumber,
+      start_time: b.start, end_time: b.end,
+      subject_id: null, subject_name: b.label ?? 'Break', teacher_id: null,
+      room_id: homeRoomOf.get(b.sectionId) ?? null, is_break: true,
+    })),
+  ]
+
+  const tt = await insQuiet('timetable_periods', ttRows, 1000)
+
+  // ── 21e. class_subject_plan ───────────────────────────────
+  await insQuiet('class_subject_plan', layout.plan.map(e => ({
+    school_id: schoolId, class_id: e.classId, section_id: e.sectionId,
+    subject_id: subjectIdOf.get(`${e.classId}|${e.subject}`) ?? null,
+    weekly_periods: e.periods, double_periods: 0, teacher_id: e.teacherId,
+  })).filter(r => r.subject_id))
+
+  // ── 21f. Teacher capabilities ─────────────────────────────
+  //
+  // Priority 1 is what they are timetabled for. Priority 2 — a subject
+  // they could cover at a push — is the judgement no timetable contains,
+  // and it is what makes substitute ranking worth having, so the demo
+  // needs it present. Each teacher gets one plausible neighbour.
+  const NEIGHBOURS: Record<string, string[]> = {
+    Mathematics: ['Science', 'Numbers', 'Computer Science'],
+    Science: ['Mathematics', 'EVS', 'Biology'],
+    English: ['General Knowledge', 'Rhymes & Story'],
+    Hindi: ['General Knowledge'],
+    EVS: ['Science', 'General Knowledge'],
+    'Social Science': ['History', 'Geography', 'General Knowledge'],
+    'Computer Science': ['Mathematics'],
+    Physics: ['Mathematics', 'Science'],
+    Chemistry: ['Science'],
+    Biology: ['Science', 'EVS'],
+    Economics: ['Business Studies', 'Accountancy'],
+    Accountancy: ['Economics', 'Business Studies'],
+    'Business Studies': ['Economics', 'Accountancy'],
+    History: ['Political Science', 'Social Science'],
+    'Political Science': ['History', 'Social Science'],
+    Geography: ['Social Science', 'EVS'],
+    'Art & Craft': ['Music'],
+    Music: ['Art & Craft', 'Rhymes & Story'],
+    Numbers: ['Mathematics'],
+    'Rhymes & Story': ['English'],
+    'General Knowledge': ['English', 'Social Science'],
+    'Physical Education': ['General Knowledge'],
+  }
+
+  // Class levels a teacher is actually timetabled across, so a
+  // pre-primary Rhymes teacher is never offered for Class 10.
+  const levelsTaught = new Map<string, { min: number; max: number }>()
+  for (const row of ttRows) {
+    if (!row.teacher_id || row.is_break) continue
+    const lvl = classById[row.class_id]?.numeric_level ?? 0
+    const cur = levelsTaught.get(row.teacher_id)
+    levelsTaught.set(row.teacher_id, cur
+      ? { min: Math.min(cur.min, lvl), max: Math.max(cur.max, lvl) }
+      : { min: lvl, max: lvl })
+  }
+
+  // A subject id per name, preferring one at a level the teacher covers.
+  const subjectIdsByName = new Map<string, { id: string; level: number }[]>()
+  for (const row of subjectsIns as any[]) {
+    const list = subjectIdsByName.get(row.name) ?? []
+    list.push({ id: row.id, level: classById[row.class_id]?.numeric_level ?? 0 })
+    subjectIdsByName.set(row.name, list)
+  }
+  const subjectIdNear = (name: string, level: number): string | null => {
+    const list = subjectIdsByName.get(name)
+    if (!list?.length) return null
+    return list.reduce((best, c) =>
+      Math.abs(c.level - level) < Math.abs(best.level - level) ? c : best, list[0]).id
+  }
+
+  const capabilityRows: any[] = []
+  const seenCapability = new Set<string>()
+  for (const t of teachers) {
+    const range = levelsTaught.get(t.id)
+    if (!range || !t.subject) continue
+    const mid = Math.round((range.min + range.max) / 2)
+
+    const primary = subjectIdNear(t.subject, mid)
+    if (primary && !seenCapability.has(`${t.id}|${primary}`)) {
+      seenCapability.add(`${t.id}|${primary}`)
+      capabilityRows.push({
+        school_id: schoolId, teacher_id: t.id, subject_id: primary, priority: 1,
+        min_class_level: range.min, max_class_level: range.max,
       })
     }
+    for (const fallback of (NEIGHBOURS[t.subject] ?? []).slice(0, 2)) {
+      const id = subjectIdNear(fallback, mid)
+      if (!id || seenCapability.has(`${t.id}|${id}`)) continue
+      seenCapability.add(`${t.id}|${id}`)
+      capabilityRows.push({
+        school_id: schoolId, teacher_id: t.id, subject_id: id, priority: 2,
+        min_class_level: range.min, max_class_level: range.max,
+      })
+    }
+  }
+  await insQuiet('teacher_capabilities', capabilityRows)
+
+  // ── 21g. Workload limits, seeded from what was actually built ──
+  //
+  // Same reasoning as the spreadsheet importer: limits taken from a
+  // textbook would put half the staff in breach the moment the workload
+  // page first loads, and an alert that fires on everyone gets ignored.
+  // A little headroom above the observed figure so the school can grow
+  // into it without an immediate red flag.
+  const observed = new Map<string, { perWeek: number; perDay: Map<number, Set<number>> }>()
+  for (const row of ttRows) {
+    if (!row.teacher_id || row.is_break) continue
+    const entry = observed.get(row.teacher_id) ?? { perWeek: 0, perDay: new Map() }
+    entry.perWeek++
+    const set = entry.perDay.get(row.day_of_week) ?? new Set<number>()
+    set.add(row.period_number)
+    entry.perDay.set(row.day_of_week, set)
+    observed.set(row.teacher_id, entry)
+  }
+
+  // Limits follow the designation, which is how state norms are actually
+  // written: PGTs carry fewer periods than TGTs, who carry fewer than
+  // PRTs. The observed load still wins where it is higher, so nothing is
+  // in breach the moment the workload page first opens.
+  const NORM: Record<string, { day: number; week: number; consecutive: number }> = {
+    PRT: { day: 7, week: 34, consecutive: 4 },
+    TGT: { day: 6, week: 30, consecutive: 4 },
+    PGT: { day: 6, week: 26, consecutive: 3 },
+  }
+  const normFor = (designation: string) =>
+    NORM[designation.split(' ')[0]] ?? { day: 6, week: 30, consecutive: 4 }
+
+  const constraintRows = teachers.map(t => {
+    const o = observed.get(t.id)
+    const norm = normFor(t.designation)
+    let maxDay = 0
+    let maxRun = 0
+    for (const periods of (o?.perDay.values() ?? [])) {
+      maxDay = Math.max(maxDay, periods.size)
+      const sorted = Array.from(periods).sort((a, b) => a - b)
+      let run = 0
+      for (let i = 0; i < sorted.length; i++) {
+        run = i > 0 && sorted[i] === sorted[i - 1] + 1 ? run + 1 : 1
+        maxRun = Math.max(maxRun, run)
+      }
+    }
+    return {
+      school_id: schoolId, teacher_id: t.id,
+      max_periods_per_day: Math.max(maxDay, norm.day),
+      max_periods_per_week: Math.max((o?.perWeek ?? 0) + 2, norm.week),
+      // A floor as well as a ceiling, so the workload page can flag a
+      // teacher who is carrying almost nothing — which is how schools
+      // find surplus staff.
+      min_periods_per_week: Math.max(8, Math.round(norm.week * 0.5)),
+      max_consecutive: Math.max(maxRun, norm.consecutive),
+      arrangement_cap_per_day: 2, arrangement_cap_per_week: 6,
+      // A couple of people genuinely exempt — a senior teacher and the
+      // librarian — so the "never ask them to cover" path has data behind
+      // it rather than being a switch nobody has ever flipped.
+      exempt_from_arrangements: t.designation.startsWith('PGT') && (o?.perWeek ?? 0) > 30,
+      notes: `${t.designation}. Seeded from the demo timetable: ${o?.perWeek ?? 0} periods a week, up to ${maxDay} a day, ${maxRun} back to back.`,
+    }
   })
-  const tt = await insQuiet('timetable_periods', ttRows)
-  const teachersWithPeriods = new Set(ttRows.map(r => r.teacher_id).filter(Boolean)).size
-  console.log(`   ✅ ${tt} periods across ${sections.length} sections; ${teachersWithPeriods}/${teachers.length} teachers timetabled\n`)
+  await insQuiet('teacher_constraints', constraintRows)
+
+  // ── 21i. A day's worth of absences, so the queue has something in it ──
+  //
+  // An arrangements screen with nothing on it demonstrates nothing. This
+  // stages the states a school actually sees on a Monday: one absence
+  // fully covered and confirmed, one assigned but not yet answered, and
+  // one still needing somebody — which is the state the page is designed
+  // around.
+  const nextSchoolDay = (() => {
+    for (let ahead = 0; ahead < 8; ahead++) {
+      const d = new Date(today); d.setDate(d.getDate() + ahead)
+      const dow = d.getDay()
+      if (dow !== 0) return { date: iso(d), day: dow }
+    }
+    return { date: iso(today), day: 1 }
+  })()
+
+  const absentCandidates = teachers
+    .map(t => ({ t, periods: ttRows.filter(r => r.teacher_id === t.id && r.day_of_week === nextSchoolDay.day && !r.is_break) }))
+    .filter(x => x.periods.length >= 2)
+    .slice(0, 3)
+
+  let queued = 0
+  let covered = 0
+  for (const [i, candidate] of absentCandidates.entries()) {
+    const absence = await ins('teacher_absences', [{
+      school_id: schoolId, teacher_id: candidate.t.id, absence_date: nextSchoolDay.date,
+      scope: 'full_day', source: i === 0 ? 'leave' : 'manual', status: 'confirmed',
+      reason: i === 0 ? 'Approved casual leave' : i === 1 ? 'Unwell' : 'Family emergency',
+      created_by: adminId,
+    }])
+    const absenceId = absence[0]?.id
+    if (!absenceId) continue
+
+    // Fan the absence out through the same function the app uses, so the
+    // demo queue is built exactly the way a real one is.
+    const { data: created, error: rpcError } = await supabase
+      .rpc('timetable_materialize_arrangements', { p_absence_id: absenceId })
+    if (rpcError) { console.log(`      ⚠️  arrangement materialisation failed: ${rpcError.message}`); continue }
+    queued += Number(created ?? 0)
+
+    // Leave the last teacher's periods unassigned so the queue opens with
+    // real work on it.
+    if (i === absentCandidates.length - 1) continue
+
+    const { data: queue } = await supabase.from('arrangements')
+      .select('id, day_of_week, period_number, subject_id')
+      .eq('absence_id', absenceId)
+
+    for (const [j, row] of (queue ?? []).entries()) {
+      // Somebody genuinely free in that slot, and not already covering.
+      const busyThen = new Set(ttRows
+        .filter(r => r.day_of_week === row.day_of_week && r.period_number === row.period_number && r.teacher_id)
+        .map(r => r.teacher_id))
+      const substitute = teachers.find(t => !busyThen.has(t.id) && t.id !== candidate.t.id)
+      if (!substitute) continue
+
+      const acknowledged = i === 0
+      await supabase.from('arrangements').update({
+        substitute_teacher_id: substitute.id,
+        status: acknowledged ? 'acknowledged' : 'assigned',
+        reason: 'Free this period · 0 arrangements this month',
+        rank_score: 60 - j,
+        assigned_by: adminId,
+        assigned_at: new Date().toISOString(),
+        acknowledged_at: acknowledged ? new Date().toISOString() : null,
+      }).eq('id', row.id)
+      covered++
+      busyThen.add(substitute.id)
+    }
+  }
+
+  // A couple of protected free periods, so the booking rules have data
+  // behind them and the ranking ladder's −1000 penalty is demonstrable.
+  const bookingRows: any[] = []
+  for (const t of teachers.slice(0, 6)) {
+    const taken = new Set(ttRows
+      .filter(r => r.teacher_id === t.id && r.day_of_week === nextSchoolDay.day && !r.is_break)
+      .map(r => r.period_number))
+    const free = [1, 2, 3, 4, 5, 6, 7].find(n => !taken.has(n))
+    if (!free) continue
+    bookingRows.push({
+      school_id: schoolId, teacher_id: t.id, booking_date: nextSchoolDay.date,
+      period_number: free, day_of_week: nextSchoolDay.day,
+      purpose: pick(['copy_correction', 'lesson_planning', 'parent_meeting', 'event_management'], bookingRows.length),
+      status: 'active',
+    })
+  }
+  await insQuiet('period_bookings', bookingRows)
+
+  // ── 21h. Say out loud whether the demo data is sound ──────
+  //
+  // Seeding data the app then flags as broken is worse than seeding none:
+  // the first thing a demo would show is a wall of red. buildTimetable
+  // reports its own integrity, and the counts that must be zero are
+  // printed whether they are or not.
+  const d = layout.diagnostics
+  console.log(`   ✅ ${tt} periods · ${sections.length} sections · 2 day shapes · ${rooms.length} rooms`)
+  console.log(`      specialist rooms booked; ${fellBackToHomeroom} period(s) fell back to the home room`)
+  console.log(`      ${layout.plan.length} plan rows, ${capabilityRows.length} capabilities, ${constraintRows.length} workload limits`)
+  console.log(`      load ${d.loads.min}–${d.loads.max} periods/week (median ${d.loads.median}, ${Math.round(d.utilisation * 100)}% utilised) across ${teachers.length} teachers`)
+  console.log(`      integrity: ${d.doubleBooked} double-booked, ${d.multiTeacherSectionSubjects} section-subjects with >1 teacher, ${d.unfilled} unfilled, ${d.quotaShortfalls} short of quota`)
+  console.log(`      ${nextSchoolDay.date}: ${absentCandidates.length} teachers away, ${queued} periods queued, ${covered} covered, ${bookingRows.length} periods reserved`)
+  if (d.doubleBooked || d.multiTeacherSectionSubjects || d.unfilled || d.quotaShortfalls) {
+    console.log('      ⚠️  the demo timetable breaks an invariant the module relies on — see seedTimetable.test.ts')
+  }
+  console.log()
 
   // ── 22. Homework, syllabus & progress notes ──────────────
   console.log('2️⃣2️⃣  Creating homework & syllabus...')

@@ -23,6 +23,13 @@ export type NotificationType =
   | 'payslip_generated'
   | 'probation_ending' | 'document_expiring' | 'contract_review_due' | 'work_anniversary'
   | 'payslip_regen_needed' | 'absconded_review_needed'
+  // Timetable module. Kept in step with the notifications_type_check
+  // constraint in 20260829010000 — a type present here but missing there
+  // is an insert Postgres rejects, and the teacher is simply never told.
+  | 'timetable_changed' | 'timetable_published'
+  | 'arrangement_assigned' | 'arrangement_reminder' | 'arrangement_escalated'
+  | 'arrangement_declined' | 'arrangement_cancelled' | 'arrangement_unfilled'
+  | 'absence_detected' | 'workload_breach' | 'booking_overridden'
 
 interface CreateNotificationParams {
   schoolId: string

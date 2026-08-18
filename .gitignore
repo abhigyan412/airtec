@@ -7,3 +7,6 @@ dist/
 .agents
 skills-lock.json
 .claude
+# Real school data — 27 named teachers from a live school. Imported at
+# runtime via /timetable/import, never committed and never seeded.
+New Time table*.xlsx

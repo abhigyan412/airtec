@@ -44,15 +44,37 @@ const PHASE2_MANAGEMENT = [
   'role.view', 'staff.homeroom_manage', 'staff.promote', 'staff.exit_manage',
 ]
 
+// Timetable module (20260829010000). Deliberately fine-grained: a school
+// rolling out ONLY the timetable feature needs "runs the daily arrangement
+// queue" to be a different grant from "republishes the master timetable",
+// because they are usually different people. Two codes are held back from
+// the Timetable Manager on purpose — timetable.publish and
+// arrangement.override_booking — so that replacing the school's week, or
+// taking a teacher's protected free period, needs a second person.
+const TIMETABLE_SENIOR = [
+  'timetable.setup_manage', 'timetable.generate', 'timetable.publish',
+  'timetable.import', 'timetable.export', 'timetable.workload_view',
+  'arrangement.view', 'arrangement.manage', 'arrangement.override_booking',
+]
+
+// Own-record capabilities. The handlers resolve the actor from the JWT and
+// ignore any teacher id in the request, so granting these broadly widens
+// nothing — a teacher can only ever acknowledge their own cover and book
+// their own free periods.
+// Deliberately does NOT repeat arrangement.view: the senior set already
+// grants it, and seedDefaultRoles dedupes, but keeping the two lists
+// disjoint makes it obvious which grant a role gets it from.
+const TIMETABLE_TEACHER = ['arrangement.view', 'arrangement.acknowledge', 'booking.manage_own']
+
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
-  'School Admin': [...CORE, ...PHASE2_MANAGEMENT, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
+  'School Admin': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
   // role.manage: Principal could already edit role_permissions_v2 (i.e.
   // use the Permissions page itself) under the old requireRole(
   // 'school_admin','principal') gate on PUT /rbac/roles/:id/permissions
   // — kept so converting that route doesn't lock Principal out of the
   // very page that grants permissions.
-  'Principal': [...CORE, ...PHASE2_MANAGEMENT, 'role.manage', 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
-  'Vice Principal': CORE.filter(c => c !== 'staff.payroll_manage').concat(PHASE2_MANAGEMENT.filter(c => c !== 'staff.payroll_view')).concat(['role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage']),
+  'Principal': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, 'role.manage', 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
+  'Vice Principal': CORE.filter(c => c !== 'staff.payroll_manage').concat(PHASE2_MANAGEMENT.filter(c => c !== 'staff.payroll_view')).concat(TIMETABLE_SENIOR.filter(c => c !== 'timetable.publish' && c !== 'arrangement.override_booking')).concat(TIMETABLE_TEACHER).concat(['role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage']),
   // Two different jobs that both live under "Homework": day-to-day
   // homework/classwork is a teacher's direct communication to their own
   // students/parents ("tonight's assignment is..."), so Teacher/Class
@@ -61,8 +83,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   // dates (the term-level pacing target) stay a senior-management-only
   // responsibility (syllabus.plan) — teachers only log actual coverage
   // against it (syllabus.log_progress).
-  'Teacher': ['student.view', 'exam.view', 'exam.marks_entry', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress'],
-  'Class Teacher': ['student.view', 'student.edit', 'exam.view', 'exam.marks_entry', 'exam.result_publish', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'complaint.resolve', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress'],
+  'Teacher': ['student.view', 'exam.view', 'exam.marks_entry', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress', ...TIMETABLE_TEACHER],
+  'Class Teacher': ['student.view', 'student.edit', 'exam.view', 'exam.marks_entry', 'exam.result_publish', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'complaint.resolve', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress', ...TIMETABLE_TEACHER],
   // tc.generate: Accountant could already initiate TC requests under
   // the old requireRole('school_admin','principal','accountant') gate
   // on POST /sis/:id/tc — kept so converting that route doesn't
@@ -78,13 +100,27 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   'Counselor': ['student.view', 'student.create', 'admission.view', 'admission.create', 'admission.edit', 'admission.follow_up', 'complaint.view', 'complaint.create', 'fee.discount', 'staff.recruitment_manage'],
   'HR': ['staff.view', 'staff.edit', 'staff.attendance_mark', 'staff.leave_approve', 'staff.payroll_manage', 'staff.recruitment_manage', 'staff.promote', 'staff.exit_manage', 'team.view', 'team.invite'],
   'Receptionist': ['student.view', 'admission.view', 'admission.create', 'admission.follow_up', 'complaint.view', 'complaint.create'],
-  'Librarian': ['student.view', 'resource.view', 'resource.upload', 'resource.delete'],
+  'Librarian': ['student.view', 'resource.view', 'resource.upload', 'resource.delete', 'timetable.view', ...TIMETABLE_TEACHER],
   'Exam Controller': ['student.view', 'exam.view', 'exam.create', 'exam.publish', 'exam.schedule', 'exam.marks_entry', 'exam.result_publish', 'exam.freeze', 'exam.admit_card_generate', 'certificate.view', 'certificate.generate', 'tc.generate', 'syllabus.view'],
   'Parent': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
   'Student': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
+  // The person who actually runs this module day to day. Narrow on
+  // purpose: they own the grid and the arrangement queue and nothing else
+  // in the ERP, so a school can roll out the timetable feature alone
+  // without handing anyone the keys to fees or student records.
+  // staff.view/student.view are read-only and load-bearing — you cannot
+  // assign cover without being able to see who the staff are.
+  'Timetable Manager': [
+    'timetable.view', 'timetable.manage', 'timetable.setup_manage',
+    'timetable.generate', 'timetable.import', 'timetable.export',
+    'timetable.workload_view',
+    'arrangement.view', 'arrangement.manage', 'arrangement.acknowledge',
+    'booking.manage_own',
+    'staff.view', 'student.view',
+  ],
   'Transport Manager': ['student.view'],
   'Hostel Warden': ['student.view'],
-  'Coordinator': ['student.view'],
+  'Coordinator': ['student.view', 'timetable.view', ...TIMETABLE_TEACHER],
 }
 
 // Maps the legacy `users.role` text value to the RBAC role name it
@@ -159,7 +195,13 @@ export async function seedDefaultRoles(schoolId: string): Promise<Record<string,
   const rows: { role_id: string; permission_id: string }[] = []
   for (const name of needsMappings) {
     const roleId = roleIdByName[name]
-    for (const code of DEFAULT_ROLE_PERMISSIONS[name] ?? []) {
+    // Deduped, because the lists above are assembled by spreading several
+    // groups together and a code can legitimately appear in two of them —
+    // arrangement.view belongs to both the senior set and the own-record
+    // teacher set. Two identical rows violate the (role_id, permission_id)
+    // unique index and abort the whole seed, which is a silly way to lose
+    // a fresh school.
+    for (const code of new Set(DEFAULT_ROLE_PERMISSIONS[name] ?? [])) {
       const permId = permIdByCode.get(code)
       if (permId) rows.push({ role_id: roleId, permission_id: permId })
     }
