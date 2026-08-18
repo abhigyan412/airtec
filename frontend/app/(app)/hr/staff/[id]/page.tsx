@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { hrmsApi, documentsApi } from '@/lib/api'
+import { hrmsApi, documentsApi, classesApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
 import { ArrowLeft, User, Users, Calendar, IndianRupee, Loader2, Check, X, Edit3, History, LogOut, ShieldAlert, FileText, ArrowRight, Trash2, Eye, Plus, Camera, AlertTriangle } from 'lucide-react'
@@ -351,7 +351,18 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }
     shift_id: profile?.shift_id ?? '',
     leave_delegate_id: profile?.leave_delegate_id ?? '',
     reporting_to: profile?.reporting_to ?? '',
+    subjects: profile?.subjects ?? [],
   })
+
+  // Master subject list, school-wide (no class_id filter) — the same
+  // source Add Period's subject field and Homework/Syllabus already draw
+  // from. Deduped by name since the same subject exists once per class.
+  const { data: allSubjects } = useQuery({
+    queryKey: ['subjects', 'all'],
+    queryFn: () => classesApi.subjects.list().then(r => r.data),
+    enabled: data.role === 'teacher',
+  })
+  const subjectOptions = Array.from(new Set<string>((allSubjects ?? []).map((s: any) => s.name as string))).sort()
 
   const { data: shifts } = useQuery({
     queryKey: ['staff-shifts'],
@@ -447,6 +458,38 @@ function ProfileTab({ data, profile, staffId, editMode, setEditMode, onPromote }
           </p>
         </CardContent>
       </Card>
+
+      {data.role === 'teacher' && (
+        <Card>
+          <CardContent className="p-6">
+            <h3 className="mb-1 font-semibold text-foreground">Subjects Taught</h3>
+            <p className="mb-4 text-xs text-muted-foreground">
+              The source of truth for what this teacher is qualified to substitute or be scheduled for — set once here rather than re-derived from whatever they happen to already be on the timetable for.
+            </p>
+            {subjectOptions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No subjects defined yet — add some under Settings → Classes &amp; Sections first.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {subjectOptions.map(name => {
+                  const active = form.subjects.includes(name)
+                  return (
+                    <button key={name} type="button" disabled={!editMode}
+                      onClick={() => setForm((f: any) => ({
+                        ...f,
+                        subjects: active ? f.subjects.filter((s: string) => s !== name) : [...f.subjects, name],
+                      }))}
+                      className={cn('px-3 py-1.5 rounded-full text-xs font-medium border transition-colors',
+                        active ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 text-muted-foreground border-border',
+                        editMode ? 'cursor-pointer hover:border-primary/60' : 'cursor-default opacity-80')}>
+                      {name}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent className="p-6">

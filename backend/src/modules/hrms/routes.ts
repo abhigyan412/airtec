@@ -50,6 +50,11 @@ const StaffProfileSchema = z.object({
   reporting_to: z.string().optional(),
   shift_id: z.string().uuid().nullable().optional(),
   leave_delegate_id: z.string().uuid().nullable().optional(),
+  // The real, settable source of truth for "what does this teacher
+  // teach" — see the migration comment on staff_profiles.subjects.
+  // /timetable/substitutes prefers this over deriving it from whatever
+  // happens to be on the weekly timetable.
+  subjects: z.array(z.string()).optional(),
 })
 
 const StaffShiftSchema = z.object({
