@@ -45,6 +45,9 @@ export default function LoginPage() {
         return
       }
       toast.success('Welcome back!')
+      // /dashboard redirects onward by itself when the school does not
+      // run that module — see app/(app)/dashboard/page.tsx. Landing there
+      // first keeps one entry point for every school.
       router.push('/dashboard')
     } catch (err: any) {
       // No response at all (server down / unreachable / CORS-blocked)

@@ -1,5 +1,8 @@
 'use client'
 
+import * as React from 'react'
+import { useRouter } from 'next/navigation'
+
 import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { Users, UserPlus, CreditCard, AlertCircle, LayoutDashboard, ArrowRight, Plus } from 'lucide-react'
@@ -45,7 +48,27 @@ function ViewAll({ href }: { href: string }) {
 
 export default function DashboardPage() {
   const { user } = useAuth()
-  const { can, isLoading: permLoading } = usePermissions()
+  const router = useRouter()
+  const { can, isLoading: permLoading, moduleEnabled } = usePermissions()
+
+  // A school that has not bought the dashboard has nothing to show here —
+  // every panel below is students, admissions and fees. Rather than
+  // render a page of empty widgets, send them to the first thing they do
+  // run. Login and the root route both land here, so this is the one
+  // place that has to know.
+  const dashboardEnabled = moduleEnabled('dashboard')
+  React.useEffect(() => {
+    if (permLoading || dashboardEnabled) return
+    router.replace(moduleEnabled('timetable') ? '/timetable/my-week' : '/settings/team')
+  }, [permLoading, dashboardEnabled, moduleEnabled, router])
+
+  if (!permLoading && !dashboardEnabled) {
+    return (
+      <div className="flex h-[60vh] items-center justify-center">
+        <Skeleton className="h-8 w-40" />
+      </div>
+    )
+  }
 
   // Teachers get an entirely different, personally-scoped dashboard —
   // not a stripped-down version of the admin one below (which shows

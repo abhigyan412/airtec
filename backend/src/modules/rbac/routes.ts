@@ -12,7 +12,10 @@ router.use(authenticate)
 // New multi-role permission endpoint (Phase 3c)
 // ═══════════════════════════════════════════════════════════════
 router.get('/permissions/me', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { permissionCodes, roleNames, roleIds, isSuperRole } = await getPermissionsForUser(req.user!.id, req.user!.school_id)
+  const [{ permissionCodes, roleNames, roleIds, isSuperRole }, { data: school }] = await Promise.all([
+    getPermissionsForUser(req.user!.id, req.user!.school_id),
+    supabase.from('schools').select('enabled_modules').eq('id', req.user!.school_id).maybeSingle(),
+  ])
 
   res.json({
     success: true,
@@ -21,6 +24,12 @@ router.get('/permissions/me', asyncHandler(async (req: AuthRequest, res: Respons
       role_ids: roleIds,
       is_super_role: isSuperRole,
       permissions: Array.from(permissionCodes),
+      // Which modules this school bought. Null means all of them, which
+      // is every school that predates the column. This shapes what the
+      // sidebar OFFERS; what a user is ALLOWED to do is still decided
+      // per-route by requirePermissionV2, and deliberately so — a client
+      // that ignored this would gain nothing.
+      enabled_modules: school?.enabled_modules ?? null,
     },
   })
 }))

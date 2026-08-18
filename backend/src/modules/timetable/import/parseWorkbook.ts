@@ -224,6 +224,19 @@ function splitTimeCell(cell: string): [string, string] | null {
   return [parts[0], parts[1]]
 }
 
+/**
+ * Trim the ends but keep the middle exactly as written.
+ *
+ * Deliberately not `tidy()`. A run of spaces inside a cell is the only
+ * evidence that two cells were merged into one — "SST              Re" is
+ * an overwritten "SST" and "Remedial-…". Collapsing that to "SST Re"
+ * before the canonicaliser sees it destroys the signal, and the merged
+ * cell then sails through as a subject of its own with nothing flagged
+ * for review. Canonicalisation tidies for display; the raw string stays
+ * the key.
+ */
+const cellValue = (raw: string) => (raw ?? '').replace(/^\s+|\s+$/g, '')
+
 const BREAK_WORDS = /^(lunch|break|recess|interval|tiffin)$/i
 const ASSEMBLY_WORDS = /^(assembly|prayer)$/i
 
@@ -383,8 +396,8 @@ export function parseTimetableWorkbook(sheets: Sheet[]): WorkbookParse {
         const column = entry[0]
         const def = entry[1]
         if (def.kind !== 'period') continue
-        const subject = tidy(row[column] || '')
-        const teacher = tidy(teacherRow[column] || '')
+        const subject = cellValue(row[column] || '')
+        const teacher = cellValue(teacherRow[column] || '')
         if (!subject && !teacher) continue
 
         if (subject && !teacher) {

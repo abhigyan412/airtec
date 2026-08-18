@@ -127,6 +127,20 @@ export function splitDemandsAcrossGroups(
 ): Map<string, EngineDemand[]> {
   if (groups.length <= 1) return weeklyBySection
 
+  // Split only across the shapes a section actually follows.
+  //
+  // Two different things produce more than one group, and they need
+  // opposite treatment. A school with a half-day Saturday has every
+  // section in both shapes, and each owes its share. A school where the
+  // juniors run nine periods and the seniors ten has the sections
+  // *partitioned* between the shapes, and each section owes its whole
+  // week to the one group it is in. Dividing there is what turned a
+  // correct import into 202 phantom "quota is 1" conflicts.
+  const groupsFor = (sectionId: string) => {
+    const mine = groups.filter(g => g.sectionIds.includes(sectionId))
+    return mine.length ? mine : groups
+  }
+
   const totalSlots = groups.reduce((sum, g) => sum + g.slotsPerSection, 0)
   const remaining = new Map<string, Map<string, number>>()
   for (const [sectionId, demands] of weeklyBySection) {
@@ -149,21 +163,39 @@ export function splitDemandsAcrossGroups(
 
   for (let position = 0; position < order.length; position++) {
     const { g: group, index: g } = order[position]
-    const isLast = position === order.length - 1
     const teacherCapacity = new Map<string, number>()
     const perGroup = new Map<string, EngineDemand[]>()
 
     for (const [sectionId, demands] of weeklyBySection) {
+      const mine = groupsFor(sectionId)
+      if (!mine.includes(group)) continue
+
       const left = remaining.get(sectionId)!
       const slots = group.slotsPerSection
+      // Denominator is this section's own shapes, not every shape in the
+      // school.
+      const sectionSlots = mine.reduce((sum, g) => sum + g.slotsPerSection, 0)
+      // The remainder goes to the section's ROOMIEST shape, because that
+      // is the one processed last — groups are walked smallest-first so
+      // the scarce shape is filled under its capacity ceiling before the
+      // spacious one mops up. Taking "last in the groups array" instead
+      // handed Saturday the entire weekly quota before the weekdays had
+      // been offered any of it.
+      const lastForSection = mine.reduce(
+        (best, g) => (g.slotsPerSection > best.slotsPerSection ? g : best), mine[0]) === group
 
       const share = demands.map(d => {
         const owed = left.get(d.subjectId) ?? 0
-        const exact = (d.periodsPerWeek * slots) / totalSlots
-        return { d, take: isLast ? owed : Math.min(owed, Math.floor(exact)), fraction: exact - Math.floor(exact), owed }
+        const exact = (d.periodsPerWeek * slots) / sectionSlots
+        return {
+          d,
+          take: lastForSection ? owed : Math.min(owed, Math.floor(exact)),
+          fraction: exact - Math.floor(exact),
+          owed,
+        }
       })
 
-      if (!isLast) {
+      if (!lastForSection) {
         // Top the section up to exactly its slots, favouring whoever was
         // rounded down hardest — but never past a teacher's own ceiling
         // for this shape.
@@ -757,30 +789,119 @@ export async function validateMove(
   }
 }
 
-/** Conflicts across the whole live timetable, for the pre-publish checklist. */
+/**
+ * Conflicts in the live timetable, for the pre-publish checklist.
+ *
+ * Two different questions, deliberately answered separately.
+ *
+ * The engine answers the slot-level ones — a teacher in two rooms at
+ * once, a room over capacity, too long a run, a blocked slot — and for
+ * those each day-shape is checked on its own days. Its demands are taken
+ * from what is actually on the grid rather than from a split of the
+ * plan, because splitting is a *generation* decision about what to place;
+ * applying it to a grid that already exists just measures the grid
+ * against a hypothesis it was never built to satisfy. That produced 358
+ * phantom "quota is 7, placed 8" conflicts on a school whose timetable
+ * was in fact correct.
+ *
+ * The quota question — is this section actually getting its five Maths
+ * periods a week — is asked once, across the whole week, against
+ * class_subject_plan. That is the level it means something at.
+ */
 export async function liveConflicts(schoolId: string) {
   const groups = await generationGroups(schoolId)
   const out: { group: string; conflicts: EngineConflict[] }[] = []
 
   for (const [index, group] of groups.entries()) {
     const context = await buildEngineInput(schoolId, group, { allGroups: groups, groupIndex: index })
-    const { data: live } = await supabase.from('timetable_periods')
-      .select('section_id, day_of_week, period_number, subject_id, teacher_id, room_id, is_locked')
-      .eq('school_id', schoolId).eq('is_break', false).in('section_id', group.sectionIds)
-      .in('day_of_week', group.days)
 
-    const entries: EngineEntry[] = (live ?? [])
+    const live = await fetchAll<any>((from, to) => supabase.from('timetable_periods')
+      .select('section_id, day_of_week, period_number, subject_id, teacher_id, room_id, is_locked')
+      .eq('school_id', schoolId).eq('is_break', false)
+      .in('section_id', group.sectionIds).in('day_of_week', group.days)
+      .range(from, to), 'timetable periods')
+
+    const entries: EngineEntry[] = live
       .filter(r => r.subject_id && r.teacher_id)
       .map(r => ({
         sectionId: r.section_id, day: r.day_of_week, periodNumber: r.period_number,
         subjectId: r.subject_id, teacherUserId: r.teacher_id, roomId: r.room_id ?? null,
       }))
 
+    // Demands = what is actually placed, so the quota codes stay quiet and
+    // only the slot-level findings survive.
+    const placed = new Map<string, Map<string, { count: number; teacherUserId: string }>>()
+    for (const e of entries) {
+      const bySubject = placed.get(e.sectionId) ?? new Map()
+      const hit = bySubject.get(e.subjectId)
+      if (hit) hit.count++
+      else bySubject.set(e.subjectId, { count: 1, teacherUserId: e.teacherUserId })
+      placed.set(e.sectionId, bySubject)
+    }
+    const actualInput: EngineInput = {
+      ...context.input,
+      sections: context.input.sections.map(section => ({
+        ...section,
+        demands: [...(placed.get(section.sectionId) ?? new Map()).entries()].map(([subjectId, v]) => {
+          const original = section.demands.find(d => d.subjectId === subjectId)
+          return {
+            subjectId,
+            teacherUserId: v.teacherUserId,
+            periodsPerWeek: v.count,
+            doublePeriods: 0,
+            roomType: original?.roomType ?? null,
+            placement: original?.placement ?? null,
+          }
+        }),
+      })),
+    }
+
     out.push({
       group: group.templateName,
-      conflicts: detectConflicts(entries, context.input).map(c => ({ ...c, message: humanizeIssue(c, context) })),
+      conflicts: detectConflicts(entries, actualInput)
+        .map(c => ({ ...c, message: humanizeIssue(c, context) })),
     })
   }
+
+  // ── the weekly quota, asked once ──────────────────────────────
+  const [planRows, gridRows, sectionRows, subjectRows] = await Promise.all([
+    fetchAll<any>((f, t) => supabase.from('class_subject_plan')
+      .select('section_id, class_id, subject_id, weekly_periods')
+      .eq('school_id', schoolId).range(f, t), 'plan'),
+    fetchAll<any>((f, t) => supabase.from('timetable_periods')
+      .select('section_id, subject_id').eq('school_id', schoolId).eq('is_break', false)
+      .not('subject_id', 'is', null).range(f, t), 'grid'),
+    fetchAll<any>((f, t) => supabase.from('sections')
+      .select('id, name, class_id, classes(name)').eq('school_id', schoolId).range(f, t), 'sections'),
+    fetchAll<any>((f, t) => supabase.from('subjects')
+      .select('id, name').eq('school_id', schoolId).range(f, t), 'subjects'),
+  ])
+
+  const labelOf = new Map(sectionRows.map(s =>
+    [s.id, `${(s as any).classes?.name ?? ''}-${s.name}`.replace(/^-/, '')]))
+  const subjectOf = new Map(subjectRows.map(s => [s.id, s.name]))
+
+  const actual = new Map<string, number>()
+  for (const r of gridRows) {
+    const key = `${r.section_id}|${r.subject_id}`
+    actual.set(key, (actual.get(key) ?? 0) + 1)
+  }
+
+  const quota: EngineConflict[] = []
+  for (const row of planRows) {
+    if (!row.section_id) continue
+    const key = `${row.section_id}|${row.subject_id}`
+    const placed = actual.get(key) ?? 0
+    if (placed === row.weekly_periods) continue
+    quota.push({
+      code: placed < row.weekly_periods ? 'QUOTA_UNMET' : 'QUOTA_EXCEEDED',
+      severity: 'block',
+      message: `${labelOf.get(row.section_id) ?? 'A section'} is scheduled ${placed} period(s) of ` +
+        `${subjectOf.get(row.subject_id) ?? 'a subject'} a week, against a plan of ${row.weekly_periods}`,
+      cells: [],
+    } as EngineConflict)
+  }
+  if (quota.length) out.push({ group: 'Weekly quotas', conflicts: quota })
 
   const all = out.flatMap(g => g.conflicts)
   return {

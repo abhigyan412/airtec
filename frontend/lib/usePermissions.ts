@@ -31,6 +31,8 @@ export type RbacPermissionsResponse = {
   role_ids: string[]
   is_super_role: boolean
   permissions: string[] // flat array of permission_codes, e.g. ['student.view', 'fee.collect', ...]
+  /** Modules the school bought. Null means all of them. */
+  enabled_modules: string[] | null
 }
 
 export function usePermissions() {
@@ -70,13 +72,34 @@ export function usePermissions() {
     return codes.some(c => permissionSet.has(c))
   }
 
+  /**
+   * Whether a module is on for this school.
+   *
+   * Separate from `can()` on purpose. A permission answers "is this user
+   * allowed to do it"; this answers "did the school buy it at all". A
+   * timetable-only school's teachers hold no fee permissions anyway, but
+   * several sidebar entries — Dashboard, My Payslips, My Leave — check no
+   * permission whatsoever, so permissions alone cannot hide them.
+   *
+   * Null (and the loading state) means everything, which is what every
+   * school created before the column existed gets.
+   */
+  function moduleEnabled(module?: string): boolean {
+    if (!module) return true
+    const enabled = data?.enabled_modules
+    if (isLoading || !data || enabled == null) return true
+    return enabled.includes(module)
+  }
+
   return {
     roles: data?.roles ?? [],
     permissions: data?.permissions ?? [],
+    enabledModules: data?.enabled_modules ?? null,
     isSuperRole,
     isLoading,
     can,
     canAny,
+    moduleEnabled,
   }
 }
 

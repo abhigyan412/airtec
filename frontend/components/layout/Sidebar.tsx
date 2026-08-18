@@ -36,6 +36,13 @@ interface NavItem {
    *  under "Recruitment") — the nav tree itself stays flat/one-level,
    *  this is styling only. */
   indent?: boolean
+  /** Which product module this belongs to. A school that has not bought
+   *  the module never sees the entry, whatever permissions its roles
+   *  hold — several entries below (Dashboard, My Payslips, My Leave)
+   *  check no permission at all, so permissions alone cannot hide them
+   *  from a school that only runs the timetable. Untagged items are
+   *  always shown. */
+  module?: string
   /** Permission required to actually open this item. Unlike `permission`
    *  (which hides the item outright), lacking this one still shows the
    *  entry — greyed out with a lock icon and no navigation — so a user
@@ -48,9 +55,10 @@ interface NavItem {
 // codes (see lib/usePermissions.ts). A group is shown when at least one of its
 // children is visible, so a group can never advertise a page the user can't open.
 const NAV: NavItem[] = [
-  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, module: 'dashboard' },
   {
     label: 'Students',
+    module: 'students',
     icon: Users,
     children: [
       { label: 'All Students', href: '/students', icon: UserCheck, permission: 'student.view' },
@@ -61,6 +69,7 @@ const NAV: NavItem[] = [
   },
   {
     label: 'Admissions',
+    module: 'admissions',
     icon: UserPlus,
     children: [
       { label: 'Pipeline', href: '/admission', icon: UserPlus, permission: 'admission.view' },
@@ -69,6 +78,7 @@ const NAV: NavItem[] = [
   },
   {
     label: 'Fees',
+    module: 'fees',
     icon: CreditCard,
     children: [
       // Kept in step with the tab bar in app/(app)/fees/layout.tsx — the two
@@ -85,6 +95,7 @@ const NAV: NavItem[] = [
   },
   {
     label: 'Examinations',
+    module: 'exams',
     icon: BookOpen,
     children: [
       { label: 'All Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
@@ -92,9 +103,10 @@ const NAV: NavItem[] = [
       { label: 'Examination Settings', href: '/exams/templates', icon: SettingsIcon, permission: 'exam.view', lockUnless: 'exam.schedule', indent: true },
     ],
   },
-  { label: 'Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true },
+  { label: 'Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true, module: 'attendance' },
   {
     label: 'Timetable',
+    module: 'timetable',
     icon: Clock,
     children: [
       { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view' },
@@ -112,12 +124,13 @@ const NAV: NavItem[] = [
       { label: 'Setup', href: '/timetable/setup', icon: SlidersHorizontal, permission: 'timetable.view', lockUnless: 'timetable.setup_manage' },
     ],
   },
-  { label: 'Homework', href: '/homework', icon: NotebookPen, permission: 'homework.view' },
-  { label: 'Complaints', href: '/complaints', icon: MessageSquare, permission: 'complaint.view' },
-  { label: 'Certificates', href: '/certificates', icon: Award, permission: 'certificate.view' },
-  { label: 'Resource Centre', href: '/resources', icon: Library, permission: 'resource.view' },
+  { label: 'Homework', href: '/homework', icon: NotebookPen, permission: 'homework.view', module: 'homework' },
+  { label: 'Complaints', href: '/complaints', icon: MessageSquare, permission: 'complaint.view', module: 'complaints' },
+  { label: 'Certificates', href: '/certificates', icon: Award, permission: 'certificate.view', module: 'certificates' },
+  { label: 'Resource Centre', href: '/resources', icon: Library, permission: 'resource.view', module: 'resources' },
   {
     label: 'Staff & HR',
+    module: 'hr',
     icon: Briefcase,
     children: [
       { label: 'Staff', href: '/hr/staff', icon: Users, permission: 'staff.view' },
@@ -141,10 +154,10 @@ const NAV: NavItem[] = [
 // Footer settings group — Classes & Calendar historically gated to principal /
 // school-admin; keep that gate.
 const SETTINGS: NavItem[] = [
-  { label: 'Team & Settings', href: '/settings/team', icon: SettingsIcon, requireAny: ['team.view', 'team.invite', 'role.manage'] },
-  { label: 'Classes & Sections', href: '/settings/classes', icon: School, roles: ['principal'] },
-  { label: 'Class Teachers', href: '/settings/teaching-assignments', icon: GraduationCap, roles: ['principal'] },
-  { label: 'Academic Calendar', href: '/settings/calendar', icon: CalendarDays, roles: ['principal', 'teacher'] },
+  { label: 'Team & Settings', href: '/settings/team', icon: SettingsIcon, requireAny: ['team.view', 'team.invite', 'role.manage'], module: 'settings' },
+  { label: 'Classes & Sections', href: '/settings/classes', icon: School, roles: ['principal'], module: 'settings' },
+  { label: 'Class Teachers', href: '/settings/teaching-assignments', icon: GraduationCap, roles: ['principal'], module: 'settings' },
+  { label: 'Academic Calendar', href: '/settings/calendar', icon: CalendarDays, roles: ['principal', 'teacher'], module: 'settings' },
 ]
 
 interface SidebarProps {
@@ -157,11 +170,16 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const searchParams = useSearchParams()
   const currentSearch = searchParams.toString()
   const { user, isRole } = useAuth()
-  const { can, canAny, isSuperRole, roles } = usePermissions()
+  const { can, canAny, isSuperRole, roles, moduleEnabled } = usePermissions()
   const isSubjectOnlyTeacher = user?.role === 'teacher' && !roles.includes('Class Teacher')
 
   const allowed = React.useCallback(
     (item: NavItem): boolean => {
+      // Module first, and before the children check: a group the school
+      // has not bought is gone whatever its children would allow, and a
+      // super role does not override it either — School Admin at a
+      // timetable-only school still has no fees to look at.
+      if (!moduleEnabled(item.module)) return false
       if (item.children?.length) return item.children.some(allowed)
       if (item.teacherRequiresClassTeacher && isSubjectOnlyTeacher) return false
       if (item.roles) return isSuperRole || isRole(...item.roles)
@@ -169,7 +187,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       if (item.permission) return can(item.permission)
       return true
     },
-    [can, canAny, isRole, isSuperRole, isSubjectOnlyTeacher],
+    [can, canAny, isRole, isSuperRole, isSubjectOnlyTeacher, moduleEnabled],
   )
 
   const locked = React.useCallback(

@@ -68,6 +68,7 @@ export interface CommitResult {
   subjectsCreated: number
   teachersCreated: number
   dayTemplatesCreated: number
+  roomsCreated: number
   periodsWritten: number
   planRows: number
   capabilityRows: number
@@ -130,7 +131,7 @@ export async function commitImport(
 ): Promise<CommitResult> {
   const result: CommitResult = {
     versionId: '', classesCreated: 0, sectionsCreated: 0, subjectsCreated: 0,
-    teachersCreated: 0, dayTemplatesCreated: 0, periodsWritten: 0,
+    teachersCreated: 0, dayTemplatesCreated: 0, roomsCreated: 0, periodsWritten: 0,
     planRows: 0, capabilityRows: 0, constraintRows: 0,
     skipped: { slots: 0, reasons: [] }, createdLogins: [],
   }
@@ -263,6 +264,43 @@ export async function commitImport(
     teacherIdByName.set(normalizeKey(group.canonical), created.id)
     result.teachersCreated++
     result.createdLogins.push({ fullName, email })
+  }
+
+  // ── 3b. the rooms those subjects imply ────────────────────────
+  //
+  // A school that timetables a subject literally called "Computer Lab"
+  // has a computer lab. guessRoomType reads that off the name and records
+  // it against the subject — but a spreadsheet carries no room data, so
+  // nothing was ever created to satisfy it, and feasibility then reported
+  // "subjects need a computer_lab but no room of that type exists" on a
+  // school whose timetable was perfectly fine. Inferring the room from
+  // the subject that names it keeps the configuration self-consistent;
+  // the school can correct the count on the setup page.
+  const neededRoomTypes = new Set<string>()
+  for (const id of new Set(subjectIdByName.values())) {
+    const { data: subject } = await supabase.from('subjects')
+      .select('room_type').eq('id', id).maybeSingle()
+    if (subject?.room_type) neededRoomTypes.add(subject.room_type)
+  }
+  if (neededRoomTypes.size) {
+    const { data: haveRooms } = await supabase.from('classrooms')
+      .select('room_type').eq('school_id', schoolId)
+    const have = new Set((haveRooms ?? []).map(r => r.room_type))
+    const ROOM_NAMES: Record<string, string> = {
+      computer_lab: 'Computer Lab', science_lab: 'Science Lab', ground: 'Playground',
+      library: 'Library', music_room: 'Music Room', art_room: 'Art Room',
+      av_room: 'AV Room', auditorium: 'Auditorium',
+    }
+    const toCreate = [...neededRoomTypes].filter(t => !have.has(t)).map(t => ({
+      school_id: schoolId, name: ROOM_NAMES[t] ?? t, room_type: t,
+      capacity: t === 'ground' ? 200 : 40,
+      capacity_groups: t === 'ground' ? 2 : 1,
+    }))
+    if (toCreate.length) {
+      const { error } = await supabase.from('classrooms').insert(toCreate)
+      if (error) console.error('[timetable-import] rooms:', error.message)
+      else result.roomsCreated = toCreate.length
+    }
   }
 
   // ── 4. day templates ──────────────────────────────────────────
@@ -460,9 +498,24 @@ export async function commitImport(
       })
     }
     if (rows.length) {
-      const { error } = await supabase.from('class_subject_plan')
-        .upsert(rows, { onConflict: 'section_id,subject_id' })
-      if (error) console.error('[timetable-import] plan upsert:', error.message)
+      // Replace, do not upsert.
+      //
+      // class_subject_plan's unique indexes are partial — one for rows
+      // with a section, one for class-wide rows — because Postgres treats
+      // NULLs as distinct and a plain index would let two class-wide rows
+      // through. PostgREST can only emit `ON CONFLICT (cols)`, which
+      // cannot match a partial index, so the upsert failed outright with
+      // "no unique or exclusion constraint matching the ON CONFLICT
+      // specification" and the plan silently came out empty — taking
+      // generation with it. An import replaces the plan anyway, so
+      // delete-then-insert is both correct and simpler.
+      const classIds = [...new Set(rows.map(r => r.class_id))]
+      const { error: clearError } = await supabase.from('class_subject_plan')
+        .delete().eq('school_id', schoolId).in('class_id', classIds)
+      if (clearError) console.error('[timetable-import] plan clear:', clearError.message)
+
+      const { error } = await supabase.from('class_subject_plan').insert(rows)
+      if (error) console.error('[timetable-import] plan insert:', error.message)
       else result.planRows = rows.length
     }
   }

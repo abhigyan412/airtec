@@ -10,3 +10,6 @@ skills-lock.json
 # Real school data — 27 named teachers from a live school. Imported at
 # runtime via /timetable/import, never committed and never seeded.
 New Time table*.xlsx
+
+# One-time credential handovers written by provisionTimetableSchool.ts
+credentials-*.txt
