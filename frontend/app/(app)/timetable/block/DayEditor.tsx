@@ -72,17 +72,31 @@ export function DayEditor({ data, versionId, editable, onChanged }: {
     return counts
   }, [data, sectionId])
 
-  // Planned, for this section (or the class-wide row where the plan
-  // doesn't split by section).
+  // Planned, for this section. getClassPlan answers
+  // { classId, sections, subjects, rows } — the allocations are in rows,
+  // and a row with a null section_id is a class-wide allocation that
+  // applies to every section of the class.
+  //
+  // Array.isArray rather than a bare ?? default: reading a shape that
+  // turned out not to be a list is what crashed this component once
+  // already, and rendering an empty tally beats taking the page down.
   const planned = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const item of (plan.data?.items ?? plan.data ?? []) as any[]) {
+    const rows = Array.isArray(plan.data?.rows) ? plan.data.rows : []
+    for (const item of rows as any[]) {
       if (item.section_id && item.section_id !== sectionId) continue
-      const name = item.subject_name ?? item.subjectName
+      const name = item.subject_name
       if (!name) continue
-      counts.set(name, (counts.get(name) ?? 0) + (item.weekly_periods ?? item.weeklyPeriods ?? 0))
+      counts.set(name, (counts.get(name) ?? 0) + (item.weekly_periods ?? 0))
     }
     return counts
+  }, [plan.data, sectionId])
+
+  // What the plan says about this section as a whole: how many teaching
+  // periods its week actually has, and how many are spoken for.
+  const sectionPlan = useMemo(() => {
+    const list = Array.isArray(plan.data?.sections) ? plan.data.sections : []
+    return (list as any[]).find(s => s.id === sectionId) ?? null
   }, [plan.data, sectionId])
 
   const tally = useMemo(() => {
@@ -157,6 +171,19 @@ export function DayEditor({ data, versionId, editable, onChanged }: {
         <CardContent className="p-4">
           <h3 className="text-sm font-semibold text-foreground">This week, against the plan</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">{section.label}</p>
+
+          {sectionPlan?.weeklyCapacity != null && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Chip>{sectionPlan.allocated ?? 0} of {sectionPlan.weeklyCapacity} allocated</Chip>
+              {typeof sectionPlan.shortfall === 'number' && sectionPlan.shortfall !== 0 && (
+                <Chip tone={sectionPlan.shortfall > 0 ? 'warn' : 'bad'}>
+                  {sectionPlan.shortfall > 0
+                    ? `${sectionPlan.shortfall} unallocated`
+                    : `${Math.abs(sectionPlan.shortfall)} over capacity`}
+                </Chip>
+              )}
+            </div>
+          )}
 
           {plan.isLoading ? (
             <p className="mt-3 text-xs text-muted-foreground">Loading the plan…</p>
