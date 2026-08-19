@@ -546,3 +546,64 @@ principal who takes two periods of Maths — exactly the kind of person with fre
 time. The pool is now everyone who is not a parent or a student, consistently
 across the ladder, the free-teacher matrix, the workload report and the
 generator.
+
+---
+
+## 10. End-to-end pass before rollout (19 Aug)
+
+A full sweep against the live school — every endpoint over real HTTP as
+real users, then the flows behind them. Seven defects, all reproduced
+before being fixed and re-verified after. The ones worth remembering:
+
+**A generator can be correct per run and wrong overall.** Generation runs
+once per day shape and hands each run the other shapes' timetable as
+immovable occupancy. That occupancy was read from the live grid — which
+is what the run is replacing. Every individual run was internally
+consistent; the draft as a whole had 35 teacher double-bookings, because
+shape two scheduled around where shape one's teachers used to be. Later
+shapes now receive what this run actually placed. The lesson generalises:
+when a job replaces state in stages, "current state" means *as of this
+job*, not as of the database.
+
+**A foreign key encoded a claim nobody had checked.**
+`arrangements.timetable_period_id` was `ON DELETE CASCADE`, which asserts
+that a cover assignment is meaningless without its period row. It isn't —
+the arrangement already stores the class, section, day, period, times and
+subject. Meanwhile all three functions that put a timetable live work by
+deleting and reinserting every period row, so publishing at eleven in the
+morning silently erased that day's cover: teachers who had accepted it no
+longer had it, and nobody was told. Found because a rollback to the
+imported timetable wiped cover for three confirmed absences. The link now
+goes null and is re-established by matching section + weekday + period.
+
+**A button with no preview is a button that gets pressed blind.**
+`versionGrid` had existed in the API client since the module was written
+and was called from nowhere: the screen offered a score, a conflict count
+and Publish. That is how a generated draft came to replace this school's
+imported timetable without anybody seeing it. The preview also revealed
+that `draftGrid` never paginated — a full week would have shown
+two-thirds of itself and looked complete.
+
+**Deciding on the user's behalf is not the same as helping.** "They're
+back" cancelled everything the clock said had not started and reported a
+total afterwards. But which cover survives a teacher's return is one
+decision per period: they take their afternoon back, period 3 was taught
+by somebody else an hour ago, and period 7 may want leaving covered
+because they are going into a meeting. It now asks, shows which periods
+have already gone, and tells a substitute whose cover was deliberately
+kept that it still stands.
+
+**A cross-school sweep needs to know which schools it applies to.** The
+absconded sweep flags anyone unmarked for 15 working days. A
+timetable-only school keeps no attendance register, so all 29 teachers
+were flagged, burying every real notification in the administrator's
+list; with `absconded_auto_flag` on it would have marked all 29 absconded
+outright. Guarded twice — on the module, and on whether the register
+contains anything at all, which protects any school that stops using it.
+
+**Red tests protect nothing.** Six were failing at HEAD, all stale
+expectations rather than real breakage: two predated a deliberate move to
+three sections per class, three assumed every school holds all sixteen
+default roles (a module-restricted school deliberately drops the ones it
+will never use), one counted permissions before dedupe. Back to 459
+passing across 26 files.
