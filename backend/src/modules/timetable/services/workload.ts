@@ -1,5 +1,5 @@
 import { supabase } from '../../../shared/db/client'
-import { arrangementManagers, audit, badRequest, DAY_NAMES, fetchAll, getSettings, must, notify } from '../lib/core'
+import { arrangementManagers, audit, badRequest, conflict, DAY_NAMES, fetchAll, getSettings, must, notify } from '../lib/core'
 import { monthBounds } from './arrangements'
 
 // ═══════════════════════════════════════════════════════════════
@@ -310,6 +310,21 @@ export async function redistributionOptions(schoolId: string, teacherId: string)
  * the manager is looking at, and refused outright if it would simply
  * relocate the overload.
  */
+/**
+ * Reassigning a period on the LIVE timetable is refused.
+ *
+ * This used to write straight to timetable_periods. The published grid
+ * is what the whole school is reading from at that moment — a teacher
+ * checking their phone between lessons, the cover queue, the printed
+ * sheet on the office wall — and rewriting one of its cells in place
+ * changed all of that under them, with no version behind it and nothing
+ * to roll back to.
+ *
+ * The replacement is not "you cannot do this", it is "do it on a copy":
+ * clone the live timetable, make the change with the conflicts and the
+ * summary in front of you, publish it as the next version. Publishing
+ * snapshots what it replaced, so the change is one click to undo.
+ */
 export async function reassignPeriod(
   schoolId: string, actorId: string, periodId: string, newTeacherId: string,
 ) {
@@ -317,6 +332,12 @@ export async function reassignPeriod(
     .select('*, classes(name), sections(name)')
     .eq('id', periodId).eq('school_id', schoolId).maybeSingle(), 'timetable period')
 
+  throw conflict('live_not_editable',
+    'The live timetable cannot be edited in place. Make a copy of it, change the copy, ' +
+    'and publish it — that way the change is reviewable and can be undone.',
+    { periodId, teacherId: newTeacherId })
+
+  // eslint-disable-next-line no-unreachable
   const previousTeacher = period.teacher_id
   if (previousTeacher === newTeacherId) return { ok: true, unchanged: true }
 

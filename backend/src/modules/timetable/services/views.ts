@@ -393,3 +393,210 @@ function weeklyLoad(rows: any[]) {
     busiestDay: perDay.reduce((a, b) => (b.periods > a.periods ? b : a), perDay[0]),
   }
 }
+
+// ── the block view ──────────────────────────────────────────────
+//
+// Every section's whole week in one object, from either the live
+// timetable or an unpublished draft. This is the sheet a school actually
+// works from when checking a timetable over: the wall grid answers "what
+// is 6B doing on Tuesday", but "is this timetable any good" is a question
+// about all of it at once, and it is asked of a draft at least as often
+// as of the live one.
+//
+// It carries its own summary and conflict list rather than leaving the
+// client to derive them, because both have to be computed across the
+// whole grid — a teacher standing in two rooms at once is invisible from
+// inside either room, and the client would otherwise be paginating a
+// thousand rows to work it out.
+
+export interface BlockConflict {
+  kind: 'teacher_clash' | 'room_over_capacity' | 'unstaffed' | 'gap'
+  severity: 'block' | 'warn'
+  day: number
+  periodNumber: number
+  message: string
+  /** Sections the conflict touches, so the grid can highlight them. */
+  sectionIds: string[]
+  cellIds: string[]
+}
+
+export async function blockGrid(
+  schoolId: string,
+  options: { versionId?: string | null } = {},
+) {
+  const draft = !!options.versionId && options.versionId !== 'active'
+
+  let version: { id: string; label: string; status: string; source: string } | null = null
+  if (draft) {
+    const { data } = await supabase.from('timetable_versions')
+      .select('id, label, status, source')
+      .eq('id', options.versionId!).eq('school_id', schoolId).maybeSingle()
+    if (!data) throw badRequest('version_not_found', 'That timetable version does not exist.')
+    version = data as any
+  } else {
+    const { data } = await supabase.from('timetable_versions')
+      .select('id, label, status, source')
+      .eq('school_id', schoolId).eq('status', 'active').maybeSingle()
+    version = (data as any) ?? null
+  }
+
+  // Paged in both cases: a 16-section week is past the 1000 rows
+  // PostgREST hands back by default, and a block view that quietly stops
+  // two-thirds of the way through is worse than none.
+  const rows = draft
+    ? await fetchAll<any>((from, to) => supabase.from('timetable_draft_periods')
+        .select(`
+          id, day_of_week, period_number, start_time, end_time,
+          subject_id, subject_name, teacher_id, room_id, is_break, is_locked,
+          class_id, section_id,
+          teacher:teacher_id(id, full_name), room:room_id(name),
+          classes(name), sections(name)
+        `)
+        .eq('school_id', schoolId).eq('version_id', options.versionId!)
+        .order('day_of_week').order('period_number').range(from, to), 'draft periods')
+    : await fetchAll<any>((from, to) => supabase.from('timetable_periods').select(SELECT)
+        .eq('school_id', schoolId)
+        .order('day_of_week').order('period_number').range(from, to), 'timetable periods')
+
+  const [{ data: sectionRows }, { data: roomRows }] = await Promise.all([
+    supabase.from('sections')
+      .select('id, name, class_id, classes(name, numeric_level)').eq('school_id', schoolId),
+    supabase.from('classrooms').select('id, name, capacity_groups').eq('school_id', schoolId),
+  ])
+
+  const roomById = new Map((roomRows ?? []).map(r => [r.id, r]))
+
+  // Only sections this timetable actually contains — a draft may not
+  // cover every section, and showing empty columns for the rest reads as
+  // "the generator forgot them".
+  const present = new Set(rows.map(r => r.section_id).filter(Boolean))
+  const sections = (sectionRows ?? [])
+    .filter(s => present.has(s.id))
+    .map(s => ({
+      sectionId: s.id,
+      label: `${(s as any).classes?.name ?? ''}-${s.name}`,
+      numericLevel: (s as any).classes?.numeric_level ?? 0,
+      sectionName: s.name,
+      className: (s as any).classes?.name ?? '',
+    }))
+    .sort((a, b) => a.numericLevel - b.numericLevel || a.sectionName.localeCompare(b.sectionName))
+
+  const days = [...new Set(rows.map(r => r.day_of_week))].sort((a, b) => a - b)
+  const slots = periodAxis(rows)
+
+  const cells: Record<string, Cell> = {}
+  for (const row of rows) {
+    cells[`${row.section_id}:${row.day_of_week}:${row.period_number}`] = toCell(row)
+  }
+
+  // ── conflicts, computed across the whole grid ─────────────────
+  const conflicts: BlockConflict[] = []
+  const labelOf = new Map(sections.map(s => [s.sectionId, s.label]))
+
+  const byTeacherSlot = new Map<string, any[]>()
+  const byRoomSlot = new Map<string, any[]>()
+  for (const row of rows) {
+    if (row.is_break) continue
+    if (row.teacher_id) {
+      const key = `${row.teacher_id}:${row.day_of_week}:${row.period_number}`
+      byTeacherSlot.set(key, [...(byTeacherSlot.get(key) ?? []), row])
+    } else {
+      conflicts.push({
+        kind: 'unstaffed', severity: 'warn',
+        day: row.day_of_week, periodNumber: row.period_number,
+        message: `${labelOf.get(row.section_id) ?? 'A class'} has ${row.subject_name || 'a period'} with nobody assigned to teach it — ${DAY_NAMES[row.day_of_week]}, period ${row.period_number}.`,
+        sectionIds: [row.section_id], cellIds: [row.id],
+      })
+    }
+    if (row.room_id) {
+      const key = `${row.room_id}:${row.day_of_week}:${row.period_number}`
+      byRoomSlot.set(key, [...(byRoomSlot.get(key) ?? []), row])
+    }
+  }
+
+  for (const group of Array.from(byTeacherSlot.values())) {
+    if (group.length < 2) continue
+    const first = group[0]
+    conflicts.push({
+      kind: 'teacher_clash', severity: 'block',
+      day: first.day_of_week, periodNumber: first.period_number,
+      message: `${first.teacher?.full_name ?? 'A teacher'} is timetabled in ${
+        group.map(r => labelOf.get(r.section_id) ?? 'a class').join(' and ')
+      } at the same time — ${DAY_NAMES[first.day_of_week]}, period ${first.period_number}.`,
+      sectionIds: group.map(r => r.section_id),
+      cellIds: group.map(r => r.id),
+    })
+  }
+
+  for (const group of Array.from(byRoomSlot.values())) {
+    const room = roomById.get(group[0].room_id)
+    // A playground or hall may legitimately take more than one class.
+    const capacity = room?.capacity_groups ?? 1
+    if (group.length <= capacity) continue
+    conflicts.push({
+      kind: 'room_over_capacity', severity: 'block',
+      day: group[0].day_of_week, periodNumber: group[0].period_number,
+      message: `${room?.name ?? 'A room'} holds ${capacity} class${capacity === 1 ? '' : 'es'} at once but ${group.length} are booked into it — ${DAY_NAMES[group[0].day_of_week]}, period ${group[0].period_number}.`,
+      sectionIds: group.map(r => r.section_id),
+      cellIds: group.map(r => r.id),
+    })
+  }
+
+  // Gaps, measured inside each section's own day rather than against the
+  // longest day in the school: a section that finishes after period 9 has
+  // not "lost" period 10, and flagging that would bury the real holes.
+  //
+  // Teaching periods only. Breaks are numbered outside the teaching
+  // sequence (this school's lunch is period 105), so counting them made
+  // every section look like it had ninety-five empty periods a day.
+  let gapCount = 0
+  const teachingRows = rows.filter(r => !r.is_break)
+  for (const section of sections) {
+    for (const day of days) {
+      const inDay = teachingRows.filter(r => r.section_id === section.sectionId && r.day_of_week === day)
+      if (!inDay.length) continue
+      const last = Math.max(...inDay.map(r => r.period_number))
+      const held = new Set(inDay.map(r => r.period_number))
+      const missing: number[] = []
+      for (let n = 1; n <= last; n++) if (!held.has(n)) missing.push(n)
+      if (!missing.length) continue
+      gapCount += missing.length
+      conflicts.push({
+        kind: 'gap', severity: 'warn',
+        day, periodNumber: missing[0],
+        message: `${section.label} has nothing scheduled in period${missing.length === 1 ? '' : 's'} ${missing.join(', ')} on ${DAY_NAMES[day]}, but the day continues afterwards.`,
+        sectionIds: [section.sectionId], cellIds: [],
+      })
+    }
+  }
+
+  conflicts.sort((a, b) =>
+    (a.severity === b.severity ? 0 : a.severity === 'block' ? -1 : 1) ||
+    a.day - b.day || a.periodNumber - b.periodNumber)
+
+  const teaching = rows.filter(r => !r.is_break)
+  const summary = {
+    sections: sections.length,
+    days: days.length,
+    periodsPlaced: teaching.length,
+    breaks: rows.length - teaching.length,
+    teachers: new Set(teaching.map(r => r.teacher_id).filter(Boolean)).size,
+    subjects: new Set(teaching.map(r => r.subject_name).filter(Boolean)).size,
+    rooms: new Set(teaching.map(r => r.room_id).filter(Boolean)).size,
+    unstaffed: conflicts.filter(c => c.kind === 'unstaffed').length,
+    teacherClashes: conflicts.filter(c => c.kind === 'teacher_clash').length,
+    roomClashes: conflicts.filter(c => c.kind === 'room_over_capacity').length,
+    gaps: gapCount,
+    blocking: conflicts.filter(c => c.severity === 'block').length,
+    warnings: conflicts.filter(c => c.severity === 'warn').length,
+  }
+
+  return {
+    source: draft ? 'draft' : 'active',
+    version: version
+      ? { id: version.id, label: version.label, status: version.status, origin: version.source }
+      : null,
+    sections, days, slots, cells, conflicts, summary,
+    dayNames: Object.fromEntries(days.map(d => [d, DAY_NAMES[d]])),
+  }
+}

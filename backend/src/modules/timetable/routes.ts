@@ -285,6 +285,14 @@ router.get('/views/master', requirePermissionV2('timetable.view'),
     })
   }))
 
+// Every section's week at once, from the live timetable or any draft.
+// timetable.view rather than a manage permission: this is the sheet
+// pinned up in the staffroom, and printing it is the point.
+router.get('/views/block', requirePermissionV2('timetable.view'),
+  handle(async req => views.blockGrid(req.user!.school_id, {
+    versionId: typeof req.query.versionId === 'string' ? req.query.versionId : null,
+  })))
+
 router.get('/views/free-teachers', requireAnyPermissionV2('arrangement.view', 'timetable.manage'),
   handle(async req => {
     const date = typeof req.query.date === 'string' ? req.query.date : null
@@ -507,6 +515,29 @@ router.get('/versions/:id/grid', requirePermissionV2('timetable.view'),
   handle(async req => generate.draftGrid(
     req.user!.school_id, req.params.id,
     typeof req.query.sectionId === 'string' ? req.query.sectionId : undefined)))
+
+// Editing the live timetable means copying it first. See the note above
+// cloneActiveToDraft: the published grid is what the school is working
+// from right now, and rewriting it under them is not an edit, it is an
+// outage nobody was told about.
+router.post('/versions/clone-active', requirePermissionV2('timetable.manage'),
+  handle(async req => generate.cloneActiveToDraft(req.user!.school_id, req.user!.id, {
+    label: typeof req.body?.label === 'string' ? req.body.label : undefined,
+  })))
+
+router.patch('/draft/:versionId/cells/:cellId', requirePermissionV2('timetable.manage'),
+  handle(async req => generate.updateDraftCell(
+    req.user!.school_id, req.user!.id, req.params.versionId, req.params.cellId, {
+      teacherId: 'teacherId' in (req.body ?? {}) ? (req.body.teacherId || null) : undefined,
+      roomId: 'roomId' in (req.body ?? {}) ? (req.body.roomId || null) : undefined,
+    })))
+
+router.post('/draft/:versionId/cells/:cellId/move', requirePermissionV2('timetable.manage'),
+  handle(async req => generate.moveDraftCell(
+    req.user!.school_id, req.user!.id, req.params.versionId, req.params.cellId, {
+      day: Number(req.body?.day),
+      periodNumber: Number(req.body?.periodNumber),
+    })))
 
 router.post('/versions/:id/publish', requirePermissionV2('timetable.publish'),
   handle(async req => generate.publishVersion(req.user!.school_id, req.user!.id, req.params.id)))

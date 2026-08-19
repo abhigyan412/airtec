@@ -8,7 +8,7 @@ import {
   MessageSquare, Award, Clock, Library, Briefcase, Settings as SettingsIcon,
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
-  Network, UserCheck2, Send, Grid3X3, User, Layers, Receipt, Tag, FileText, Lock,
+  Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
   SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
@@ -120,6 +120,10 @@ const NAV: NavItem[] = [
       // given, and their reserved periods. Gated on nothing but a login,
       // because it only ever shows the caller their own data — the
       // handler resolves identity from the token and ignores any id.
+      // Every class at once, live or draft, and the thing that prints
+      // the whole set. timetable.view because printing the timetables is
+      // an office job, not a manager's.
+      { label: 'Block View', href: '/timetable/block', icon: LayoutGrid, permission: 'timetable.view' },
       { label: 'My Week', href: '/timetable/my-week', icon: CalendarClock },
       { label: 'Arrangements', href: '/timetable/arrangements', icon: UserCheck2, permission: 'arrangement.view' },
       { label: 'Workload', href: '/timetable/workload', icon: Gauge, permission: 'timetable.workload_view' },

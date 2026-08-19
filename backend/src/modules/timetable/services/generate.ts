@@ -616,6 +616,29 @@ export async function generateDraft(schoolId: string, actorId: string, options: 
       }
     }
 
+    // Breaks are part of the shape of the day, not something the engine
+    // places — it only ever emits teaching periods. But publishing a
+    // draft DELETES every row for the sections it covers and inserts the
+    // draft in their place, so a draft that carries no break rows
+    // publishes a school with no lunch. Nothing would have complained:
+    // the grid simply loses a row, and the morning-absence panel, which
+    // anchors itself to the first break named "Lunch", quietly stops
+    // finding one. So the live breaks are carried across unchanged.
+    const generatedSections = new Set(rows.map(r => r.section_id))
+    if (generatedSections.size) {
+      const liveBreaks = await fetchAll<any>((from, to) => supabase.from('timetable_periods')
+        .select(`
+          class_id, section_id, day_of_week, period_number, start_time, end_time,
+          subject_id, subject_name, teacher_id, room_id, is_break, is_locked, is_double_part
+        `)
+        .eq('school_id', schoolId).eq('is_break', true).range(from, to), 'timetable breaks')
+
+      for (const row of liveBreaks) {
+        if (!generatedSections.has(row.section_id)) continue
+        rows.push({ ...row, school_id: schoolId, version_id: version.id })
+      }
+    }
+
     if (rows.length) {
       // Chunked because a 16-section week is ~1,000 rows and PostgREST
       // will refuse the payload in one go.
@@ -984,4 +1007,241 @@ export async function liveConflicts(schoolId: string) {
       info: all.filter(c => c.severity === 'info').length,
     },
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Editing a timetable, without editing the live one
+// ═══════════════════════════════════════════════════════════════
+//
+// The published timetable is what the whole school is working from this
+// minute: a teacher looking at their phone between periods, the cover
+// queue, the arrangement register. Editing it in place means every one
+// of those changes under somebody mid-glance, with no version to roll
+// back to and nothing to review before it happens — and it happened,
+// through the workload screen's reassign button, which rewrote a live
+// period with no record beyond an audit line.
+//
+// So the live grid is read-only, and changing it is: clone it to a
+// draft, edit the draft with the conflicts and the summary in front of
+// you, publish when it is right. Publishing already snapshots what it
+// replaced, so the whole thing is one click to undo.
+
+/** Next free "v<n>" for this school, so versions read in order. */
+async function nextVersionLabel(schoolId: string): Promise<string> {
+  const { data } = await supabase.from('timetable_versions')
+    .select('label').eq('school_id', schoolId)
+  let highest = 1
+  for (const row of data ?? []) {
+    const match = /^v(\d+)\b/i.exec(String(row.label ?? '').trim())
+    if (match) highest = Math.max(highest, Number(match[1]))
+  }
+  return `v${highest + 1}`
+}
+
+export async function cloneActiveToDraft(
+  schoolId: string, actorId: string, options: { label?: string } = {},
+) {
+  const { data: openDraft } = await supabase.from('timetable_versions')
+    .select('id, label').eq('school_id', schoolId).eq('status', 'draft').limit(1).maybeSingle()
+  if (openDraft) {
+    throw conflict('draft_exists',
+      `There is already an unpublished draft ("${openDraft.label}"). Publish or discard it before starting another.`,
+      { versionId: openDraft.id })
+  }
+
+  const live = await fetchAll<any>((from, to) => supabase.from('timetable_periods')
+    .select(`
+      class_id, section_id, day_of_week, period_number, start_time, end_time,
+      subject_id, subject_name, teacher_id, room_id, is_break, is_locked, is_double_part
+    `)
+    .eq('school_id', schoolId).range(from, to), 'timetable periods')
+
+  if (!live.length) {
+    throw badRequest('nothing_to_clone',
+      'There is no live timetable to copy. Import or generate one first.')
+  }
+
+  const label = options.label?.trim() || await nextVersionLabel(schoolId)
+
+  const version = must(await supabase.from('timetable_versions').insert({
+    school_id: schoolId,
+    label,
+    status: 'draft',
+    // 'manual' is the existing vocabulary for a timetable somebody made
+    // by hand, which is what a clone exists to become.
+    source: 'manual',
+    created_by: actorId,
+  }).select('id, label').single(), 'create draft version')
+
+  const rows = live.map(row => ({ ...row, school_id: schoolId, version_id: version.id }))
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await supabase.from('timetable_draft_periods').insert(rows.slice(i, i + 500))
+    if (error) {
+      // Never leave half a draft behind for somebody to publish.
+      await supabase.from('timetable_draft_periods').delete().eq('version_id', version.id)
+      await supabase.from('timetable_versions').delete().eq('id', version.id)
+      throw badRequest('clone_failed', error.message)
+    }
+  }
+
+  await audit(schoolId, actorId, 'clone_active', 'timetable_version', version.id, {
+    label: version.label, rows: rows.length,
+  })
+
+  return { versionId: version.id, label: version.label, rowsCopied: rows.length }
+}
+
+/** The draft this edit is aimed at, or a refusal explaining why not. */
+async function editableDraft(schoolId: string, versionId: string) {
+  const { data } = await supabase.from('timetable_versions')
+    .select('id, label, status').eq('id', versionId).eq('school_id', schoolId).maybeSingle()
+  if (!data) throw badRequest('version_not_found', 'That timetable version does not exist.')
+  if (data.status !== 'draft') {
+    throw conflict('not_a_draft',
+      `"${data.label}" is ${data.status}, and a timetable that is live cannot be edited in place. Make a copy to work on instead.`,
+      { versionId })
+  }
+  return data
+}
+
+/**
+ * Change who teaches one cell of a draft, or clear it.
+ *
+ * The clash check is against the draft, not the live timetable: the
+ * whole point of the copy is that it is diverging from what is live.
+ */
+export async function updateDraftCell(
+  schoolId: string, actorId: string, versionId: string, cellId: string,
+  patch: { teacherId?: string | null; roomId?: string | null },
+) {
+  await editableDraft(schoolId, versionId)
+
+  const cell = must(await supabase.from('timetable_draft_periods')
+    .select('*, classes(name), sections(name)')
+    .eq('id', cellId).eq('version_id', versionId).eq('school_id', schoolId).maybeSingle(),
+    'draft period')
+
+  if (cell.is_break) {
+    throw badRequest('break_not_editable', 'A break has nobody teaching it.')
+  }
+
+  const update: Record<string, any> = {}
+
+  if (patch.teacherId !== undefined) {
+    if (patch.teacherId) {
+      const { data: clash } = await supabase.from('timetable_draft_periods')
+        .select('id, subject_name, classes(name), sections(name)')
+        .eq('version_id', versionId).eq('teacher_id', patch.teacherId)
+        .eq('day_of_week', cell.day_of_week).eq('period_number', cell.period_number)
+        .eq('is_break', false).neq('id', cellId).maybeSingle()
+      if (clash) {
+        const where = [(clash as any).classes?.name, (clash as any).sections?.name].filter(Boolean).join('-')
+        throw conflict('teacher_busy',
+          `In this draft they already teach ${clash.subject_name} to ${where} in that period.`)
+      }
+    }
+    update.teacher_id = patch.teacherId || null
+  }
+
+  if (patch.roomId !== undefined) update.room_id = patch.roomId || null
+
+  if (!Object.keys(update).length) return { ok: true, unchanged: true }
+
+  const { error } = await supabase.from('timetable_draft_periods').update(update).eq('id', cellId)
+  if (error) throw badRequest('update_failed', error.message)
+
+  await audit(schoolId, actorId, 'edit_draft_cell', 'timetable_version', versionId, {
+    cellId, ...update,
+  })
+
+  return { ok: true }
+}
+
+/**
+ * Move a period to another slot in the same section, swapping with
+ * whatever is already there.
+ *
+ * Confined to one section on purpose: moving a lesson between classes is
+ * not a move, it is two separate changes to two different timetables,
+ * and doing it in one gesture makes it impossible to describe in the
+ * audit log or undo by hand.
+ */
+export async function moveDraftCell(
+  schoolId: string, actorId: string, versionId: string, cellId: string,
+  target: { day: number; periodNumber: number },
+) {
+  await editableDraft(schoolId, versionId)
+
+  const cell = must(await supabase.from('timetable_draft_periods')
+    .select('*').eq('id', cellId).eq('version_id', versionId).eq('school_id', schoolId).maybeSingle(),
+    'draft period')
+
+  if (cell.is_break) throw badRequest('break_not_movable', 'Breaks are part of the shape of the day.')
+  if (cell.day_of_week === target.day && cell.period_number === target.periodNumber) {
+    return { ok: true, unchanged: true }
+  }
+
+  const { data: occupant } = await supabase.from('timetable_draft_periods')
+    .select('*').eq('version_id', versionId).eq('section_id', cell.section_id)
+    .eq('day_of_week', target.day).eq('period_number', target.periodNumber).maybeSingle()
+
+  if (occupant?.is_break) {
+    throw badRequest('target_is_break', 'That slot is a break for this class.')
+  }
+
+  // The times belong to the slot, not to the lesson.
+  const slotTimes = occupant
+    ? { start_time: occupant.start_time, end_time: occupant.end_time }
+    : must(await supabase.from('timetable_draft_periods')
+        .select('start_time, end_time').eq('version_id', versionId)
+        .eq('day_of_week', target.day).eq('period_number', target.periodNumber)
+        .limit(1).maybeSingle(), 'target slot times')
+
+  // Would either teacher end up in two rooms at once? Checked before
+  // anything is written, because there is no transaction here.
+  const busy = async (teacherId: string | null, day: number, periodNumber: number, ignore: string[]) => {
+    if (!teacherId) return null
+    const { data } = await supabase.from('timetable_draft_periods')
+      .select('id, subject_name, classes(name), sections(name)')
+      .eq('version_id', versionId).eq('teacher_id', teacherId)
+      .eq('day_of_week', day).eq('period_number', periodNumber)
+      .eq('is_break', false).maybeSingle()
+    if (!data || ignore.includes(data.id)) return null
+    return data
+  }
+
+  const ignore = [cellId, occupant?.id].filter(Boolean) as string[]
+  const movingClash = await busy(cell.teacher_id, target.day, target.periodNumber, ignore)
+  if (movingClash) {
+    const where = [(movingClash as any).classes?.name, (movingClash as any).sections?.name].filter(Boolean).join('-')
+    throw conflict('teacher_busy',
+      `Moving it there would put that teacher in ${where} at the same time.`)
+  }
+  if (occupant) {
+    const swapClash = await busy(occupant.teacher_id, cell.day_of_week, cell.period_number, ignore)
+    if (swapClash) {
+      const where = [(swapClash as any).classes?.name, (swapClash as any).sections?.name].filter(Boolean).join('-')
+      throw conflict('teacher_busy',
+        `Swapping would put ${occupant.subject_name}'s teacher in ${where} at the same time.`)
+    }
+  }
+
+  await supabase.from('timetable_draft_periods').update({
+    day_of_week: target.day, period_number: target.periodNumber,
+    start_time: slotTimes.start_time, end_time: slotTimes.end_time,
+  }).eq('id', cellId)
+
+  if (occupant) {
+    await supabase.from('timetable_draft_periods').update({
+      day_of_week: cell.day_of_week, period_number: cell.period_number,
+      start_time: cell.start_time, end_time: cell.end_time,
+    }).eq('id', occupant.id)
+  }
+
+  await audit(schoolId, actorId, 'move_draft_cell', 'timetable_version', versionId, {
+    cellId, from: { day: cell.day_of_week, period: cell.period_number },
+    to: target, swappedWith: occupant?.id ?? null,
+  })
+
+  return { ok: true, swapped: !!occupant }
 }

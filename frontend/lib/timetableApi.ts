@@ -186,6 +186,15 @@ export const timetableApi = {
   myWeek: () => get<any>('/my-week'),
   master: (day: number, date?: string) =>
     get<any>('/views/master', { day, ...(date ? { date } : {}) }),
+  /** Every section's week, from the live timetable or a draft. */
+  block: (versionId?: string | null) =>
+    get<any>('/views/block', versionId ? { versionId } : undefined),
+  cloneActive: (label?: string) =>
+    post<any>('/versions/clone-active', label ? { label } : {}),
+  updateDraftCell: (versionId: string, cellId: string, body: { teacherId?: string | null; roomId?: string | null }) =>
+    patch<any>(`/draft/${versionId}/cells/${cellId}`, body),
+  moveDraftCell: (versionId: string, cellId: string, target: { day: number; periodNumber: number }) =>
+    post<any>(`/draft/${versionId}/cells/${cellId}/move`, target),
   freeTeachers: (day: number, date?: string) =>
     get<any>('/views/free-teachers', { day, ...(date ? { date } : {}) }),
 
