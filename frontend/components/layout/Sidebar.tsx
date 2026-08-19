@@ -103,7 +103,7 @@ const NAV: NavItem[] = [
       { label: 'Examination Settings', href: '/exams/templates', icon: SettingsIcon, permission: 'exam.view', lockUnless: 'exam.schedule', indent: true },
     ],
   },
-  { label: 'Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true, module: 'attendance' },
+  { label: 'Student Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true, module: 'attendance' },
   {
     label: 'Timetable',
     module: 'timetable',
@@ -111,7 +111,11 @@ const NAV: NavItem[] = [
     children: [
       { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view' },
       { label: 'Teacher View', href: '/timetable?view=teacher', icon: User, permission: 'timetable.view', indent: true },
-      { label: 'Free Faculty', href: '/timetable?view=free', icon: UserCheck, roles: ['principal', 'school_admin'], indent: true },
+      // Gated on the permission its endpoint actually checks
+      // (timetable.manage), not on a role name. The role list said
+      // principal/school_admin, which hid it from the Timetable Manager —
+      // the one person whose job it is.
+      { label: 'Free Faculty', href: '/timetable?view=free', icon: UserCheck, permission: 'timetable.manage', indent: true },
       // Every teacher's own page: their week, the cover they have been
       // given, and their reserved periods. Gated on nothing but a login,
       // because it only ever shows the caller their own data — the
@@ -121,7 +125,7 @@ const NAV: NavItem[] = [
       { label: 'Workload', href: '/timetable/workload', icon: Gauge, permission: 'timetable.workload_view' },
       { label: 'Generate', href: '/timetable/generate', icon: Wand2, permission: 'timetable.generate' },
       { label: 'Import', href: '/timetable/import', icon: FileSpreadsheet, permission: 'timetable.import' },
-      { label: 'Setup', href: '/timetable/setup', icon: SlidersHorizontal, permission: 'timetable.view', lockUnless: 'timetable.setup_manage' },
+      { label: 'Setup', href: '/timetable/setup', icon: SlidersHorizontal, permission: 'timetable.setup_manage' },
     ],
   },
   { label: 'Homework', href: '/homework', icon: NotebookPen, permission: 'homework.view', module: 'homework' },
@@ -130,23 +134,30 @@ const NAV: NavItem[] = [
   { label: 'Resource Centre', href: '/resources', icon: Library, permission: 'resource.view', module: 'resources' },
   {
     label: 'Staff & HR',
-    module: 'hr',
     icon: Briefcase,
+    // No module on the group itself — its children span four of them.
+    // Tagging the whole group 'hr' was wrong: a school running only the
+    // timetable still needs staff records, staff attendance and leave,
+    // because absence detection reads staff_attendance and the
+    // arrangement queue syncs from approved leave. Hiding the group hid
+    // the timetable's own inputs.
     children: [
-      { label: 'Staff', href: '/hr/staff', icon: Users, permission: 'staff.view' },
-      { label: 'Org Chart', href: '/hr/org-chart', icon: Network, permission: 'staff.view' },
-      { label: 'Attendance', href: '/hr/attendance', icon: UserCheck, requireAny: ['staff.attendance_mark', 'staff.view'] },
-      { label: 'Leave Requests', href: '/hr/leave', icon: ClipboardList, requireAny: ['staff.leave_approve', 'staff.view'] },
-      { label: 'Payroll', href: '/hr/payroll', icon: Wallet, requireAny: ['staff.payroll_manage', 'staff.view'] },
-      { label: 'Recruitment', href: '/hr/recruitment', icon: UserPlus, requireAny: ['staff.recruitment_manage', 'staff.view'] },
-      { label: 'Offer Sent', href: '/hr/recruitment/offer-sent', icon: Send, requireAny: ['staff.recruitment_manage', 'staff.view'], indent: true },
-      { label: 'Joined Candidates', href: '/hr/recruitment/joined', icon: UserCheck2, requireAny: ['staff.recruitment_manage', 'staff.view'], indent: true },
-      { label: 'Reports', href: '/hr/reports', icon: BarChart3, permission: 'staff.view' },
-      { label: 'My Attendance', href: '/hr/my-attendance', icon: Clock },
-      { label: 'My Leave', href: '/hr/my-leave', icon: CalendarDays },
-      { label: 'My Payslips', href: '/hr/my-payslips', icon: CreditCard },
-      { label: 'My Documents', href: '/hr/my-documents', icon: FileText },
-      { label: 'Permissions', href: '/hr/permissions', icon: ShieldCheck, requireAny: ['role.manage', 'role.assign'] },
+      { label: 'Staff', href: '/hr/staff', icon: Users, permission: 'staff.view', module: 'staff' },
+      { label: 'Org Chart', href: '/hr/org-chart', icon: Network, permission: 'staff.view', module: 'staff' },
+      // Feeds the timetable's absence detection, so it belongs to the
+      // staff module rather than a payroll-shaped "HR" one.
+      { label: 'Staff Attendance', href: '/hr/attendance', icon: UserCheck, requireAny: ['staff.attendance_mark', 'staff.view'], module: 'staff' },
+      { label: 'Leave Requests', href: '/hr/leave', icon: ClipboardList, requireAny: ['staff.leave_approve', 'staff.view'], module: 'leave' },
+      { label: 'Payroll', href: '/hr/payroll', icon: Wallet, requireAny: ['staff.payroll_manage', 'staff.view'], module: 'payroll' },
+      { label: 'Recruitment', href: '/hr/recruitment', icon: UserPlus, requireAny: ['staff.recruitment_manage', 'staff.view'], module: 'recruitment' },
+      { label: 'Offer Sent', href: '/hr/recruitment/offer-sent', icon: Send, requireAny: ['staff.recruitment_manage', 'staff.view'], indent: true, module: 'recruitment' },
+      { label: 'Joined Candidates', href: '/hr/recruitment/joined', icon: UserCheck2, requireAny: ['staff.recruitment_manage', 'staff.view'], indent: true, module: 'recruitment' },
+      { label: 'Reports', href: '/hr/reports', icon: BarChart3, permission: 'staff.view', module: 'staff' },
+      { label: 'My Attendance', href: '/hr/my-attendance', icon: Clock, module: 'staff' },
+      { label: 'My Leave', href: '/hr/my-leave', icon: CalendarDays, module: 'leave' },
+      { label: 'My Payslips', href: '/hr/my-payslips', icon: CreditCard, module: 'payroll' },
+      { label: 'My Documents', href: '/hr/my-documents', icon: FileText, module: 'documents' },
+      { label: 'Permissions', href: '/hr/permissions', icon: ShieldCheck, requireAny: ['role.manage', 'role.assign'], module: 'staff' },
     ],
   },
 ]
@@ -157,6 +168,7 @@ const SETTINGS: NavItem[] = [
   { label: 'Team & Settings', href: '/settings/team', icon: SettingsIcon, requireAny: ['team.view', 'team.invite', 'role.manage'], module: 'settings' },
   { label: 'Classes & Sections', href: '/settings/classes', icon: School, roles: ['principal'], module: 'settings' },
   { label: 'Class Teachers', href: '/settings/teaching-assignments', icon: GraduationCap, roles: ['principal'], module: 'settings' },
+  // Holidays and the weekly-off pattern, which the timetable reads.
   { label: 'Academic Calendar', href: '/settings/calendar', icon: CalendarDays, roles: ['principal', 'teacher'], module: 'settings' },
 ]
 

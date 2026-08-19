@@ -62,18 +62,19 @@ export default function DashboardPage() {
     router.replace(moduleEnabled('timetable') ? '/timetable/my-week' : '/settings/team')
   }, [permLoading, dashboardEnabled, moduleEnabled, router])
 
-  if (!permLoading && !dashboardEnabled) {
-    return (
-      <div className="flex h-[60vh] items-center justify-center">
-        <Skeleton className="h-8 w-40" />
-      </div>
-    )
-  }
+  // Which of the three views this render resolves to. Decided as plain
+  // booleans, NOT as early returns — the queries below are hooks, and a
+  // `return` placed above them changes the hook count between renders.
+  // Both of these flags start out false and flip once their async source
+  // settles (`permLoading` off the RBAC query, `user` off the session),
+  // so branching here used to render 9 hooks on the first pass and 4 on
+  // the second: "Rendered fewer hooks than expected."
+  const moduleBlocked = !permLoading && !dashboardEnabled
 
   // Teachers get an entirely different, personally-scoped dashboard —
   // not a stripped-down version of the admin one below (which shows
   // school-wide fee/admissions figures a teacher must never see).
-  if (user?.role === 'teacher') return <TeacherDashboard />
+  const isTeacher = user?.role === 'teacher'
 
   // Principals get an academic-oversight/escalation view, not the
   // admin operational task list — school-wide aggregates and flagged
@@ -81,7 +82,14 @@ export default function DashboardPage() {
   // (Principal keeps their existing broad RBAC permissions elsewhere in
   // the app for approvals — this dashboard is additive, not a
   // permission restriction.)
-  if (user?.role === 'principal') return <PrincipalDashboard />
+  const isPrincipal = user?.role === 'principal'
+
+  // Gates the admin-only queries so hoisting them above the branches
+  // doesn't start fetching school-wide fee/admission data for a teacher.
+  // `permLoading ||` keeps the admin path as eager as it was before the
+  // hoist — `can()` already answers true while perms are in flight, so
+  // waiting on them here would cost a needless round-trip.
+  const runAdminQueries = !isTeacher && !isPrincipal && (permLoading || dashboardEnabled)
 
   const canViewStudents = can('student.view')
   const canViewAdmission = can('admission.view')
@@ -91,22 +99,22 @@ export default function DashboardPage() {
   const { data: studentStats } = useQuery({
     queryKey: ['student-stats'],
     queryFn: () => studentsApi.stats().then((r) => r.data),
-    enabled: canViewStudents,
+    enabled: runAdminQueries && canViewStudents,
   })
   const { data: inquiryStats, isLoading: inquiryLoading } = useQuery({
     queryKey: ['inquiry-stats'],
     queryFn: () => admissionApi.inquiries.stats().then((r) => r.data),
-    enabled: canViewAdmission,
+    enabled: runAdminQueries && canViewAdmission,
   })
   const { data: feeStats } = useQuery({
     queryKey: ['fee-stats'],
     queryFn: () => feeApi.stats().then((r) => r.data),
-    enabled: canViewFees,
+    enabled: runAdminQueries && canViewFees,
   })
   const { data: recentStudents, isLoading: recentLoading } = useQuery({
     queryKey: ['recent-students'],
     queryFn: () => studentsApi.list({ limit: 5, page: 1 }).then((r) => r.data),
-    enabled: canViewStudents,
+    enabled: runAdminQueries && canViewStudents,
   })
   // Only the first 8 are rendered, so only 8 are fetched; the headline count
   // comes off meta.total, which the server counts across the whole school.
@@ -114,10 +122,21 @@ export default function DashboardPage() {
   const { data: duesPage, isLoading: duesLoading } = useQuery({
     queryKey: ['fee-dues', { limit: 8 }],
     queryFn: () => feeApi.dues({ page: 1, limit: 8 }),
-    enabled: canViewFees,
+    enabled: runAdminQueries && canViewFees,
   })
   const dues: any[] = duesPage?.data ?? []
   const duesTotal: number = duesPage?.meta?.total ?? 0
+
+  // Every hook has now run. Safe to branch.
+  if (moduleBlocked) {
+    return (
+      <div className="flex h-[60vh] items-center justify-center">
+        <Skeleton className="h-8 w-40" />
+      </div>
+    )
+  }
+  if (isTeacher) return <TeacherDashboard />
+  if (isPrincipal) return <PrincipalDashboard />
 
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'

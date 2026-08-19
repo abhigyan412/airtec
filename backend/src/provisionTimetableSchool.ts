@@ -5,6 +5,7 @@ import { randomInt } from 'crypto'
 import { readFileSync, writeFileSync } from 'fs'
 import { supabase } from './shared/db/client'
 import { seedDefaultRoles } from './modules/rbac/seed'
+import { applyTimetableSchoolRoles, TIMETABLE_SCHOOL_MODULES } from './modules/rbac/timetableSchoolRoles'
 import { readWorkbook } from './modules/timetable/import/xlsx'
 import { parseTimetableWorkbook } from './modules/timetable/import/parseWorkbook'
 import { resolveImport } from './modules/timetable/import/resolve'
@@ -53,7 +54,7 @@ const SCHOOL = {
   affiliation_board: 'U.P. Board',
   established_year: 2001,
   // The whole point of this script.
-  enabled_modules: ['timetable'],
+  enabled_modules: TIMETABLE_SCHOOL_MODULES,
 }
 
 /** Login identifiers, not mailboxes — Supabase Auth just needs an address shape. */
@@ -85,27 +86,6 @@ const STAFF = [
     note: 'Runs the daily arrangement queue. Cannot publish or override a reserved period.',
   },
 ]
-
-// ── the permissions a timetable-only school may hold ────────────
-//
-// seedDefaultRoles gives every role the full suite. This school has not
-// bought the full suite, so anything outside this list is pruned back off
-// afterwards. Belt and braces alongside enabled_modules: that hides the
-// nav, this makes the server refuse.
-const ALLOWED_PREFIXES = ['timetable.', 'arrangement.', 'booking.']
-const ALLOWED_EXTRA = [
-  // A manager cannot assign cover without seeing who the staff are, and
-  // cannot navigate the grid without the class list.
-  'staff.view', 'student.view',
-  // Issuing and rotating teacher logins, which this school has to do
-  // itself — there is no HR module here to do it from.
-  'team.view', 'team.invite', 'team.credentials_manage', 'team.edit',
-  'role.view', 'role.assign', 'role.manage',
-  'settings.manage',
-]
-
-const allowedCode = (code: string) =>
-  ALLOWED_PREFIXES.some(p => code.startsWith(p)) || ALLOWED_EXTRA.includes(code)
 
 // ── password generation ─────────────────────────────────────────
 //
@@ -192,24 +172,13 @@ async function main() {
   // ── 4. roles, pruned to what they bought ──────────────────────
   console.log('\n3. Roles')
   const roleIdByName = await seedDefaultRoles(schoolId)
-  const { data: roles } = await supabase.from('roles').select('id, name').eq('school_id', schoolId)
-  const { data: perms } = await supabase.from('permissions').select('id, permission_code')
-  const disallowed = (perms ?? []).filter(p => !allowedCode(p.permission_code)).map(p => p.id)
-
-  let pruned = 0
-  for (const role of roles ?? []) {
-    const { count } = await supabase.from('role_permissions_v2')
-      .delete({ count: 'exact' }).eq('role_id', role.id).in('permission_id', disallowed)
-    pruned += count ?? 0
-  }
-  console.log(`   ${roles?.length} roles · pruned ${pruned} permission grants outside the timetable module`)
-  for (const name of ['School Admin', 'Principal', 'Timetable Manager', 'Teacher']) {
-    const role = (roles ?? []).find(r => r.name === name)
-    if (!role) continue
-    const { count } = await supabase.from('role_permissions_v2')
-      .select('id', { count: 'exact', head: true }).eq('role_id', role.id)
-    console.log(`     ${name.padEnd(20)} ${count} permission(s)`)
-  }
+  // seedDefaultRoles gives every role the full suite; this replaces each
+  // one with exactly what a timetable-only school should hold. See
+  // modules/rbac/timetableSchoolRoles.ts for the table and the reasoning.
+  const applied = await applyTimetableSchoolRoles(schoolId)
+  for (const r of applied.roles) console.log(`   ${r.name.padEnd(20)} ${r.granted} permission(s)`)
+  if (applied.removedRoles.length) console.log(`   removed unused: ${applied.removedRoles.join(', ')}`)
+  if (applied.unknownCodes.length) console.log(`   ⚠️  unknown codes: ${applied.unknownCodes.join(', ')}`)
 
   // ── 5. staff logins ───────────────────────────────────────────
   console.log('\n4. Staff logins')
