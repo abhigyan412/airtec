@@ -128,7 +128,8 @@ export default function ArrangementsPage() {
     onSuccess: (r: any) => {
       if (r.disabled) toast.info('Attendance checking is switched off in settings')
       else if (r.proposed) toast.success(`${r.proposed} possible absence${r.proposed === 1 ? '' : 's'} found — confirm below`)
-      else toast.success('Everyone with a class today has checked in')
+      else if (!r.withPeriodsLeft) toast.info('No classes left today, so there is nothing to arrange cover for')
+      else toast.success('Everyone with a class still to come has checked in')
       invalidate()
     },
     onError: (e) => toast.error(timetableError(e)),
@@ -208,8 +209,16 @@ export default function ArrangementsPage() {
             <div className="mb-5">
               <Banner
                 tone="warn"
-                title={`${proposed.length} teacher${proposed.length === 1 ? ' has' : 's have'} a class running with no check-in`}
+                title={`${proposed.length} teacher${proposed.length === 1 ? '' : 's'} may need cover today`}
               >
+                {/* The heading stays neutral because the reasons differ:
+                    one may be marked absent in staff attendance, another
+                    simply never checked in. Saying "a class running with
+                    no check-in" for all of them contradicted the row
+                    underneath it, and was wrong outright after the last
+                    bell. Each row carries its own reason instead. */}
+                Their attendance says they are not in, but their periods are still on the
+                timetable. Confirm to send those periods to the cover queue.
                 <div className="mt-2 space-y-2">
                   {proposed.map((a: any) => (
                     <ProposedAbsenceRow key={a.id} absence={a} date={date} onDone={invalidate} />

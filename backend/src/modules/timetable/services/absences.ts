@@ -309,11 +309,24 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   const attendance = new Map((attendanceResult.data ?? []).map(a => [a.user_id, a]))
   const alreadyHandled = new Set((absencesResult.data ?? []).map(a => a.teacher_id))
 
-  // Only periods that have already started count as evidence. Somebody
-  // whose first class is after lunch is not missing at nine o'clock.
+  // Two separate questions, and both have to be yes.
+  //
+  // Evidence: has a period they should already have taught started? A
+  // teacher whose first class is after lunch is not missing at nine.
+  //
+  // Point: is there a period still to come? Cover is the only thing this
+  // proposal leads to, and at ten past three there is nothing left to
+  // cover. Without this the sweep spent every afternoon proposing
+  // absences for a day that had finished — thirteen periods queued for
+  // classes that had already been taught.
   const startedByTeacher = new Map<string, number[]>()
+  const remainingByTeacher = new Map<string, number>()
   for (const row of periodsResult.data ?? []) {
-    if (!row.start_time || row.start_time > nowTime) continue
+    if (!row.start_time) continue
+    if (row.start_time > nowTime) {
+      remainingByTeacher.set(row.teacher_id, (remainingByTeacher.get(row.teacher_id) ?? 0) + 1)
+      continue
+    }
     const list = startedByTeacher.get(row.teacher_id) ?? []
     list.push(row.period_number)
     startedByTeacher.set(row.teacher_id, list)
@@ -323,16 +336,22 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   for (const [teacherId, periods] of startedByTeacher) {
     if (alreadyHandled.has(teacherId)) continue
     if (periods.length < settings.auto_detect_after_period) continue
+    // Nothing left of their day, so nothing to arrange.
+    if (!(remainingByTeacher.get(teacherId) ?? 0)) continue
 
     const record = attendance.get(teacherId)
     const present = record && record.status !== 'absent' && record.status !== 'on_leave' && !!record.check_in
     if (present) continue
 
+    // The wording is the row's whole value: "marked absent" is somebody
+    // stating a fact, "no check-in" is an inference, and a manager
+    // deciding whether to confirm needs to know which one they are
+    // looking at.
     const reason = !record
-      ? 'No attendance recorded and their first period has started'
+      ? 'No attendance recorded today, and their first period has already started'
       : record.status === 'absent' ? 'Marked absent in staff attendance'
       : record.status === 'on_leave' ? 'On approved leave'
-      : 'Marked present but with no check-in time'
+      : 'Marked present in staff attendance, but with no check-in time recorded'
 
     try {
       // created_by stays null when the sweep runs unattended. Crediting
@@ -352,14 +371,22 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     const managers = await arrangementManagers(schoolId)
     await notify({
       schoolId, userIds: managers, type: 'absence_detected',
-      title: `${proposed} teacher${proposed === 1 ? '' : 's'} may be absent today`,
-      message: `${proposed} teacher${proposed === 1 ? ' has' : 's have'} a class under way with no check-in recorded. Confirm or dismiss on the arrangements screen.`,
+      title: `${proposed} teacher${proposed === 1 ? '' : 's'} may need cover today`,
+      message: `Attendance says ${proposed === 1 ? 'a teacher is' : `${proposed} teachers are`} not in, ` +
+        `but their periods are still on the timetable. Confirm or dismiss on the arrangements screen.`,
       link: `/timetable/arrangements?date=${dateStr}`,
       relatedEntityType: 'absence_detection', relatedEntityId: undefined,
     })
   }
 
-  return { proposed, checked: startedByTeacher.size, disabled: false }
+  return {
+    proposed,
+    checked: startedByTeacher.size,
+    // So the caller can say "everyone has checked in" rather than
+    // "nothing found", which reads as a failure.
+    withPeriodsLeft: [...remainingByTeacher.keys()].filter(id => startedByTeacher.has(id)).length,
+    disabled: false,
+  }
 }
 
 /** A teacher telling the school they are leaving early, from their own device. */
