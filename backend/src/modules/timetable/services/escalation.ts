@@ -203,6 +203,44 @@ export async function runMorningSweep(): Promise<{
   return { schools: (schools ?? []).length, leaveSynced, detected }
 }
 
+/**
+ * Look for teachers who have not turned up, across every school.
+ *
+ * Split out from the morning sweep, which runs at 06:45 — before the
+ * first bell, which is right for pulling approved leave into the queue
+ * because leave is known in advance. It is exactly wrong for attendance
+ * detection, which only flags a teacher whose period has ALREADY
+ * started: at 06:45 no period has, so that half of the sweep proposed
+ * nothing, every day, at both schools on this installation. The feature
+ * worked only when somebody pressed the button by hand.
+ *
+ * So it runs on a cadence through the teaching day instead. That also
+ * catches the case the single morning pass never could — somebody who
+ * was in at nine and gone by noon.
+ *
+ * Safe to repeat: detectAbsences skips any teacher who already has a
+ * non-cancelled absence for the date, so a teacher is proposed once and
+ * managers are told once, however often this runs.
+ */
+export async function runAbsenceDetectionSweep(): Promise<{
+  schools: number; detected: number
+}> {
+  const today = toLocalDateStr(new Date())
+  const { data: schools } = await supabase.from('schools').select('id')
+
+  let detected = 0
+  for (const school of schools ?? []) {
+    try {
+      const detection = await detectAbsences(school.id, null, today)
+      detected += detection.proposed
+    } catch (err: any) {
+      console.error(`[timetable-detect] failed for ${school.id}:`, err?.message)
+    }
+  }
+
+  return { schools: (schools ?? []).length, detected }
+}
+
 /** Weekly workload check across every school. */
 export async function runWorkloadSweep(): Promise<{ schools: number; alerted: number }> {
   const { data: schools } = await supabase.from('schools').select('id')

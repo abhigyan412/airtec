@@ -34,7 +34,7 @@ import teacherRoutes from './modules/teacher/routes'
 import principalRoutes from './modules/principal/routes'
 import timetableRoutes from './modules/timetable/routes'
 import {
-  runAcknowledgementSweep, runMorningSweep, runUnfilledSweep, runWorkloadSweep,
+  runAbsenceDetectionSweep, runAcknowledgementSweep, runMorningSweep, runUnfilledSweep, runWorkloadSweep,
 } from './modules/timetable/services/escalation'
 
 
@@ -255,6 +255,23 @@ cron.schedule('45 6 * * 1-6', () => {
   runMorningSweep()
     .then(r => console.log(`[timetable-morning] ${r.schools} school(s): ${r.leaveSynced} leave absence(s) synced, ${r.detected} proposed from attendance`))
     .catch(err => console.error('[timetable-morning] failed:', err?.message))
+})
+
+// Attendance detection, every quarter of an hour through the teaching
+// day. It cannot live in the 06:45 sweep above: it only flags a teacher
+// whose period has already STARTED, and at 06:45 none has — so that half
+// of the morning sweep proposed nothing, every day, at every school on
+// this installation, and the feature only ever worked when somebody
+// pressed the button by hand.
+//
+// A cadence also catches what one morning pass never could: the teacher
+// who was in at nine and gone by noon. Repeats are free — a teacher who
+// already has an absence for the day is skipped, so each one is proposed
+// once and managers are told once.
+cron.schedule('*/15 7-15 * * 1-6', () => {
+  runAbsenceDetectionSweep()
+    .then(r => { if (r.detected) console.log(`[timetable-detect] ${r.detected} possible absence(s) across ${r.schools} school(s)`) })
+    .catch(err => console.error('[timetable-detect] failed:', err?.message))
 })
 
 // Periods still uncovered, checked twice: once at first bell and once
