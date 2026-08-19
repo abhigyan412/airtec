@@ -137,7 +137,32 @@ async function loadDayState(schoolId: string, dateStr: string) {
     supabase.from('subjects').select('id, name').eq('school_id', schoolId),
   ])
 
-  const staff = (staffResult.data ?? []).filter(u => u.is_active !== false)
+  // Who can actually be asked to take a class.
+  //
+  // Role names do not decide this — a vice principal who takes six
+  // periods of Maths belongs in the pool. But neither does "everyone who
+  // is not a parent", which is what this was: at a school whose office
+  // accounts have never taught anything, the top three suggestions for a
+  // Class III Art lesson were the principal, the administrator and the
+  // timetable manager, purely because they had nothing on that day and so
+  // carried no load penalty.
+  //
+  // Somebody who teaches at least one period, or has a recorded subject
+  // capability, is a teacher. Somebody with neither is an office account.
+  const teaches = new Set<string>()
+  for (const row of capabilitiesResult.data ?? []) teaches.add(row.teacher_id)
+  // The whole week, not just today: a teacher who happens to have nothing
+  // on a Wednesday is still a teacher. Paged, because a school's grid
+  // runs to thousands of rows and a plain select silently stops at 1,000.
+  const weekSlots = await fetchAll<{ teacher_id: string }>((from, to) =>
+    supabase.from('timetable_periods')
+      .select('teacher_id').eq('school_id', schoolId).eq('is_break', false)
+      .not('teacher_id', 'is', null).range(from, to), 'timetable periods')
+  for (const row of weekSlots) teaches.add(row.teacher_id)
+
+  const staff = (staffResult.data ?? [])
+    .filter(u => u.is_active !== false)
+    .filter(u => teaches.has(u.id))
   const state = new Map<string, TeacherState>()
   for (const user of staff) {
     state.set(user.id, {

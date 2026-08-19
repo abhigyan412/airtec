@@ -158,9 +158,22 @@ export async function cancelAbsence(schoolId: string, actorId: string, absenceId
     .select('id, substitute_teacher_id, period_number, start_time, status')
     .eq('absence_id', absenceId).neq('status', 'cancelled')
 
+  // What "they're back" should stand down.
+  //
+  // Anything still unassigned goes, whatever the clock says: there is no
+  // substitute to protect and the teacher was not, in the end, away, so
+  // leaving it is pure noise. Marking somebody absent at 2pm and
+  // immediately undoing it left five uncovered periods on the queue
+  // forever, because every period had already "started".
+  //
+  // An assigned period that has already begun stays: somebody walked into
+  // that room, and the register has to say so.
+  const started = (a: any) =>
+    absence.absence_date < today ||
+    (absence.absence_date === today && !!a.start_time && a.start_time <= nowTime)
+
   const upcoming = (arrangements ?? []).filter(a =>
-    absence.absence_date > today ||
-    (absence.absence_date === today && (!a.start_time || a.start_time > nowTime)))
+    a.status === 'unassigned' || a.status === 'declined' || !started(a))
 
   if (upcoming.length) {
     await supabase.from('arrangements').update({

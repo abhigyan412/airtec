@@ -553,9 +553,19 @@ export async function commitImport(
       if (!teacherId) continue
       rows.push({
         school_id: schoolId, teacher_id: teacherId,
-        max_periods_per_day: c.maxPeriodsPerDay,
-        max_periods_per_week: c.maxPeriodsPerWeek,
+        // Observation plus a little headroom, not observation exactly.
+        //
+        // A cap equal to the busiest day means a teacher can never take
+        // one extra period — which is the entire point of cover. Seeding
+        // the limit at the observed maximum made every teacher ineligible
+        // on their own busiest day and left the substitute list empty.
+        // One spare period a day, five a week: still nowhere near a
+        // breach, but enough that cover is possible at all.
+        max_periods_per_day: c.maxPeriodsPerDay + 1,
+        max_periods_per_week: c.maxPeriodsPerWeek + 5,
         min_periods_per_week: 0,
+        // Consecutive stays at what they already do: cover should not
+        // lengthen anyone's worst run.
         max_consecutive: c.maxConsecutive,
         notes: `Seeded from the imported timetable: ${c.observedPerWeek} periods a week, up to ${c.observedMaxPerDay} a day, ${c.observedMaxConsecutive} back to back.`,
       })
