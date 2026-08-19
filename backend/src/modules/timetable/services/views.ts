@@ -417,7 +417,15 @@ export interface BlockConflict {
   message: string
   /** Sections the conflict touches, so the grid can highlight them. */
   sectionIds: string[]
+  /** Existing cells at fault — the grid marks these. */
   cellIds: string[]
+  /**
+   * `sectionId:day:period` for faults that are an ABSENCE of a cell.
+   * A gap has no row to point at, so without this the grid could list
+   * the problem but not show you where it is, which is the one thing
+   * you opened the grid to find out.
+   */
+  slotKeys: string[]
 }
 
 export async function blockGrid(
@@ -484,9 +492,18 @@ export async function blockGrid(
   const days = [...new Set(rows.map(r => r.day_of_week))].sort((a, b) => a - b)
   const slots = periodAxis(rows)
 
-  const cells: Record<string, Cell> = {}
+  // sectionId travels on the cell as well as in the key: the teacher
+  // view pivots the same payload by teacher instead of by class, and
+  // re-deriving the class by string-splitting the key would break the
+  // moment the key format changed.
+  const cells: Record<string, Cell & { sectionId: string; sectionLabel: string }> = {}
+  const labelOfSection = new Map(sections.map(s => [s.sectionId, s.label]))
   for (const row of rows) {
-    cells[`${row.section_id}:${row.day_of_week}:${row.period_number}`] = toCell(row)
+    cells[`${row.section_id}:${row.day_of_week}:${row.period_number}`] = {
+      ...toCell(row),
+      sectionId: row.section_id,
+      sectionLabel: labelOfSection.get(row.section_id) ?? '',
+    }
   }
 
   // ── conflicts, computed across the whole grid ─────────────────
@@ -505,7 +522,7 @@ export async function blockGrid(
         kind: 'unstaffed', severity: 'warn',
         day: row.day_of_week, periodNumber: row.period_number,
         message: `${labelOf.get(row.section_id) ?? 'A class'} has ${row.subject_name || 'a period'} with nobody assigned to teach it — ${DAY_NAMES[row.day_of_week]}, period ${row.period_number}.`,
-        sectionIds: [row.section_id], cellIds: [row.id],
+        sectionIds: [row.section_id], cellIds: [row.id], slotKeys: [],
       })
     }
     if (row.room_id) {
@@ -525,6 +542,7 @@ export async function blockGrid(
       } at the same time — ${DAY_NAMES[first.day_of_week]}, period ${first.period_number}.`,
       sectionIds: group.map(r => r.section_id),
       cellIds: group.map(r => r.id),
+      slotKeys: [],
     })
   }
 
@@ -539,6 +557,7 @@ export async function blockGrid(
       message: `${room?.name ?? 'A room'} holds ${capacity} class${capacity === 1 ? '' : 'es'} at once but ${group.length} are booked into it — ${DAY_NAMES[group[0].day_of_week]}, period ${group[0].period_number}.`,
       sectionIds: group.map(r => r.section_id),
       cellIds: group.map(r => r.id),
+      slotKeys: [],
     })
   }
 
@@ -566,6 +585,7 @@ export async function blockGrid(
         day, periodNumber: missing[0],
         message: `${section.label} has nothing scheduled in period${missing.length === 1 ? '' : 's'} ${missing.join(', ')} on ${DAY_NAMES[day]}, but the day continues afterwards.`,
         sectionIds: [section.sectionId], cellIds: [],
+        slotKeys: missing.map(n => `${section.sectionId}:${day}:${n}`),
       })
     }
   }

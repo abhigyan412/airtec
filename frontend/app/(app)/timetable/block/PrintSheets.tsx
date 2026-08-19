@@ -17,8 +17,27 @@ import { DAYS } from '../shared'
 
 const fmt = (t?: string | null) => (t ? t.slice(0, 5) : '')
 
-export function PrintSheets({ data }: { data: any }) {
+export function PrintSheets({ data, mode }: { data: any; mode: 'class' | 'teacher' }) {
   const teaching = (data.slots ?? []).filter((s: any) => !s.isBreak)
+
+  // Pivoted the same way the teacher view on screen is, from the same
+  // cells, so the sheet handed to a teacher and the grid the office is
+  // looking at cannot disagree.
+  const teachers = (() => {
+    const names = new Map<string, string>()
+    const index = new Map<string, any[]>()
+    for (const cell of Object.values(data.cells) as any[]) {
+      if (cell.isBreak || !cell.teacherId) continue
+      names.set(cell.teacherId, cell.teacherName ?? 'Unknown')
+      const key = `${cell.teacherId}:${cell.dayOfWeek}:${cell.periodNumber}`
+      index.set(key, [...(index.get(key) ?? []), cell])
+    }
+    return {
+      list: Array.from(names.entries()).map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      index,
+    }
+  })()
 
   return (
     <div className="hidden print:block">
@@ -40,7 +59,51 @@ export function PrintSheets({ data }: { data: any }) {
         }
       `}</style>
 
-      {data.sections.map((section: any) => (
+      {mode === 'teacher' ? teachers.list.map(teacher => (
+        <section key={teacher.id} className="tt-sheet">
+          <header style={{ marginBottom: '6mm' }}>
+            <h1 style={{ fontSize: '16pt', fontWeight: 700, color: '#000' }}>{teacher.name}</h1>
+            <p style={{ fontSize: '9pt', color: '#444' }}>
+              {data.version?.label ?? 'Timetable'}
+              {data.source === 'draft' ? ' — DRAFT, not yet published' : ''}
+            </p>
+          </header>
+
+          <table className="tt-table">
+            <thead>
+              <tr>
+                <th style={{ width: '18mm' }}>Period</th>
+                {data.days.map((d: number) => <th key={d}>{DAYS[d - 1] ?? `Day ${d}`}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {teaching.map((slot: any) => (
+                <tr key={slot.periodNumber}>
+                  <td>
+                    <div className="tt-sub">{slot.periodNumber}</div>
+                    <div className="tt-room">{fmt(slot.startTime)}–{fmt(slot.endTime)}</div>
+                  </td>
+                  {data.days.map((d: number) => {
+                    const here = teachers.index.get(`${teacher.id}:${d}:${slot.periodNumber}`) ?? []
+                    if (!here.length) return <td key={d} />
+                    return (
+                      <td key={d}>
+                        {here.map((cell: any) => (
+                          <div key={cell.id}>
+                            <div className="tt-sub">{cell.sectionLabel}</div>
+                            <div className="tt-teacher">{cell.subjectName}</div>
+                            {cell.roomName && <div className="tt-room">{cell.roomName}</div>}
+                          </div>
+                        ))}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )) : data.sections.map((section: any) => (
         <section key={section.sectionId} className="tt-sheet">
           <header style={{ marginBottom: '6mm' }}>
             <h1 style={{ fontSize: '16pt', fontWeight: 700, color: '#000' }}>{section.label}</h1>
