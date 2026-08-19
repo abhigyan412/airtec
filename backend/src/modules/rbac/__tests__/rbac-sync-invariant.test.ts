@@ -24,10 +24,23 @@ import { DEFAULT_ROLE_PERMISSIONS, LEGACY_ROLE_TO_RBAC_ROLE } from '../seed'
 const FIXTURE_PREFIX = '__vitest'
 const isFixtureName = (v?: string | null) => !!v?.startsWith(FIXTURE_PREFIX)
 
+// A school that has bought only part of the product does not get the
+// whole role list. schools.enabled_modules NULL means "everything",
+// which is the norm; a restricted school deliberately drops the roles it
+// will never use (see rbac/timetableSchoolRoles.ts) so its Permissions
+// screen isn't a list of empty roles nobody can explain. Such a school is
+// exempt from "has every default role" — but not from anything else
+// below, which is where the bugs this suite exists for actually live.
+const isModuleRestricted = (school: any) => Array.isArray(school?.enabled_modules)
+
+const LEGACY_ROLE_NAMES = new Set(Object.values(LEGACY_ROLE_TO_RBAC_ROLE))
+
 describe('RBAC live-data sync invariant', () => {
   it('every school has all default roles seeded', async () => {
-    const { data: allSchools, error: schoolsErr } = await supabase.from('schools').select('id, name')
-    const schools = (allSchools ?? []).filter(s => !isFixtureName((s as any).name))
+    const { data: allSchools, error: schoolsErr } = await supabase.from('schools').select('id, name, enabled_modules')
+    const schools = (allSchools ?? [])
+      .filter(s => !isFixtureName((s as any).name))
+      .filter(s => !isModuleRestricted(s))
     expect(schoolsErr).toBeNull()
 
     const { data: allRoles, error: rolesErr } = await supabase.from('roles').select('id, name, school_id')
@@ -111,7 +124,18 @@ describe('RBAC live-data sync invariant', () => {
 
       const matchCount = mine.filter(n => n === expectedName).length
       if (matchCount === 0) {
-        problems.push(`${u.email}: missing primary role '${expectedName}' (has [${mine.join(', ')}])`)
+        // Roles like Timetable Manager exist only in RBAC — there is no
+        // legacy users.role value that maps to them, so such an account
+        // necessarily carries some other legacy role. What the invariant
+        // is really protecting against is a user with NO role at all,
+        // which is the bug that produced an empty sidebar. Holding a
+        // real specialist role instead of the legacy default is fine.
+        const specialist = mine.filter(n => !LEGACY_ROLE_NAMES.has(n))
+        if (!mine.length) {
+          problems.push(`${u.email}: has no RBAC role at all`)
+        } else if (!specialist.length) {
+          problems.push(`${u.email}: missing primary role '${expectedName}' (has [${mine.join(', ')}])`)
+        }
       } else if (matchCount > 1) {
         problems.push(`${u.email}: duplicate '${expectedName}' role rows (x${matchCount})`)
       }

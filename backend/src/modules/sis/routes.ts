@@ -1203,6 +1203,16 @@ router.get('/timetable/free-faculty', requirePermissionV2('timetable.manage'),
 // period ends. Empty until lunch has actually started — asking "has
 // this teacher shown up yet" is meaningless before their day has really
 // begun.
+//
+// Both blocks are cross-referenced against today's absences and cover.
+// Without that they report a problem that somebody has already dealt
+// with: a teacher confirmed absent with a substitute in every one of
+// their periods was still listed, in amber, indefinitely — and the
+// current-period block offered a Find Substitute button for a class
+// that already had one, which is how a period ends up double-covered.
+// An absence that is handled is not an alert; an absence that is
+// confirmed but still has uncovered periods very much is, so the two
+// are reported differently rather than both being hidden.
 router.get('/timetable/attention-required', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
@@ -1224,6 +1234,37 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
     ])
     if (periodsErr) return res.status(500).json({ success: false, error: periodsErr.message })
     if (attErr) return res.status(500).json({ success: false, error: attErr.message })
+
+    // Kept out of the Promise.all above: the generated Supabase types
+    // stop inferring once the tuple grows, and every field on every
+    // result silently degrades to an error type.
+    const [absenceRes, arrangementRes] = await Promise.all([
+      supabase.from('teacher_absences')
+        .select('teacher_id, status').eq('school_id', school_id)
+        .eq('absence_date', todayDate).neq('status', 'cancelled'),
+      supabase.from('arrangements')
+        .select('timetable_period_id, status, substitute_teacher_id')
+        .eq('school_id', school_id).eq('arrangement_date', todayDate).neq('status', 'cancelled'),
+    ])
+    const absenceRows = (absenceRes.data ?? []) as { teacher_id: string; status: string }[]
+    const arrangementRows = (arrangementRes.data ?? []) as
+      { timetable_period_id: string | null; status: string; substitute_teacher_id: string | null }[]
+
+    const absenceByTeacher = new Map(absenceRows.map(a => [a.teacher_id, a.status]))
+    // A period counts as covered once somebody is named against it.
+    // 'declined' and 'unassigned' deliberately do not count: those are
+    // the rows that still need a person.
+    const coverByPeriod = new Map<string, { substituteId: string | null; status: string }>()
+    for (const a of arrangementRows) {
+      if (!a.timetable_period_id) continue
+      coverByPeriod.set(a.timetable_period_id, {
+        substituteId: a.substitute_teacher_id ?? null, status: a.status,
+      })
+    }
+    const isCovered = (periodId: string) => {
+      const c = coverByPeriod.get(periodId)
+      return !!c && !!c.substituteId && c.status !== 'declined' && c.status !== 'unassigned'
+    }
 
     const attendanceByUser = new Map((attendanceRows ?? []).map(a => [a.user_id, a]))
     const periods = (todayPeriods ?? []).filter(p => !p.is_break && p.start_time <= nowTime && p.end_time >= nowTime)
@@ -1249,6 +1290,8 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
         return reason ? { ...p, reason } : null
       })
       .filter((p): p is NonNullable<typeof p> => p !== null)
+      // Somebody is already standing in front of that class.
+      .filter(p => !isCovered(p.id))
 
     // Morning no-checkin, anchored to lunch
     const lunchPeriod = (todayPeriods ?? []).find(p => p.is_break && /lunch/i.test(p.subject_name))
@@ -1264,7 +1307,11 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
       missingByTeacher.get(p.teacher_id as string)!.push(p)
     }
 
-    const teacherIds = [...new Set([...flagged.map(f => f.teacher_id as string), ...missingByTeacher.keys()])]
+    const teacherIds = [...new Set([
+      ...flagged.map(f => f.teacher_id as string),
+      ...missingByTeacher.keys(),
+      ...arrangementRows.map(a => a.substitute_teacher_id).filter(Boolean) as string[],
+    ])]
     const { data: teacherRows } = teacherIds.length
       ? await supabase.from('users').select('id, full_name').in('id', teacherIds)
       : { data: [] }
@@ -1279,14 +1326,33 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
       reason: f.reason, reason_label: REASON_LABELS[f.reason as string],
     }))
 
-    const morningNoCheckin = [...missingByTeacher.entries()].map(([teacher_id, missed]) => ({
-      teacher_id, teacher_name: nameById.get(teacher_id) ?? 'Unknown',
-      periods_missed: missed.map(p => ({
-        period_number: p.period_number, subject_name: p.subject_name,
-        class_name: (p as any).classes?.name, section_name: (p as any).sections?.name,
-        start_time: p.start_time,
-      })),
-    }))
+    const morningNoCheckin = [...missingByTeacher.entries()]
+      .map(([teacher_id, missed]) => {
+        const uncovered = missed.filter(p => !isCovered(p.id))
+        return {
+          teacher_id, teacher_name: nameById.get(teacher_id) ?? 'Unknown',
+          absence_status: absenceByTeacher.get(teacher_id) ?? null,
+          uncovered_count: uncovered.length,
+          periods_missed: missed
+            // Chronological: the list read "P4 ... , P3 ..." because it
+            // came back in whatever order the rows arrived.
+            .sort((a, b) => (a.start_time ?? '').localeCompare(b.start_time ?? ''))
+            .map(p => ({
+              period_number: p.period_number, subject_name: p.subject_name,
+              class_name: (p as any).classes?.name, section_name: (p as any).sections?.name,
+              start_time: p.start_time,
+              covered: isCovered(p.id),
+              covered_by: coverByPeriod.get(p.id)?.substituteId
+                ? nameById.get(coverByPeriod.get(p.id)!.substituteId!) ?? null
+                : null,
+            })),
+        }
+      })
+      // Confirmed absent and every period covered: the question has been
+      // asked and answered, and repeating it trains people to ignore the
+      // panel. Still listed while anything is uncovered.
+      .filter(m => !(m.absence_status === 'confirmed' && m.uncovered_count === 0))
+      .sort((a, b) => b.uncovered_count - a.uncovered_count)
 
     const teacherPeriodsInProgress = periods.filter(p => p.teacher_id).length
     res.json({

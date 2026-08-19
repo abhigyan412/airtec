@@ -131,19 +131,52 @@ export default function TimetablePage() {
     if (p.is_break) breakLabelByPeriod[p.period_number] = p.subject_name
   }
 
-  // Conflict detection — teacher double booked
+  // Conflict detection — teacher double booked.
+  //
+  // Keeps the whole clash, not just the ids of the cells to paint red.
+  // "A teacher is assigned to multiple periods at the same time" tells a
+  // timetable in-charge nothing they can act on: they still have to hunt
+  // the grid for the red cells and work out who, when and which classes.
+  // The name, the day, the time and both classes are all right here.
+  interface Clash {
+    teacherId: string
+    teacherName: string
+    day: number
+    periodNumber: number
+    time: string
+    where: { label: string; subject: string }[]
+  }
   const conflicts: Set<string> = new Set()
+  const clashes: Clash[] = []
+
   if (viewMode === 'class' && timetableData) {
-    const teacherSlots: Record<string, string[]> = {}
+    const slots: Record<string, any[]> = {}
     for (const p of timetableData) {
       if (!p.teacher_id || p.is_break) continue
       const key = `${p.teacher_id}_${p.day_of_week}_${p.period_number}`
-      if (!teacherSlots[key]) teacherSlots[key] = []
-      teacherSlots[key].push(p.id)
+      if (!slots[key]) slots[key] = []
+      slots[key].push(p)
     }
-    for (const ids of Object.values(teacherSlots)) {
-      if (ids.length > 1) ids.forEach(id => conflicts.add(id))
+    for (const rows of Object.values(slots)) {
+      if (rows.length < 2) continue
+      for (const r of rows) conflicts.add(r.id)
+      const first = rows[0]
+      clashes.push({
+        teacherId: first.teacher_id,
+        teacherName: first.users?.full_name
+          ?? (teachersData ?? []).find((t: any) => t.id === first.teacher_id)?.full_name
+          ?? 'A teacher',
+        day: first.day_of_week,
+        periodNumber: first.period_number,
+        time: timeByPeriod[first.period_number] ?? '',
+        where: rows.map((r: any) => ({
+          label: [r.classes?.name, r.sections?.name].filter(Boolean).join('-') || 'Unknown class',
+          subject: r.subject_name,
+        })),
+      })
     }
+    clashes.sort((a, b) =>
+      a.day - b.day || a.periodNumber - b.periodNumber || a.teacherName.localeCompare(b.teacherName))
   }
 
   const stats = {
@@ -151,6 +184,7 @@ export default function TimetablePage() {
     subjects: new Set((timetableData ?? []).filter((p: any) => !p.is_break).map((p: any) => p.subject_name)).size,
     breaks:   (timetableData ?? []).filter((p: any) => p.is_break).length,
     conflicts: conflicts.size,
+    clashes: clashes.length,
   }
 
   const printLabel = viewMode === 'teacher'
@@ -286,21 +320,70 @@ export default function TimetablePage() {
             </div>
             {stats.conflicts > 0 && (
               <div className="text-center">
-                <p className="text-2xl font-bold text-destructive">{stats.conflicts}</p>
-                <p className="text-xs text-destructive/80 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Conflicts</p>
+                <p className="text-2xl font-bold text-destructive">{stats.clashes}</p>
+                <p className="text-xs text-destructive/80 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> {stats.clashes === 1 ? 'Clash' : 'Clashes'}</p>
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Conflict banner */}
-      {stats.conflicts > 0 && (
-        <div className="bg-destructive/10 border border-destructive/30 rounded-2xl px-5 py-3 flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-destructive flex-shrink-0" />
-          <div>
-            <p className="text-sm font-semibold text-destructive">Teacher conflict detected</p>
-            <p className="text-xs text-destructive/80 mt-0.5">A teacher is assigned to multiple periods at the same time. Conflicting periods are highlighted in red.</p>
+      {/* This grid only holds the class currently selected, so the scan
+          above can only see clashes inside it. Narrowing to one section
+          hides a teacher double-booked against the sibling section —
+          which is exactly the shape of the commonest real clash — so say
+          so rather than letting an empty banner read as "all clear". */}
+      {viewMode === 'class' && selectedClass && selectedSection && clashes.length === 0 && (
+        <p className="px-1 text-xs text-muted-foreground">
+          Checked for clashes within this section only. To catch a teacher booked against another
+          section of the same class, clear the section filter.
+        </p>
+      )}
+
+      {/* Conflict banner — spells out every clash rather than announcing
+          that one exists somewhere in the grid. */}
+      {clashes.length > 0 && (
+        <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-5 py-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-destructive">
+                {clashes.length === 1
+                  ? 'One teacher is double-booked'
+                  : `${clashes.length} teachers are double-booked`}
+              </p>
+              <p className="mt-0.5 text-xs text-destructive/80">
+                Somebody is timetabled to be in two rooms at once. Until this is resolved, one of
+                these classes has nobody in front of it.
+              </p>
+
+              <ul className="mt-3 space-y-2">
+                {clashes.map((c, i) => (
+                  <li key={i} className="rounded-lg bg-background/60 px-3 py-2 text-sm">
+                    <span className="font-semibold text-foreground">{c.teacherName}</span>
+                    <span className="text-muted-foreground">
+                      {' '}on {DAYS[c.day - 1]}, period {c.periodNumber}
+                      {c.time && <span className="tabular-nums"> ({c.time})</span>}
+                    </span>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      {c.where.map((w, j) => (
+                        <span key={j} className="inline-flex items-center gap-1">
+                          {j > 0 && <span className="text-destructive/70">and at the same time</span>}
+                          <span className="rounded-md bg-destructive/15 px-1.5 py-0.5 text-xs font-medium text-destructive">
+                            {w.label} · {w.subject}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+
+              <p className="mt-3 text-xs text-destructive/80">
+                Both cells are outlined in red in the grid below. Fix it by moving one period to a
+                free slot, or by giving one class a different teacher.
+              </p>
+            </div>
           </div>
         </div>
       )}
@@ -612,7 +695,10 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (dayOf
 
       {/* Cumulative, unlike the block above — stays listed past their own
           period ending, since "never showed up this morning" doesn't stop
-          being true just because a later period started. */}
+          being true just because a later period started. Someone whose
+          absence is confirmed AND fully covered is dropped by the API:
+          that is a question already answered, and a panel that keeps
+          asking it is one people learn to scroll past. */}
       {morningNoCheckin.length > 0 && (
         <div className="bg-warning/10 border border-warning/30 rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -621,17 +707,44 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (dayOf
             <span className="text-xs text-warning/70">({morningNoCheckin.length})</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {morningNoCheckin.map((m: any) => (
-              <div key={m.teacher_id} className="bg-card rounded-xl border border-warning/20 p-4">
-                <p className="text-sm font-semibold text-foreground">{m.teacher_name}</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Missed {m.periods_missed.length} period{m.periods_missed.length !== 1 ? 's' : ''} this morning:{' '}
-                  {m.periods_missed.map((p: any) =>
-                    `P${p.period_number} ${p.subject_name}${p.class_name ? ` (${p.class_name}${p.section_name ? ` - ${p.section_name}` : ''})` : ''}`,
-                  ).join(', ')}
-                </p>
-              </div>
-            ))}
+            {morningNoCheckin.map((m: any) => {
+              const uncovered = m.uncovered_count ?? m.periods_missed.length
+              return (
+                <div key={m.teacher_id} className="bg-card rounded-xl border border-warning/20 p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-foreground">{m.teacher_name}</p>
+                    {m.absence_status === 'confirmed' && (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                        absence confirmed
+                      </span>
+                    )}
+                    {uncovered > 0 ? (
+                      <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-semibold text-destructive">
+                        {uncovered} still need{uncovered === 1 ? 's' : ''} cover
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
+                        all covered
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Missed {m.periods_missed.length} period{m.periods_missed.length !== 1 ? 's' : ''} this morning:
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {m.periods_missed.map((p: any, i: number) => (
+                      <li key={i} className="text-xs text-muted-foreground">
+                        P{p.period_number} {p.subject_name}
+                        {p.class_name ? ` (${p.class_name}${p.section_name ? ` - ${p.section_name}` : ''})` : ''}
+                        {p.covered
+                          ? <span className="text-success"> · covered{p.covered_by ? ` by ${p.covered_by}` : ''}</span>
+                          : <span className="text-destructive"> · no cover</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}

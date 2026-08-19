@@ -17,10 +17,18 @@ import { audit, badRequest, conflict, DAY_NAMES, fetchAll, getSettings, must, no
 // One structural decision worth stating. The engine takes a single
 // periodsPerDay, but a real school does not have one: junior classes go
 // home after period 9 and seniors after period 10. So generation runs
-// once per day-shape, and each run is handed every OTHER group's live
+// once per day-shape, and each run is handed every OTHER group's
 // timetable as `external` occupancy — immovable teacher and room
 // bookings it must schedule around. Without that, the two runs would
 // each independently decide that Mrs Sharma is free on Tuesday at 11.
+//
+// Crucially that occupancy is the LIVE grid only for shapes this run has
+// not reached yet. For a shape already generated in the same run it is
+// what this run just placed, because the live rows for those sections
+// are precisely what is being replaced. Scheduling group two around
+// group one's OLD positions is how a draft ends up with a teacher in two
+// rooms at once — the run is consistent with a timetable that is about
+// to stop existing.
 
 export interface GenerationGroup {
   periodsPerDay: number
@@ -242,7 +250,15 @@ export function splitDemandsAcrossGroups(
 export async function buildEngineInput(
   schoolId: string,
   group: GenerationGroup,
-  options: { keepLocked?: boolean; allGroups?: GenerationGroup[]; groupIndex?: number } = {},
+  options: {
+    keepLocked?: boolean
+    allGroups?: GenerationGroup[]
+    groupIndex?: number
+    /** Entries placed by earlier day-shapes in this same run. */
+    placedSoFar?: EngineEntry[]
+    /** `sectionId|day` pairs this run has already re-placed. */
+    regenerated?: Set<string>
+  } = {},
 ): Promise<Context> {
   const settings = await getSettings(schoolId)
 
@@ -407,11 +423,23 @@ export async function buildEngineInput(
     if (targetIds.has(row.section_id)) {
       if (options.keepLocked && row.is_locked) locked.push({ ...entry, isLocked: true })
     } else {
+      // Superseded: this run has already re-placed that section on that
+      // day, so the live row is stale and the fresh entry is added below.
+      if (options.regenerated?.has(`${row.section_id}|${row.day_of_week}`)) continue
       // Another day-shape's live timetable. Immovable as far as this run
       // is concerned, and the only thing stopping the two groups from
       // both claiming the same teacher.
       external.push(entry)
     }
+  }
+
+  // What earlier shapes in this run actually decided. Entries for a
+  // section-and-day this run is scheduling right now are dropped — the
+  // engine is placing those itself and must not see them as occupied.
+  const ownDays = new Set(group.days.length ? group.days : settings.working_days)
+  for (const entry of options.placedSoFar ?? []) {
+    if (targetIds.has(entry.sectionId) && ownDays.has(entry.day)) continue
+    external.push(entry)
   }
 
   const input: EngineInput = {
@@ -515,6 +543,8 @@ export async function generateDraft(schoolId: string, actorId: string, options: 
 
   const perGroup: any[] = []
   const rows: any[] = []
+  const placedSoFar: EngineEntry[] = []
+  const regenerated = new Set<string>()
   let totalScore = 0
   const allConflicts: { group: string; conflicts: EngineConflict[] }[] = []
   const log: string[] = []
@@ -523,6 +553,7 @@ export async function generateDraft(schoolId: string, actorId: string, options: 
     for (const [index, group] of groups.entries()) {
       const context = await buildEngineInput(schoolId, group, {
         keepLocked: options.keepLocked, allGroups: groups, groupIndex: index,
+        placedSoFar, regenerated,
       })
 
       const feasibility = checkFeasibility(context.input)
@@ -555,6 +586,11 @@ export async function generateDraft(schoolId: string, actorId: string, options: 
         blocking: readable.filter(c => c.severity === 'block').length,
         warnings: readable.filter(c => c.severity === 'warn').length,
       })
+
+      placedSoFar.push(...result.entries)
+      for (const sectionId of group.sectionIds) {
+        for (const day of (group.days.length ? group.days : [])) regenerated.add(`${sectionId}|${day}`)
+      }
 
       for (const entry of result.entries) {
         const meta = context.sectionMeta.get(entry.sectionId)
@@ -640,23 +676,59 @@ export async function listVersions(schoolId: string) {
 }
 
 export async function draftGrid(schoolId: string, versionId: string, sectionId?: string) {
-  let query = supabase.from('timetable_draft_periods')
-    .select(`
-      *, teacher:teacher_id(full_name), classes(name), sections(name), room:room_id(name)
-    `)
-    .eq('school_id', schoolId).eq('version_id', versionId)
-    .order('day_of_week').order('period_number')
-  if (sectionId) query = query.eq('section_id', sectionId)
+  // Paginated: a full week for a 30-section school is well past the 1000
+  // rows PostgREST returns by default, and a preview that quietly stops
+  // two-thirds of the way through is worse than no preview at all.
+  const rows = await fetchAll<any>((from, to) => {
+    let query = supabase.from('timetable_draft_periods')
+      .select(`
+        *, teacher:teacher_id(full_name), classes(name), sections(name), room:room_id(name)
+      `)
+      .eq('school_id', schoolId).eq('version_id', versionId)
+      .order('day_of_week').order('period_number').range(from, to)
+    if (sectionId) query = query.eq('section_id', sectionId)
+    return query
+  }, 'draft periods')
 
-  const { data, error } = await query
-  if (error) throw badRequest('query_failed', error.message)
-  return (data ?? []).map(row => ({
+  const periods = rows.map(row => ({
     ...row,
-    teacher_name: (row as any).teacher?.full_name ?? null,
-    class_name: (row as any).classes?.name ?? null,
-    section_name: (row as any).sections?.name ?? null,
-    room_name: (row as any).room?.name ?? null,
+    teacher_name: row.teacher?.full_name ?? null,
+    class_name: row.classes?.name ?? null,
+    section_name: row.sections?.name ?? null,
+    room_name: row.room?.name ?? null,
   }))
+
+  // The section list and the period axis are derived from the draft
+  // itself rather than from the current setup, so the preview shows what
+  // this version actually contains — including a section the plan has
+  // since dropped.
+  const sections = new Map<string, { id: string; label: string; periods: number }>()
+  const slots = new Map<number, { periodNumber: number; startTime: string | null; endTime: string | null }>()
+  for (const row of periods) {
+    if (row.section_id) {
+      const existing = sections.get(row.section_id)
+      if (existing) existing.periods++
+      else sections.set(row.section_id, {
+        id: row.section_id,
+        label: [row.class_name, row.section_name].filter(Boolean).join(' ') || 'Unnamed',
+        periods: 1,
+      })
+    }
+    if (row.period_number != null && !slots.has(row.period_number)) {
+      slots.set(row.period_number, {
+        periodNumber: row.period_number,
+        startTime: row.start_time ?? null,
+        endTime: row.end_time ?? null,
+      })
+    }
+  }
+
+  return {
+    periods,
+    sections: [...sections.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
+    slots: [...slots.values()].sort((a, b) => a.periodNumber - b.periodNumber),
+    days: [...new Set(periods.map(r => r.day_of_week))].sort((a, b) => a - b),
+  }
 }
 
 export async function publishVersion(schoolId: string, actorId: string, versionId: string) {

@@ -77,7 +77,11 @@ describe('rbac seeding functions', () => {
       .from('role_permissions_v2')
       .select('role_id')
       .eq('role_id', roleIdByName['School Admin'])
-    expect(perms?.length).toBe(DEFAULT_ROLE_PERMISSIONS['School Admin'].length)
+    // Deduped: the catalogue lists a couple of codes under two feature
+    // headings, and seedDefaultRoles collapses them — role_permissions_v2
+    // has a unique constraint, and the un-deduped insert aborted seeding
+    // for a whole new school.
+    expect(perms?.length).toBe(new Set(DEFAULT_ROLE_PERMISSIONS['School Admin']).size)
   })
 
   it('seedDefaultRoles is idempotent — calling it twice does not duplicate roles or permissions', async () => {

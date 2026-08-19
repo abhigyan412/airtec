@@ -18,6 +18,23 @@ import { getUserIdsWithPermission } from '../middleware/permissions-v2'
 // end-of-day, not the moment the day starts, so counting it as a gap
 // before the day is even over would false-positive the newest hires
 // and every ordinary morning sweep run.
+// Absconding is inferred entirely from the staff attendance register,
+// so a school that does not keep one has no basis for the inference.
+// Two guards, because the two failure modes are different:
+//
+//   * a school that never bought the attendance module (a timetable-only
+//     school, say) — the sweep has no business running there at all, and
+//     the review link it sends points into a module they cannot open;
+//   * a school that has the module but has recorded nothing in the whole
+//     window — a register nobody fills in is not evidence that the entire
+//     staff has walked out.
+//
+// Observed in production: a timetable-only school with 29 teachers and no
+// attendance register generated 29 "possible absconding" alerts on one
+// sweep, burying every real notification in the administrator's list. Had
+// absconded_auto_flag been on it would have marked all 29 teachers
+// absconded outright.
+const ATTENDANCE_MODULE = 'attendance'
 const LOOKBACK_MULTIPLIER = 4
 const MAX_LOOKBACK_DAYS = 120
 
@@ -26,7 +43,7 @@ const NOT_ELIGIBLE = ['resigned', 'terminated', 'absconded']
 export async function runAbscondedSweep(schoolId?: string) {
   const today = toLocalDateStr(new Date())
 
-  let schoolsQuery = supabase.from('schools').select('id, absconded_threshold_days, absconded_auto_flag')
+  let schoolsQuery = supabase.from('schools').select('id, absconded_threshold_days, absconded_auto_flag, enabled_modules')
   if (schoolId) schoolsQuery = schoolsQuery.eq('id', schoolId)
   const { data: schools } = await schoolsQuery
 
@@ -34,7 +51,15 @@ export async function runAbscondedSweep(schoolId?: string) {
   let autoSet = 0
   const flaggedDetail: { school_id: string; user_id: string; full_name: string; streak_days: number; last_seen: string | null }[] = []
 
+  const skipped: { school_id: string; why: string }[] = []
+
   for (const school of (schools ?? []) as any[]) {
+    // NULL enabled_modules means "everything", which is the norm.
+    if (Array.isArray(school.enabled_modules) && !school.enabled_modules.includes(ATTENDANCE_MODULE)) {
+      skipped.push({ school_id: school.id, why: 'attendance module not enabled' })
+      continue
+    }
+
     const threshold = school.absconded_threshold_days ?? 15
     const lookbackDays = Math.min(MAX_LOOKBACK_DAYS, threshold * LOOKBACK_MULTIPLIER)
     const windowStart = toLocalDateStr(new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000))
@@ -47,6 +72,16 @@ export async function runAbscondedSweep(schoolId?: string) {
       .eq('school_id', school.id).not('employment_status', 'in', `(${NOT_ELIGIBLE.join(',')})`)
     const targetUserIds = (profiles ?? []).map((p: any) => p.user_id)
     if (!targetUserIds.length) continue
+
+    // Is the register in use at all? One row from anyone is enough to
+    // show it is; none at all means there is nothing to reason from.
+    const { count: attendanceRowsInWindow } = await supabase.from('staff_attendance')
+      .select('id', { count: 'exact', head: true })
+      .eq('school_id', school.id).gte('date', windowStart).lte('date', windowEnd)
+    if (!attendanceRowsInWindow) {
+      skipped.push({ school_id: school.id, why: 'no staff attendance recorded in the window' })
+      continue
+    }
 
     const nonWorkingSets = await getNonWorkingDaySets(school.id, windowStart, windowEnd)
 
@@ -131,5 +166,5 @@ export async function runAbscondedSweep(schoolId?: string) {
     }
   }
 
-  return { flagged, autoSet, detail: flaggedDetail }
+  return { flagged, autoSet, detail: flaggedDetail, skipped }
 }

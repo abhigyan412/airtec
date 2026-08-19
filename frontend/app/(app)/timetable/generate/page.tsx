@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  AlertTriangle, CheckCircle2, History, Loader2, RotateCcw, Trash2, Wand2,
+  AlertTriangle, CheckCircle2, Eye, History, Loader2, RotateCcw, Trash2, Wand2,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 
 import { timetableApi, timetableError, prettyDate } from '@/lib/timetableApi'
 import { Banner, Chip, TableSkeleton } from '../components'
+import { DraftPreview } from './DraftPreview'
 
 // ═══════════════════════════════════════════════════════════════
 // Building a timetable, and swapping it in.
@@ -46,6 +47,7 @@ export default function GeneratePage() {
   const [label, setLabel] = useState('')
   const [lastRun, setLastRun] = useState<any>(null)
   const [confirming, setConfirming] = useState<{ kind: 'publish' | 'rollback' | 'discard'; version: any } | null>(null)
+  const [previewing, setPreviewing] = useState<{ id: string; label: string } | null>(null)
 
   const canPublish = can('timetable.publish')
 
@@ -223,7 +225,14 @@ export default function GeneratePage() {
               </CardContent>
             </Card>
 
-            {lastRun && <RunResult run={lastRun} canPublish={canPublish} onPublish={() => setConfirming({ kind: 'publish', version: { id: lastRun.versionId, label: label || 'this draft' } })} />}
+            {lastRun && (
+              <RunResult
+                run={lastRun}
+                canPublish={canPublish}
+                onPreview={() => setPreviewing({ id: lastRun.versionId, label: label || 'this draft' })}
+                onPublish={() => setConfirming({ kind: 'publish', version: { id: lastRun.versionId, label: label || 'this draft' } })}
+              />
+            )}
           </div>
         </TabsContent>
 
@@ -253,6 +262,12 @@ export default function GeneratePage() {
                     </div>
 
                     <div className="flex shrink-0 flex-wrap gap-2">
+                      {version.status === 'draft' && (
+                        <Button size="sm" variant="outline"
+                          onClick={() => setPreviewing({ id: version.id, label: version.label })}>
+                          <Eye className="mr-1.5 h-3.5 w-3.5" /> Preview
+                        </Button>
+                      )}
                       {version.status === 'draft' && canPublish && (
                         <Button size="sm" onClick={() => setConfirming({ kind: 'publish', version })}>Publish</Button>
                       )}
@@ -275,6 +290,15 @@ export default function GeneratePage() {
         </TabsContent>
       </Tabs>
 
+      {previewing && (
+        <DraftPreview
+          versionId={previewing.id}
+          label={previewing.label}
+          open
+          onOpenChange={open => !open && setPreviewing(null)}
+        />
+      )}
+
       {confirming && (
         <ConfirmDialog
           open
@@ -286,7 +310,7 @@ export default function GeneratePage() {
           }
           description={
             confirming.kind === 'publish'
-              ? 'This replaces the live timetable for every section in the draft, and every affected teacher is told. The timetable it replaces is kept, so this can be undone.'
+              ? 'This replaces the live timetable for every section in the draft, and every affected teacher is told. If you have not looked at the draft yet, close this and press Preview first. The timetable it replaces is kept, so this can be undone.'
               : confirming.kind === 'rollback'
                 ? 'The timetable that was in place before this version was published will be restored.'
                 : 'The draft and everything in it will be deleted. The live timetable is not affected.'
@@ -305,7 +329,7 @@ export default function GeneratePage() {
   )
 }
 
-function RunResult({ run, canPublish, onPublish }: { run: any; canPublish: boolean; onPublish: () => void }) {
+function RunResult({ run, canPublish, onPreview, onPublish }: { run: any; canPublish: boolean; onPreview: () => void; onPublish: () => void }) {
   const blocking = run.conflicts.flatMap((g: any) => g.conflicts.filter((c: any) => c.severity === 'block'))
   const warnings = run.conflicts.flatMap((g: any) => g.conflicts.filter((c: any) => c.severity === 'warn'))
 
@@ -355,7 +379,10 @@ function RunResult({ run, canPublish, onPublish }: { run: any; canPublish: boole
           </details>
         )}
 
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={onPreview}>
+            <Eye className="mr-1.5 h-4 w-4" /> Look at it first
+          </Button>
           {canPublish ? (
             <Button onClick={onPublish} disabled={blocking.length > 0}>Publish this draft</Button>
           ) : (

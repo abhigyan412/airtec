@@ -4,7 +4,8 @@ import { authenticate, AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2, requireAnyPermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { toLocalDateStr } from '../../shared/utils/academicCalendar'
-import { badRequest, dayOfWeekFor, getSettings, sendError, TimetableError } from './lib/core'
+import { supabase } from '../../shared/db/client'
+import { badRequest, conflict, dayOfWeekFor, getSettings, sendError, TimetableError } from './lib/core'
 
 import { readWorkbook } from './import/xlsx'
 import { parseTimetableWorkbook } from './import/parseWorkbook'
@@ -67,7 +68,10 @@ async function can(req: AuthRequest, code: string): Promise<boolean> {
 // SETUP
 // ═══════════════════════════════════════════════════════════════
 
-router.get('/setup/readiness', requirePermissionV2('timetable.view'),
+// The setup checklist is an administrator's to-do list, not something a
+// teacher needs; day templates below stay on timetable.view because every
+// grid needs the period times to render.
+router.get('/setup/readiness', requirePermissionV2('timetable.setup_manage'),
   handle(async req => config.setupReadiness(req.user!.school_id)))
 
 router.get('/setup/settings', requirePermissionV2('timetable.view'),
@@ -309,10 +313,18 @@ router.post('/absences', requirePermissionV2('arrangement.manage'),
   handle(async req => absences.createAbsence(req.user!.school_id, req.user!.id,
     validated<Parameters<typeof absences.createAbsence>[2]>(AbsenceSchema.parse(req.body)))))
 
+// What standing this absence down would do, period by period, so the
+// manager decides rather than being told a number afterwards.
+router.get('/absences/:id/cancel-preview', requirePermissionV2('arrangement.manage'),
+  handle(async req => absences.cancelPreview(req.user!.school_id, req.params.id)))
+
 router.post('/absences/:id/cancel', requirePermissionV2('arrangement.manage'),
   handle(async req => absences.cancelAbsence(
     req.user!.school_id, req.user!.id, req.params.id,
-    String(req.body?.reason ?? 'Teacher returned'))))
+    String(req.body?.reason ?? 'Teacher returned'),
+    Array.isArray(req.body?.keepArrangementIds)
+      ? req.body.keepArrangementIds.map(String)
+      : undefined)))
 
 router.post('/absences/sync-leave', requirePermissionV2('arrangement.manage'),
   handle(async req => absences.syncApprovedLeave(
@@ -467,13 +479,26 @@ router.get('/generate/feasibility', requirePermissionV2('timetable.generate'),
   handle(async req => generate.runFeasibility(req.user!.school_id)))
 
 router.post('/generate', requirePermissionV2('timetable.generate'),
-  handle(async req => generate.generateDraft(req.user!.school_id, req.user!.id, {
-    seed: req.body?.seed != null ? Number(req.body.seed) : undefined,
-    iterations: req.body?.iterations != null ? Number(req.body.iterations) : undefined,
-    keepLocked: req.body?.keepLocked !== false,
-    label: req.body?.label,
-    effectiveFrom: req.body?.effectiveFrom ?? null,
-  })))
+  handle(async req => {
+    // Generation takes tens of seconds with no progress to watch, so a
+    // second click is the natural thing to do — and it used to produce a
+    // second draft nobody asked for. One at a time; discard the old one
+    // first.
+    const { data: openDraft } = await supabase.from('timetable_versions')
+      .select('id, label').eq('school_id', req.user!.school_id).eq('status', 'draft').limit(1).maybeSingle()
+    if (openDraft) {
+      throw conflict('draft_exists',
+        `There is already an unpublished draft ("${openDraft.label}"). Publish or discard it before generating another.`,
+        { versionId: openDraft.id })
+    }
+    return generate.generateDraft(req.user!.school_id, req.user!.id, {
+      seed: req.body?.seed != null ? Number(req.body.seed) : undefined,
+      iterations: req.body?.iterations != null ? Number(req.body.iterations) : undefined,
+      keepLocked: req.body?.keepLocked !== false,
+      label: req.body?.label,
+      effectiveFrom: req.body?.effectiveFrom ?? null,
+    })
+  }))
 
 router.get('/versions', requirePermissionV2('timetable.view'),
   handle(async req => generate.listVersions(req.user!.school_id)))

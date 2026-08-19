@@ -192,7 +192,9 @@ export const timetableApi = {
   // ── absences ──────────────────────────────────────────────────
   absences: (date: string) => get<any[]>('/absences', { date }),
   createAbsence: (body: any) => post<any>('/absences', body),
-  cancelAbsence: (id: string, reason: string) => post<any>(`/absences/${id}/cancel`, { reason }),
+  cancelPreview: (id: string) => get<any>(`/absences/${id}/cancel-preview`),
+  cancelAbsence: (id: string, reason: string, keepArrangementIds?: string[]) =>
+    post<any>(`/absences/${id}/cancel`, { reason, keepArrangementIds }),
   syncLeave: (date: string) => post<any>('/absences/sync-leave', { date }),
   detectAbsences: (date: string) => post<any>('/absences/detect', { date }),
   longAbsences: (from?: string) => get<any[]>('/absences/long', from ? { from } : undefined),

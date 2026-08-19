@@ -27,6 +27,7 @@ import {
   dayOfWeekFor, addDaysISO, DAY_NAMES, Arrangement, Candidate,
 } from '@/lib/timetableApi'
 import { Banner, Chip, DateNav, StatusPill, TableSkeleton, subjectClasses } from '../components'
+import { ReturnedDialog } from './ReturnedDialog'
 
 // ═══════════════════════════════════════════════════════════════
 // The morning screen.
@@ -378,16 +379,9 @@ function TeacherGroup({
 }) {
   const uncovered = group.rows.filter(r => r.status === 'unassigned' || r.status === 'declined').length
 
-  const markReturned = useMutation({
-    mutationFn: () => timetableApi.cancelAbsence(absence.id, 'Teacher returned'),
-    onSuccess: (r: any) => {
-      toast.success(r.cancelledArrangements
-        ? `${r.cancelledArrangements} arrangement(s) stood down. ${r.keptInRegister} already taught and stay in the register.`
-        : 'Absence cancelled')
-      onChange()
-    },
-    onError: (e) => toast.error(timetableError(e)),
-  })
+  // Opens the per-period chooser rather than standing everything down:
+  // which cover survives a teacher's return is the manager's call.
+  const [returning, setReturning] = useState(false)
 
   return (
     <Card className="overflow-hidden">
@@ -408,14 +402,8 @@ function TeacherGroup({
           </div>
         </div>
         {canManage && absence && (
-          <Button
-            variant="ghost" size="sm"
-            onClick={() => markReturned.mutate()}
-            disabled={markReturned.isPending}
-          >
-            {markReturned.isPending
-              ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+          <Button variant="ghost" size="sm" onClick={() => setReturning(true)}>
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             They're back
           </Button>
         )}
@@ -435,6 +423,16 @@ function TeacherGroup({
           />
         ))}
       </div>
+
+      {returning && absence && (
+        <ReturnedDialog
+          absenceId={absence.id}
+          teacherName={group.name}
+          open
+          onOpenChange={setReturning}
+          onDone={onChange}
+        />
+      )}
     </Card>
   )
 }

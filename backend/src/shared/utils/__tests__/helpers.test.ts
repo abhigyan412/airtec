@@ -48,15 +48,17 @@ describe('defaultSectionNamesForClass', () => {
     expect(defaultSectionNamesForClass(12)).toEqual(['PCM', 'PCB', 'Commerce', 'Humanities'])
   })
 
+  // Three, not two: 7933219 moved new schools to A/B/C so the seeded
+  // ladder matches what a school of this size actually runs.
   it('gives letter sections to every other class', () => {
     for (const level of [1, 5, 9, 10, 13]) {
-      expect(defaultSectionNamesForClass(level)).toEqual(['A', 'B'])
+      expect(defaultSectionNamesForClass(level)).toEqual(['A', 'B', 'C'])
     }
   })
 
   it('falls back to letters for a missing level', () => {
-    expect(defaultSectionNamesForClass(null)).toEqual(['A', 'B'])
-    expect(defaultSectionNamesForClass(undefined)).toEqual(['A', 'B'])
+    expect(defaultSectionNamesForClass(null)).toEqual(['A', 'B', 'C'])
+    expect(defaultSectionNamesForClass(undefined)).toEqual(['A', 'B', 'C'])
   })
 })
 

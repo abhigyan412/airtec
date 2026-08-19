@@ -145,7 +145,95 @@ export async function listAbsences(schoolId: string, dateStr: string) {
  * Periods already under way stay exactly as they are: the substitute is
  * in the room, and the register has to say who actually taught.
  */
-export async function cancelAbsence(schoolId: string, actorId: string, absenceId: string, reason: string) {
+/**
+ * What "they're back" is about to do, before it does it.
+ *
+ * Standing an absence down is not one decision, it is one per period. A
+ * teacher who walks in at eleven can take their own afternoon back, but
+ * period 3 was taught by somebody else an hour ago and no amount of
+ * cancelling changes that; and of the periods still to come, the manager
+ * may want to leave one covered because the teacher is going straight
+ * into a meeting. Deciding all of that on the teacher's behalf and then
+ * reporting a number was how "5 periods, 5 still uncovered" happened.
+ *
+ * So the caller is shown every period, told which have already gone and
+ * which substitute is expected where, and picks.
+ */
+export async function cancelPreview(schoolId: string, absenceId: string) {
+  const absence = must(await supabase.from('teacher_absences')
+    .select('*, teacher:teacher_id(full_name)')
+    .eq('id', absenceId).eq('school_id', schoolId).maybeSingle(), 'absence')
+
+  const now = new Date()
+  const today = toLocalDateStr(now)
+  const nowTime = now.toTimeString().slice(0, 8)
+
+  const { data: arrangements } = await supabase.from('arrangements')
+    .select(`
+      id, period_number, start_time, end_time, status, subject_name,
+      substitute_teacher_id, acknowledged_at,
+      substitute:substitute_teacher_id(full_name),
+      classes(name), sections(name)
+    `)
+    .eq('absence_id', absenceId).neq('status', 'cancelled')
+    .order('period_number')
+
+  const periods = (arrangements ?? []).map((a: any) => {
+    const past = absence.absence_date < today ||
+      (absence.absence_date === today && !!a.start_time && a.start_time <= nowTime)
+    const hasSubstitute = !!a.substitute_teacher_id &&
+      a.status !== 'declined' && a.status !== 'unassigned'
+
+    return {
+      arrangementId: a.id,
+      periodNumber: a.period_number,
+      startTime: a.start_time,
+      endTime: a.end_time,
+      subjectName: a.subject_name,
+      className: [a.classes?.name, a.sections?.name].filter(Boolean).join(' ') || null,
+      status: a.status,
+      substituteName: a.substitute?.full_name ?? null,
+      acknowledged: !!a.acknowledged_at,
+      past,
+      hasSubstitute,
+      // A period already taught cannot be un-taught: the register has to
+      // say who stood in front of that class. Everything else is the
+      // manager's call, and the sensible default is to stand it down.
+      canCancel: !past || !hasSubstitute,
+      defaultCancel: !past || !hasSubstitute,
+      why: past && hasSubstitute
+        ? `${a.substitute?.full_name ?? 'A substitute'} already taught this — it stays on the register`
+        : past
+          ? 'Already gone, and nobody was covering it'
+          : hasSubstitute
+            ? `${a.substitute?.full_name ?? 'A substitute'} is booked for this`
+            : 'Still waiting for a substitute',
+    }
+  })
+
+  return {
+    absenceId,
+    teacherName: (absence as any).teacher?.full_name ?? 'This teacher',
+    date: absence.absence_date,
+    scope: absence.scope,
+    periods,
+    cancellable: periods.filter(p => p.canCancel).length,
+    lockedToRegister: periods.filter(p => !p.canCancel).length,
+  }
+}
+
+/**
+ * Stand an absence down.
+ *
+ * `keepArrangementIds` names the covers the manager chose to leave in
+ * place. Omitted entirely, the old all-or-nothing behaviour applies, so
+ * the auto-detection sweep and any other non-interactive caller keeps
+ * working unchanged.
+ */
+export async function cancelAbsence(
+  schoolId: string, actorId: string, absenceId: string, reason: string,
+  keepArrangementIds?: string[],
+) {
   const absence = must(await supabase.from('teacher_absences')
     .select('*, teacher:teacher_id(full_name)')
     .eq('id', absenceId).eq('school_id', schoolId).maybeSingle(), 'absence')
@@ -172,8 +260,10 @@ export async function cancelAbsence(schoolId: string, actorId: string, absenceId
     absence.absence_date < today ||
     (absence.absence_date === today && !!a.start_time && a.start_time <= nowTime)
 
+  const keep = new Set(keepArrangementIds ?? [])
   const upcoming = (arrangements ?? []).filter(a =>
-    a.status === 'unassigned' || a.status === 'declined' || !started(a))
+    !keep.has(a.id) &&
+    (a.status === 'unassigned' || a.status === 'declined' || !started(a)))
 
   if (upcoming.length) {
     await supabase.from('arrangements').update({
@@ -199,12 +289,33 @@ export async function cancelAbsence(schoolId: string, actorId: string, absenceId
     })
   }
 
+  // Somebody whose cover was deliberately kept must not be left guessing
+  // whether it still stands, having just heard the teacher is back.
+  const keptWithSubstitute = (arrangements ?? [])
+    .filter(a => keep.has(a.id) && a.substitute_teacher_id)
+  const keptSubstitutes = [...new Set(keptWithSubstitute.map(a => a.substitute_teacher_id))] as string[]
+  if (keptSubstitutes.length) {
+    await notify({
+      schoolId, userIds: keptSubstitutes, type: 'arrangement_assigned',
+      title: 'Your cover still stands',
+      message: `${teacherName} is back, but you are still covering ${
+        keptWithSubstitute.length === 1
+          ? `period ${keptWithSubstitute[0].period_number}`
+          : `${keptWithSubstitute.length} periods`
+      } on ${absence.absence_date}.`,
+      link: '/timetable/my-week',
+      relatedEntityType: 'teacher_absence', relatedEntityId: absenceId,
+    })
+  }
+
   const managers = (await arrangementManagers(schoolId)).filter(id => id !== actorId)
   if (managers.length) {
     await notify({
       schoolId, userIds: managers, type: 'arrangement_cancelled',
       title: `${teacherName} is back`,
-      message: `${upcoming.length} arrangement${upcoming.length === 1 ? '' : 's'} for ${absence.absence_date} stood down. ${reason || ''}`.trim(),
+      message: `${upcoming.length} arrangement${upcoming.length === 1 ? '' : 's'} for ${absence.absence_date} stood down${
+        keptWithSubstitute.length ? `, ${keptWithSubstitute.length} kept in place` : ''
+      }. ${reason || ''}`.trim(),
       link: `/timetable/arrangements?date=${absence.absence_date}`,
       relatedEntityType: 'teacher_absence', relatedEntityId: absenceId,
     })
@@ -213,12 +324,14 @@ export async function cancelAbsence(schoolId: string, actorId: string, absenceId
   await audit(schoolId, actorId, 'cancel_absence', 'teacher_absence', absenceId, {
     cancelled_arrangements: upcoming.length,
     kept_in_register: (arrangements ?? []).length - upcoming.length,
+    kept_by_choice: keptWithSubstitute.length,
     reason,
   })
 
   return {
     cancelledArrangements: upcoming.length,
     keptInRegister: (arrangements ?? []).length - upcoming.length,
+    keptByChoice: keptWithSubstitute.length,
   }
 }
 
