@@ -34,11 +34,18 @@ export function CellEditor({
   onSaved: () => void
 }) {
   const [teacherId, setTeacherId] = useState<string>(cell.teacherId ?? 'none')
+  const [subjectId, setSubjectId] = useState<string>(cell.subjectId ?? 'none')
   const [moveTo, setMoveTo] = useState<string>('')
 
   const teachers = useQuery({
     queryKey: ['tt-teacher-setup'],
     queryFn: () => timetableApi.teacherSetup(),
+    enabled: open,
+  })
+
+  const subjects = useQuery({
+    queryKey: ['tt-subjects'],
+    queryFn: () => timetableApi.subjects(),
     enabled: open,
   })
 
@@ -49,8 +56,15 @@ export function CellEditor({
   const save = useMutation({
     mutationFn: () => timetableApi.updateDraftCell(versionId, cell.id, {
       teacherId: teacherId === 'none' ? null : teacherId,
+      subjectId: subjectId === 'none' ? null : subjectId,
     }),
-    onSuccess: () => { toast.success('Draft updated'); onSaved() },
+    onSuccess: (r: any) => {
+      // Warnings are advice, not failure — "nobody has this teacher down
+      // as teaching Art" is worth saying and not worth blocking.
+      for (const w of r?.warnings ?? []) toast.warning(w)
+      toast.success('Draft updated')
+      onSaved()
+    },
     onError: (e) => toast.error(timetableError(e)),
   })
 
@@ -87,6 +101,19 @@ export function CellEditor({
           </Banner>
 
           <div>
+            <Label htmlFor="cell-subject">What is taught</Label>
+            <Select value={subjectId} onValueChange={setSubjectId}>
+              <SelectTrigger id="cell-subject" className="mt-1.5"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Nothing (free period)</SelectItem>
+                {(subjects.data ?? []).map((sub: any) => (
+                  <SelectItem key={sub.id} value={sub.id}>{sub.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
             <Label htmlFor="cell-teacher">Who teaches it</Label>
             <Select value={teacherId} onValueChange={setTeacherId}>
               <SelectTrigger id="cell-teacher" className="mt-1.5"><SelectValue /></SelectTrigger>
@@ -102,10 +129,11 @@ export function CellEditor({
             <Button
               className="mt-2" size="sm"
               onClick={() => save.mutate()}
-              disabled={busy || (teacherId === (cell.teacherId ?? 'none'))}
+              disabled={busy || (teacherId === (cell.teacherId ?? 'none')
+                && subjectId === (cell.subjectId ?? 'none'))}
             >
               {save.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-              Save teacher
+              Save changes
             </Button>
           </div>
 

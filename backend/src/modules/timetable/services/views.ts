@@ -482,6 +482,9 @@ export async function blockGrid(
     .filter(s => present.has(s.id))
     .map(s => ({
       sectionId: s.id,
+      // The day editor checks what is scheduled against the weekly plan,
+      // and the plan is held per class, not per section.
+      classId: s.class_id,
       label: `${(s as any).classes?.name ?? ''}-${s.name}`,
       numericLevel: (s as any).classes?.numeric_level ?? 0,
       sectionName: s.name,

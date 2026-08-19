@@ -740,11 +740,15 @@ function PlanTab({ canEdit }: { canEdit: boolean }) {
   const qc = useQueryClient()
   const [classId, setClassId] = useState('')
 
-  const { data: classesResponse } = useQuery({
+  // Unwrapped to the array, like every other holder of this key.
+  // React Query caches by key alone, and two dozen components share
+  // ['classes']; this one stored the whole { success, data } envelope, so
+  // whichever page loaded first decided the shape everyone else got.
+  // Opening Setup and then Class View crashed the latter on .find.
+  const { data: classes = [] } = useQuery({
     queryKey: ['classes'],
-    queryFn: () => classesApi.list(),
+    queryFn: () => classesApi.list().then((r: any) => r.data),
   })
-  const classes = classesResponse?.data ?? []
 
   useEffect(() => {
     if (!classId && classes.length) setClassId(classes[0].id)

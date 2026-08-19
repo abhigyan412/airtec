@@ -191,7 +191,7 @@ export const timetableApi = {
     get<any>('/views/block', versionId ? { versionId } : undefined),
   cloneActive: (label?: string) =>
     post<any>('/versions/clone-active', label ? { label } : {}),
-  updateDraftCell: (versionId: string, cellId: string, body: { teacherId?: string | null; roomId?: string | null }) =>
+  updateDraftCell: (versionId: string, cellId: string, body: { teacherId?: string | null; roomId?: string | null; subjectId?: string | null }) =>
     patch<any>(`/draft/${versionId}/cells/${cellId}`, body),
   moveDraftCell: (versionId: string, cellId: string, target: { day: number; periodNumber: number }) =>
     post<any>(`/draft/${versionId}/cells/${cellId}/move`, target),

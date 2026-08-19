@@ -1112,7 +1112,7 @@ async function editableDraft(schoolId: string, versionId: string) {
  */
 export async function updateDraftCell(
   schoolId: string, actorId: string, versionId: string, cellId: string,
-  patch: { teacherId?: string | null; roomId?: string | null },
+  patch: { teacherId?: string | null; roomId?: string | null; subjectId?: string | null },
 ) {
   await editableDraft(schoolId, versionId)
 
@@ -1145,6 +1145,44 @@ export async function updateDraftCell(
 
   if (patch.roomId !== undefined) update.room_id = patch.roomId || null
 
+  // Changing what is taught in a period.
+  //
+  // subject_name is stored alongside subject_id on purpose — it is what
+  // the printed grid and the cover queue read, and it has to survive a
+  // subject being renamed or retired later. So both move together;
+  // writing the id and leaving the name behind would give a grid that
+  // says one thing and a cover sheet that says another.
+  const warnings: string[] = []
+  if (patch.subjectId !== undefined) {
+    if (patch.subjectId) {
+      const subject = must(await supabase.from('subjects')
+        .select('id, name').eq('id', patch.subjectId).eq('school_id', schoolId).maybeSingle(),
+        'subject')
+      update.subject_id = subject.id
+      update.subject_name = subject.name
+
+      // Whether whoever is standing there can actually teach it is a
+      // judgement, not a rule: schools cover Art with whoever is free,
+      // and a hard refusal here would just be worked around by clearing
+      // the teacher first. So it is said, not enforced.
+      const teacherId = update.teacher_id !== undefined ? update.teacher_id : cell.teacher_id
+      if (teacherId) {
+        const { data: capable } = await supabase.from('teacher_capabilities')
+          .select('teacher_id').eq('teacher_id', teacherId)
+          .eq('subject_id', patch.subjectId).maybeSingle()
+        if (!capable) {
+          const { data: who } = await supabase.from('users')
+            .select('full_name').eq('id', teacherId).maybeSingle()
+          warnings.push(
+            `${who?.full_name ?? 'That teacher'} is not listed as teaching ${subject.name}.`)
+        }
+      }
+    } else {
+      update.subject_id = null
+      update.subject_name = ''
+    }
+  }
+
   if (!Object.keys(update).length) return { ok: true, unchanged: true }
 
   const { error } = await supabase.from('timetable_draft_periods').update(update).eq('id', cellId)
@@ -1154,7 +1192,7 @@ export async function updateDraftCell(
     cellId, ...update,
   })
 
-  return { ok: true }
+  return { ok: true, warnings }
 }
 
 /**

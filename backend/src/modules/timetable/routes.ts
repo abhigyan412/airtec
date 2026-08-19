@@ -530,6 +530,7 @@ router.patch('/draft/:versionId/cells/:cellId', requirePermissionV2('timetable.m
     req.user!.school_id, req.user!.id, req.params.versionId, req.params.cellId, {
       teacherId: 'teacherId' in (req.body ?? {}) ? (req.body.teacherId || null) : undefined,
       roomId: 'roomId' in (req.body ?? {}) ? (req.body.roomId || null) : undefined,
+      subjectId: 'subjectId' in (req.body ?? {}) ? (req.body.subjectId || null) : undefined,
     })))
 
 router.post('/draft/:versionId/cells/:cellId/move', requirePermissionV2('timetable.manage'),

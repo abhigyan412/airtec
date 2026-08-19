@@ -92,7 +92,13 @@ export default function TimetablePage() {
     enabled: !isTeacher,
   })
 
-  const selectedClassObj = (classesData ?? []).find((c: any) => c.id === selectedClass)
+  // Belt and braces on a cache key two dozen components share: if one of
+  // them ever stores the envelope instead of the array again, this page
+  // renders empty instead of throwing on .find.
+  const classList: any[] = Array.isArray(classesData)
+    ? classesData
+    : Array.isArray((classesData as any)?.data) ? (classesData as any).data : []
+  const selectedClassObj = classList.find((c: any) => c.id === selectedClass)
   const sections = selectedClassObj?.sections ?? []
 
   const { data: timetableData, isLoading } = useQuery({
@@ -278,7 +284,7 @@ export default function TimetablePage() {
               <Select value={selectedClass || undefined} onValueChange={v => { setSelectedClass(v); setSelectedSection('') }}>
                 <SelectTrigger className="h-9 min-w-[160px]"><SelectValue placeholder="Select class..." /></SelectTrigger>
                 <SelectContent>
-                  {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  {classList.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -1388,10 +1394,13 @@ function BulkLunchModal({ onClose }: { onClose: () => void }) {
     queryKey: ['classes'],
     queryFn: () => admissionApi.classes().then(r => r.data),
   })
+  const classList: any[] = Array.isArray(classesData)
+    ? classesData
+    : Array.isArray((classesData as any)?.data) ? (classesData as any).data : []
 
   const toggleDay = (d: number) => setDays(cur => cur.includes(d) ? cur.filter(x => x !== d) : [...cur, d].sort())
   const toggleClass = (id: string) => setSelectedClasses(cur => {
-    const base = cur ?? (classesData ?? []).map((c: any) => c.id)
+    const base = cur ?? classList.map((c: any) => c.id)
     return base.includes(id) ? base.filter((x: string) => x !== id) : [...base, id]
   })
   const isClassChecked = (id: string) => selectedClasses === null || selectedClasses.includes(id)
@@ -1454,7 +1463,7 @@ function BulkLunchModal({ onClose }: { onClose: () => void }) {
               </button>
             </div>
             <div className="max-h-40 overflow-y-auto rounded-xl border border-border p-2 grid grid-cols-2 gap-1">
-              {(classesData ?? []).map((c: any) => (
+              {classList.map((c: any) => (
                 <label key={c.id} className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-accent text-sm cursor-pointer">
                   <input type="checkbox" checked={isClassChecked(c.id)} onChange={() => toggleClass(c.id)} className="accent-primary" />
                   {c.name}

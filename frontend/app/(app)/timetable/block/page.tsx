@@ -21,6 +21,7 @@ import { Banner, Chip, TableSkeleton, subjectClasses } from '../components'
 import { DAYS, DAY_SHORT } from '../shared'
 import { CellEditor } from './CellEditor'
 import { PrintSheets } from './PrintSheets'
+import { DayEditor } from './DayEditor'
 
 // ═══════════════════════════════════════════════════════════════
 // The block view — every class's week, in one place
@@ -44,10 +45,11 @@ export default function BlockViewPage() {
   const qc = useQueryClient()
   const { can, isLoading: permsLoading } = usePermissions()
   const [versionId, setVersionId] = useState<string>('active')
-  const [layout, setLayout] = useState<'day' | 'week' | 'class' | 'teachers' | 'teacher'>('week')
+  const [layout, setLayout] = useState<'day' | 'week' | 'class' | 'teachers' | 'teacher' | 'edit'>('week')
   const [day, setDay] = useState(1)
   const [editing, setEditing] = useState<any>(null)
   const [showConflicts, setShowConflicts] = useState(true)
+  const [teacherFormat, setTeacherFormat] = useState<'grid' | 'sheets'>('grid')
 
   const canEdit = can('timetable.manage')
 
@@ -137,6 +139,7 @@ export default function BlockViewPage() {
               ['teachers', 'All teachers, whole week'],
               ['class', 'One class, whole week'],
               ['teacher', 'One teacher, whole week'],
+              ['edit', 'Edit a day'],
             ] as const).map(([mode, label]) => (
               <button
                 key={mode}
@@ -148,6 +151,21 @@ export default function BlockViewPage() {
               </button>
             ))}
           </div>
+
+          {layout === 'teachers' && (
+            <div className="flex overflow-hidden rounded-lg border border-border">
+              {([['grid', 'Grid'], ['sheets', 'Per teacher']] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  onClick={() => setTeacherFormat(mode)}
+                  className={cn('px-3 py-1.5 text-sm transition-colors',
+                    teacherFormat === mode ? 'bg-primary text-primary-foreground' : 'hover:bg-accent')}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {layout === 'day' && data?.days?.length > 0 && (
             <Select value={String(day)} onValueChange={v => setDay(Number(v))}>
@@ -211,7 +229,9 @@ export default function BlockViewPage() {
                 editable={editable} onEdit={setEditing} />
             )}
             {layout === 'teachers' && (
-              <TeacherBlock data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
+              teacherFormat === 'grid'
+                ? <TeacherBlock data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
+                : <TeacherSheets data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
             )}
             {layout === 'class' && (
               <ClassWeeks data={data} flagged={flagged} flaggedSlots={flaggedSlots}
@@ -219,6 +239,10 @@ export default function BlockViewPage() {
             )}
             {layout === 'teacher' && (
               <TeacherWeek data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
+            )}
+            {layout === 'edit' && (
+              <DayEditor data={data} versionId={versionId} editable={editable}
+                onChanged={() => qc.invalidateQueries({ queryKey: ['tt-block', versionId] })} />
             )}
           </>
         )}
@@ -522,6 +546,84 @@ function pivotByTeacher(data: any) {
   }
 }
 
+// ── one teacher's week, as a table ──────────────────────────────
+//
+// Rendered by three callers — the single-teacher view, the stacked
+// "per teacher" format, and (in print form) the sheets handed out — so
+// what a teacher is given and what the office reads are the same table.
+
+function TeacherWeekTable({ data, teacher, index, flagged, editable, onEdit }: {
+  data: any; teacher: { id: string; name: string }
+  index: Map<string, any[]>; flagged: Map<string, string>
+  editable: boolean; onEdit: (c: any) => void
+}) {
+  const teaching = data.slots.filter((s: any) => !s.isBreak)
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-border">
+      <table className="w-full border-collapse text-sm" style={{ minWidth: 720 }}>
+        <thead className="bg-muted/50">
+          <tr>
+            <th className="border-b border-border px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Period
+            </th>
+            {data.days.map((d: number) => (
+              <th key={d} className="border-b border-l border-border px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {DAY_SHORT[d - 1] ?? `Day ${d}`}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {teaching.map((slot: any) => (
+            <tr key={slot.periodNumber}>
+              <td className="border-b border-border px-3 py-2 align-top">
+                <div className="text-sm font-medium text-foreground">{slot.periodNumber}</div>
+                <div className="text-[11px] text-muted-foreground">{fmt(slot.startTime)}–{fmt(slot.endTime)}</div>
+              </td>
+              {data.days.map((d: number) => {
+                const here = index.get(`${teacher.id}:${d}:${slot.periodNumber}`) ?? []
+                const clash = here.length > 1
+                return (
+                  <td key={d} className="border-b border-l border-border p-1.5 align-top">
+                    {!here.length ? (
+                      <div className="px-2 py-1.5 text-xs text-muted-foreground/50">free</div>
+                    ) : (
+                      <div className="space-y-1">
+                        {here.map((cell: any) => (
+                          <button
+                            key={cell.id}
+                            onClick={() => editable && onEdit(cell)}
+                            disabled={!editable}
+                            className={cn('block w-full rounded-md px-2 py-1.5 text-left',
+                              clash || flagged.get(cell.id) === 'block'
+                                ? 'bg-destructive/10 ring-1 ring-inset ring-destructive/40'
+                                : subjectClasses(cell.subjectName),
+                              editable && 'hover:opacity-80')}
+                          >
+                            <span className="block text-xs font-semibold">{cell.sectionLabel}</span>
+                            <span className="block text-[11px] opacity-80">{cell.subjectName}</span>
+                            {cell.roomName && <span className="block text-[10px] opacity-60">{cell.roomName}</span>}
+                          </button>
+                        ))}
+                        {clash && (
+                          <div className="flex items-center gap-1 text-[10px] font-semibold text-destructive">
+                            <AlertTriangle className="h-3 w-3" /> two classes at once
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ── one teacher, whole week ─────────────────────────────────────
 //
 // What gets handed to the teacher, and what you look at before asking
@@ -540,7 +642,7 @@ function TeacherWeek({ data, flagged, editable, onEdit }: {
   }
 
   const chosen = teachers.find(t => t.id === teacherId) ?? teachers[0]
-  const mine = teaching.length * data.days.length
+  const slotsInWeek = teaching.length * data.days.length
   const taught = load.get(chosen.id) ?? 0
 
   return (
@@ -557,70 +659,49 @@ function TeacherWeek({ data, flagged, editable, onEdit }: {
           </SelectContent>
         </Select>
         <Chip>{taught} periods a week</Chip>
-        <Chip tone={mine - taught > 0 ? 'info' : 'neutral'}>{mine - taught} free</Chip>
+        <Chip tone={slotsInWeek - taught > 0 ? 'info' : 'neutral'}>{slotsInWeek - taught} free</Chip>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full border-collapse text-sm" style={{ minWidth: 720 }}>
-          <thead className="bg-muted/50">
-            <tr>
-              <th className="border-b border-border px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Period
-              </th>
-              {data.days.map((d: number) => (
-                <th key={d} className="border-b border-l border-border px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {DAY_SHORT[d - 1] ?? `Day ${d}`}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {teaching.map((slot: any) => (
-              <tr key={slot.periodNumber}>
-                <td className="border-b border-border px-3 py-2 align-top">
-                  <div className="text-sm font-medium text-foreground">{slot.periodNumber}</div>
-                  <div className="text-[11px] text-muted-foreground">{fmt(slot.startTime)}–{fmt(slot.endTime)}</div>
-                </td>
-                {data.days.map((d: number) => {
-                  const here = index.get(`${chosen.id}:${d}:${slot.periodNumber}`) ?? []
-                  const clash = here.length > 1
-                  return (
-                    <td key={d} className="border-b border-l border-border p-1.5 align-top">
-                      {!here.length ? (
-                        <div className="px-2 py-1.5 text-xs text-muted-foreground/50">free</div>
-                      ) : (
-                        <div className="space-y-1">
-                          {here.map((cell: any) => (
-                            <button
-                              key={cell.id}
-                              onClick={() => editable && onEdit(cell)}
-                              disabled={!editable}
-                              className={cn('block w-full rounded-md px-2 py-1.5 text-left',
-                                clash || flagged.get(cell.id) === 'block'
-                                  ? 'bg-destructive/10 ring-1 ring-inset ring-destructive/40'
-                                  : subjectClasses(cell.subjectName),
-                                editable && 'hover:opacity-80')}
-                            >
-                              <span className="block text-xs font-semibold">{cell.sectionLabel}</span>
-                              <span className="block text-[11px] opacity-80">{cell.subjectName}</span>
-                              {cell.roomName && <span className="block text-[10px] opacity-60">{cell.roomName}</span>}
-                            </button>
-                          ))}
-                          {clash && (
-                            <div className="flex items-center gap-1 text-[10px] font-semibold text-destructive">
-                              <AlertTriangle className="h-3 w-3" /> two classes at once
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <TeacherWeekTable data={data} teacher={chosen} index={index}
+        flagged={flagged} editable={editable} onEdit={onEdit} />
+    </div>
+  )
+}
+
+// ── every teacher, one sheet each ───────────────────────────────
+//
+// The same content as the teacher grid, laid out the way it is printed
+// and the way a teacher reads their own week. Stacked rather than
+// pivoted, for when you are working through the staff one at a time
+// instead of comparing across them.
+
+function TeacherSheets({ data, flagged, editable, onEdit }: {
+  data: any; flagged: Map<string, string>; editable: boolean; onEdit: (c: any) => void
+}) {
+  const { teachers, index, load } = useMemo(() => pivotByTeacher(data), [data])
+  const teaching = data.slots.filter((s: any) => !s.isBreak)
+  const slotsInWeek = teaching.length * data.days.length
+
+  if (!teachers.length) {
+    return <Banner tone="warn" title="Nobody is assigned to any period in this timetable" />
+  }
+
+  return (
+    <div className="space-y-6">
+      {teachers.map(teacher => {
+        const taught = load.get(teacher.id) ?? 0
+        return (
+          <div key={teacher.id}>
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-semibold text-foreground">{teacher.name}</h3>
+              <Chip>{taught} periods a week</Chip>
+              <Chip tone={slotsInWeek - taught > 0 ? 'info' : 'neutral'}>{slotsInWeek - taught} free</Chip>
+            </div>
+            <TeacherWeekTable data={data} teacher={teacher} index={index}
+              flagged={flagged} editable={editable} onEdit={onEdit} />
+          </div>
+        )
+      })}
     </div>
   )
 }
