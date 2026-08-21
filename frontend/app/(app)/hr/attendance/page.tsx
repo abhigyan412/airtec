@@ -91,6 +91,17 @@ function MarkTab() {
   // should be marking attendance for someone no longer employed.
   const staffData = (staffDataRaw ?? []).filter((s: any) => !['resigned', 'terminated'].includes(s.staff_profile?.employment_status))
 
+  // Names that appear more than once, so those rows can carry something
+  // that tells them apart.
+  const duplicateNames = new Set(
+    Object.entries(
+      staffData.reduce((acc: Record<string, number>, s: any) => {
+        acc[s.full_name] = (acc[s.full_name] ?? 0) + 1
+        return acc
+      }, {}),
+    ).filter(([, n]) => (n as number) > 1).map(([name]) => name),
+  )
+
   const { data: existingAttendance, isLoading } = useQuery({
     queryKey: ['staff-attendance', date],
     queryFn: () => hrmsApi.attendance.list({ date }).then(r => r.data),
@@ -245,12 +256,27 @@ function MarkTab() {
             <TableBody>
               {(staffData ?? []).map((s: any) => {
                 const rec: Partial<RecordState> = records[s.id] ?? {}
+                const twin = duplicateNames.has(s.full_name)
                 return (
                   <TableRow key={s.id} className="cursor-default">
                     <TableCell className="font-semibold text-foreground">
                       <div className="flex items-center gap-2.5">
                         <StaffAvatar photoUrl={s.staff_profile?.photo_url} fullName={s.full_name} className="h-8 w-8 text-xs" />
-                        {s.full_name}
+                        <span className="min-w-0">
+                          {s.full_name}
+                          {/* Two teachers of the same name is ordinary in
+                              a school, and the register is where it does
+                              damage: identical rows, and whoever is
+                              marking has to guess. Shown only where the
+                              name actually repeats, so the usual case
+                              stays uncluttered. */}
+                          {twin && (
+                            <span className="block text-[11px] font-normal text-muted-foreground">
+                              {[s.staff_profile?.employee_id, s.staff_profile?.designation, s.staff_profile?.department, s.email]
+                                .filter(Boolean)[0] ?? 'no other detail on file'}
+                            </span>
+                          )}
+                        </span>
                       </div>
                     </TableCell>
                     <TableCell className="text-xs capitalize text-muted-foreground">{s.role?.replace('_',' ')}</TableCell>

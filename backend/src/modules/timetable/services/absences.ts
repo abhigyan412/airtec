@@ -73,7 +73,7 @@ export async function createAbsence(schoolId: string, actorId: string | null, in
       }).eq('id', existing.id)
       await supabase.from('arrangements').delete()
         .eq('absence_id', existing.id).eq('status', 'unassigned')
-      const created = await materialize(existing.id)
+      const created = await materialize(existing.id, input.date)
       await audit(schoolId, actorId, 'confirm_absence', 'teacher_absence', existing.id, { created })
       return { id: existing.id, arrangementsCreated: created, upgraded: true }
     }
@@ -95,7 +95,7 @@ export async function createAbsence(schoolId: string, actorId: string | null, in
     created_by: actorId,
   }).select('id').single(), 'create absence')
 
-  const created = await materialize(absence.id)
+  const created = await materialize(absence.id, input.date)
 
   await audit(schoolId, actorId, 'create_absence', 'teacher_absence', absence.id, {
     teacher: input.teacherId, date: input.date, scope: input.scope, arrangements: created,
@@ -104,10 +104,24 @@ export async function createAbsence(schoolId: string, actorId: string | null, in
   return { id: absence.id, arrangementsCreated: created, upgraded: false }
 }
 
-async function materialize(absenceId: string): Promise<number> {
+/**
+ * Fan an absence out into the cover queue.
+ *
+ * For today, periods that have already started are left out: nobody can
+ * cover a lesson that finished an hour ago, and queueing them produced
+ * "8 periods · 8 still uncovered" at two in the afternoon for a day that
+ * was nearly over. The cutoff is computed here rather than in the
+ * database because period times are local wall-clock and the database
+ * runs in UTC.
+ */
+async function materialize(absenceId: string, dateStr?: string): Promise<number> {
+  const today = toLocalDateStr(new Date())
+  const notBefore = dateStr === today ? new Date().toTimeString().slice(0, 8) : null
+
   const { data, error } = await supabase.rpc('timetable_materialize_arrangements', {
     p_absence_id: absenceId,
-  })
+    p_not_before: notBefore,
+  } as any)
   if (error) throw badRequest('materialize_failed', error.message)
   return Number(data ?? 0)
 }
@@ -494,13 +508,26 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   }
 
   let proposed = 0
+  // Marked absent, but every one of their periods has already been and
+  // gone. No cover can be arranged for a lesson that finished an hour
+  // ago — but the check must SAY so. Reporting "nothing found" to
+  // somebody who has just marked two people absent reads as the feature
+  // being broken, which is exactly how it was reported.
+  const absentButDayOver: string[] = []
+
   for (const [teacherId, periods] of startedByTeacher) {
     if (alreadyHandled.has(teacherId)) continue
     // See above: gone, not absent.
     if (departed.has(teacherId)) continue
     if (periods.length < settings.auto_detect_after_period) continue
     // Nothing left of their day, so nothing to arrange.
-    if (!(remainingByTeacher.get(teacherId) ?? 0)) continue
+    if (!(remainingByTeacher.get(teacherId) ?? 0)) {
+      const rec = attendance.get(teacherId)
+      if (rec && (rec.status === 'absent' || rec.status === 'on_leave')) {
+        absentButDayOver.push(teacherId)
+      }
+      continue
+    }
 
     const record = attendance.get(teacherId)
 
@@ -558,6 +585,8 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     registerUsable,
     /** Still on the timetable despite having left. */
     departedStillTeaching: [...startedByTeacher.keys()].filter(id => departed.has(id)).length,
+    /** Marked absent, but all their lessons had already finished. */
+    absentButDayOver: absentButDayOver.length,
     // So the caller can say "everyone has checked in" rather than
     // "nothing found", which reads as a failure.
     withPeriodsLeft: [...remainingByTeacher.keys()].filter(id => startedByTeacher.has(id)).length,

@@ -129,6 +129,12 @@ export default function ArrangementsPage() {
     onSuccess: (r: any) => {
       if (r.disabled) toast.info('Attendance checking is switched off in settings')
       else if (r.proposed) toast.success(`${r.proposed} possible absence${r.proposed === 1 ? '' : 's'} found — confirm below`)
+      // Somebody who has just marked two people absent and is told
+      // "nothing found" concludes the check is broken. Say what was
+      // found and why it produced nothing.
+      else if (r.absentButDayOver) {
+        toast.info(`${r.absentButDayOver} teacher${r.absentButDayOver === 1 ? ' is' : 's are'} marked absent, but all their lessons today have already finished — there is nothing left to cover`)
+      }
       else if (!r.withPeriodsLeft) toast.info('No classes left today, so there is nothing to arrange cover for')
       // "Nobody is missing" and "nobody has been marked yet" are
       // different answers, and reporting the second as the first is how
@@ -952,11 +958,24 @@ function RegisterTab() {
               {data.map((row: any, i: number) => (
                 <tr key={i} className="hover:bg-muted/30">
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums">{prettyDate(row.date)}</td>
-                  <td className="px-3 py-2 tabular-nums">{row.period}</td>
-                  <td className="px-3 py-2">{row.class}</td>
-                  <td className="px-3 py-2">{row.subject}</td>
+                  {/* An absence that needed no cover still belongs in the
+                      register — it is a record of who was away, not only
+                      of cover that was arranged. It spans the lesson
+                      columns rather than showing four empty cells. */}
+                  {row.note ? (
+                    <td className="px-3 py-2 text-muted-foreground" colSpan={3}>{row.note}</td>
+                  ) : (
+                    <>
+                      <td className="px-3 py-2 tabular-nums">{row.period}</td>
+                      <td className="px-3 py-2">{row.class}</td>
+                      <td className="px-3 py-2">{row.subject}</td>
+                    </>
+                  )}
                   <td className="px-3 py-2">{row.absent}</td>
-                  <td className="px-3 py-2 font-medium">{row.substitute || <span className="text-destructive">Nobody</span>}</td>
+                  <td className="px-3 py-2 font-medium">
+                    {row.note ? <span className="text-muted-foreground">—</span>
+                      : row.substitute || <span className="text-destructive">Nobody</span>}
+                  </td>
                   <td className="px-3 py-2"><StatusPill status={row.status} /></td>
                 </tr>
               ))}
