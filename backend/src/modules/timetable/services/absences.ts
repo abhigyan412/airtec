@@ -1,4 +1,7 @@
 import { supabase } from '../../../shared/db/client'
+
+/** Employment statuses that mean somebody has left the school. */
+export const DEPARTED_STATUSES = ['resigned', 'terminated', 'absconded']
 import { toLocalDateStr } from '../../../shared/utils/academicCalendar'
 import {
   arrangementManagers, audit, badRequest, conflict, dayOfWeekFor, formatTime,
@@ -440,15 +443,32 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   // Below that the register is mid-entry, and the only evidence worth
   // acting on is somebody explicitly marked absent or on leave.
   const attendanceRows = attendanceResult.data ?? []
-  const { count: activeStaff } = await supabase.from('users')
+
+  // Who can be marked at all.
+  //
+  // Somebody who has resigned or been terminated is off the staff
+  // register, so they have no attendance row and never will. Counting
+  // them as unmarked staff proposes them absent every day for the rest
+  // of time — and drags the denominator down so the register never looks
+  // complete. They are not absent; they have left. That the timetable
+  // still has them teaching is a separate and much worse problem, and
+  // the block view reports it as one.
+  const { data: profiles } = await supabase.from('staff_profiles')
+    .select('user_id, employment_status').eq('school_id', schoolId)
+  const departed = new Set((profiles ?? [])
+    .filter(p => DEPARTED_STATUSES.includes(p.employment_status))
+    .map(p => p.user_id))
+
+  const { count: onRegister } = await supabase.from('users')
     .select('id', { count: 'exact', head: true })
     .eq('school_id', schoolId).eq('is_active', true)
     .not('role', 'in', '("parent","student")')
+  const markable = Math.max(0, (onRegister ?? 0) - departed.size)
 
   const REGISTER_COMPLETE_ENOUGH = 0.8
   const registerTaken = attendanceRows.length > 0
-  const registerUsable = !!activeStaff && activeStaff > 0 &&
-    attendanceRows.length >= activeStaff * REGISTER_COMPLETE_ENOUGH
+  const registerUsable = markable > 0 &&
+    attendanceRows.length >= markable * REGISTER_COMPLETE_ENOUGH
 
   // Two separate questions, and both have to be yes.
   //
@@ -476,6 +496,8 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   let proposed = 0
   for (const [teacherId, periods] of startedByTeacher) {
     if (alreadyHandled.has(teacherId)) continue
+    // See above: gone, not absent.
+    if (departed.has(teacherId)) continue
     if (periods.length < settings.auto_detect_after_period) continue
     // Nothing left of their day, so nothing to arrange.
     if (!(remainingByTeacher.get(teacherId) ?? 0)) continue
@@ -534,6 +556,8 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     registerTaken,
     /** Far enough through the register to read anything into omissions. */
     registerUsable,
+    /** Still on the timetable despite having left. */
+    departedStillTeaching: [...startedByTeacher.keys()].filter(id => departed.has(id)).length,
     // So the caller can say "everyone has checked in" rather than
     // "nothing found", which reads as a failure.
     withPeriodsLeft: [...remainingByTeacher.keys()].filter(id => startedByTeacher.has(id)).length,

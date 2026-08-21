@@ -4,6 +4,7 @@ import {
   badRequest, DAY_NAMES, dayOfWeekFor, fetchAll, formatTime, getSettings,
 } from '../lib/core'
 import { PURPOSE_LABELS } from './bookings'
+import { DEPARTED_STATUSES } from './absences'
 
 // ═══════════════════════════════════════════════════════════════
 // Reading the timetable, in the shapes a school actually asks for.
@@ -410,7 +411,7 @@ function weeklyLoad(rows: any[]) {
 // thousand rows to work it out.
 
 export interface BlockConflict {
-  kind: 'teacher_clash' | 'room_over_capacity' | 'unstaffed' | 'gap'
+  kind: 'teacher_clash' | 'room_over_capacity' | 'unstaffed' | 'gap' | 'teacher_departed'
   severity: 'block' | 'warn'
   day: number
   periodNumber: number
@@ -472,6 +473,20 @@ export async function blockGrid(
     supabase.from('classrooms').select('id, name, capacity_groups').eq('school_id', schoolId),
   ])
 
+  // Staff who have left but are still on the timetable. Found at DPS
+  // Lucknow: three resigned teachers and one terminated, between them
+  // holding 118 periods a week. Nobody is going to teach those lessons,
+  // and nothing anywhere said so — HR drops them from the attendance
+  // register, so they do not even show up as absent.
+  const { data: staffProfiles } = await supabase.from('staff_profiles')
+    .select('user_id, employment_status').eq('school_id', schoolId)
+  const departedStatus = new Map<string, string>()
+  for (const profile of staffProfiles ?? []) {
+    if (DEPARTED_STATUSES.includes(profile.employment_status)) {
+      departedStatus.set(profile.user_id, profile.employment_status)
+    }
+  }
+
   const roomById = new Map((roomRows ?? []).map(r => [r.id, r]))
 
   // Only sections this timetable actually contains — a draft may not
@@ -510,6 +525,7 @@ export async function blockGrid(
   }
 
   // ── conflicts, computed across the whole grid ─────────────────
+  const teachingRows = rows.filter(r => !r.is_break)
   const conflicts: BlockConflict[] = []
   const labelOf = new Map(sections.map(s => [s.sectionId, s.label]))
 
@@ -532,6 +548,32 @@ export async function blockGrid(
       const key = `${row.room_id}:${row.day_of_week}:${row.period_number}`
       byRoomSlot.set(key, [...(byRoomSlot.get(key) ?? []), row])
     }
+  }
+
+  // One entry per departed teacher rather than per period: four people
+  // holding 118 lessons would otherwise bury every other finding.
+  const departedTeaching = new Map<string, any[]>()
+  for (const row of teachingRows) {
+    if (!row.teacher_id || !departedStatus.has(row.teacher_id)) continue
+    departedTeaching.set(row.teacher_id, [...(departedTeaching.get(row.teacher_id) ?? []), row])
+  }
+  for (const [teacherId, held] of Array.from(departedTeaching.entries())) {
+    // "has resigned" but "has been terminated" — the status words are
+    // not grammatically interchangeable, and a message about somebody
+    // losing their job should at least be written properly.
+    const raw = departedStatus.get(teacherId)
+    const status = raw === 'terminated' ? 'been terminated'
+      : raw === 'absconded' ? 'been recorded as absconded'
+      : 'resigned'
+    const classes = [...new Set(held.map(r => labelOf.get(r.section_id)).filter(Boolean))]
+    conflicts.push({
+      kind: 'teacher_departed', severity: 'block',
+      day: held[0].day_of_week, periodNumber: held[0].period_number,
+      message: `${held[0].teacher?.full_name ?? 'A teacher'} has ${status} but still holds ${held.length} period${held.length === 1 ? '' : 's'} a week across ${classes.length} class${classes.length === 1 ? '' : 'es'} (${classes.slice(0, 4).join(', ')}${classes.length > 4 ? '…' : ''}). Nobody is going to teach those.`,
+      sectionIds: held.map(r => r.section_id),
+      cellIds: held.map(r => r.id),
+      slotKeys: [],
+    })
   }
 
   for (const group of Array.from(byTeacherSlot.values())) {
@@ -572,7 +614,6 @@ export async function blockGrid(
   // sequence (this school's lunch is period 105), so counting them made
   // every section look like it had ninety-five empty periods a day.
   let gapCount = 0
-  const teachingRows = rows.filter(r => !r.is_break)
   for (const section of sections) {
     for (const day of days) {
       const inDay = teachingRows.filter(r => r.section_id === section.sectionId && r.day_of_week === day)
@@ -607,6 +648,8 @@ export async function blockGrid(
     subjects: new Set(teaching.map(r => r.subject_name).filter(Boolean)).size,
     rooms: new Set(teaching.map(r => r.room_id).filter(Boolean)).size,
     unstaffed: conflicts.filter(c => c.kind === 'unstaffed').length,
+    departedTeachers: departedTeaching.size,
+    departedPeriods: Array.from(departedTeaching.values()).reduce((n, v) => n + v.length, 0),
     teacherClashes: conflicts.filter(c => c.kind === 'teacher_clash').length,
     roomClashes: conflicts.filter(c => c.kind === 'room_over_capacity').length,
     gaps: gapCount,
