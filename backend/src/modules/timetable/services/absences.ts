@@ -170,12 +170,32 @@ export async function listAbsences(schoolId: string, dateStr: string) {
     }
   }
 
-  return (data ?? []).map(row => ({
-    ...row,
-    teacher_name: (row as any).teacher?.full_name ?? null,
-    periods_affected: counts.get(row.id)?.total ?? 0,
-    periods_covered: counts.get(row.id)?.filled ?? 0,
-  }))
+  // Two different problems get listed on the same screen and they want
+  // different answers. "Mrs Sharma is off sick" is today's problem and
+  // is settled by finding cover. "Mr Nair resigned in June and still
+  // holds thirty periods" is a defect in the timetable: cover patches it
+  // for one day and it is back tomorrow, and every day after, until
+  // somebody reassigns the periods. Offering "They're here" against
+  // somebody who has left is nonsense — they are not coming back.
+  const { data: profiles } = await supabase.from('staff_profiles')
+    .select('user_id, employment_status').eq('school_id', schoolId)
+  const statusOf = new Map((profiles ?? []).map(p => [p.user_id, p.employment_status]))
+
+  return (data ?? []).map(row => {
+    const employmentStatus = statusOf.get(row.teacher_id) ?? null
+    const staffing = employmentStatus ? NOT_TEACHING_STATUSES[employmentStatus] : undefined
+    return {
+      ...row,
+      teacher_name: (row as any).teacher?.full_name ?? null,
+      periods_affected: counts.get(row.id)?.total ?? 0,
+      periods_covered: counts.get(row.id)?.filled ?? 0,
+      employment_status: employmentStatus,
+      /** The timetable itself is wrong; cover is only a stopgap. */
+      needs_timetable_fix: !!staffing,
+      /** Whether they are ever coming back to these classes. */
+      permanently_gone: staffing?.permanent ?? false,
+    }
+  })
 }
 
 /**
@@ -543,6 +563,32 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     startedByTeacher.set(row.teacher_id, list)
   }
 
+  // An auto-raised absence that no longer has any basis is withdrawn.
+  //
+  // Reassign a departed teacher's periods and the alert must go: it was
+  // raised because the timetable pointed at somebody who would not
+  // teach, and it stops being true the moment that is fixed. Leaving it
+  // there would mean the only way to clear the warning was to dismiss
+  // it by hand, which trains people to dismiss warnings.
+  const { data: standing } = await supabase.from('teacher_absences')
+    .select('id, teacher_id, source').eq('school_id', schoolId)
+    .eq('absence_date', dateStr).eq('status', 'proposed')
+  let withdrawn = 0
+  for (const row of standing ?? []) {
+    if (row.source !== 'attendance') continue
+    const stillTeaching = teachesToday.has(row.teacher_id)
+    const stillUnavailable = departed.has(row.teacher_id) ||
+      ['absent', 'on_leave'].includes(attendance.get(row.teacher_id)?.status ?? '')
+    if (stillTeaching && stillUnavailable) continue
+    // Only ever withdraws rows nobody has acted on.
+    const { data: arr } = await supabase.from('arrangements')
+      .select('id, substitute_teacher_id, acknowledged_at').eq('absence_id', row.id)
+    if ((arr ?? []).some(a => a.substitute_teacher_id || a.acknowledged_at)) continue
+    await supabase.from('arrangements').delete().eq('absence_id', row.id)
+    await supabase.from('teacher_absences').delete().eq('id', row.id)
+    withdrawn++
+  }
+
   let proposed = 0
   // Marked absent, but every one of their periods has already been and
   // gone. No cover can be arranged for a lesson that finished an hour
@@ -652,6 +698,8 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     departedStillTeaching: [...startedByTeacher.keys()].filter(id => departed.has(id)).length,
     /** Marked absent, but all their lessons had already finished. */
     absentButDayOver: absentButDayOver.length,
+    /** Auto-raised alerts withdrawn because they no longer hold. */
+    withdrawn,
     // So the caller can say "everyone has checked in" rather than
     // "nothing found", which reads as a failure.
     withPeriodsLeft: [...remainingByTeacher.keys()].filter(id => startedByTeacher.has(id)).length,

@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -89,7 +90,13 @@ export default function ArrangementsPage() {
     }
   }, [rows])
 
-  const proposed = absences.filter((a: any) => a.status === 'proposed')
+  const proposedAll = absences.filter((a: any) => a.status === 'proposed')
+  // Somebody off sick today, versus a timetable that still names a
+  // teacher who left in June. Same list until now, and they want
+  // opposite answers: one is settled by finding cover, the other comes
+  // back every single day until the periods are reassigned.
+  const proposed = proposedAll.filter((a: any) => !a.needs_timetable_fix)
+  const staffingGaps = proposedAll.filter((a: any) => a.needs_timetable_fix)
 
   const byTeacher = useMemo(() => {
     const groups = new Map<string, { name: string; teacherId: string; rows: Arrangement[] }>()
@@ -252,6 +259,46 @@ export default function ArrangementsPage() {
             <SummaryTile label="Confirmed" value={summary.confirmed} tone="good" hint="Substitute has accepted" />
             <SummaryTile label="Teachers away" value={byTeacher.length} tone="neutral" hint={`${summary.total} periods affected`} />
           </div>
+
+          {staffingGaps.length > 0 && canManage && (
+            <div className="mb-4">
+              <Banner
+                tone="bad"
+                title={`${staffingGaps.length} class group${staffingGaps.length === 1 ? '' : 's'} on the timetable have no teacher`}
+              >
+                These are not absences. The timetable still gives periods to people who will
+                not be teaching them, so this will come back tomorrow and every day after
+                until the periods are reassigned. Cover is a stopgap.
+                <div className="mt-2 space-y-2">
+                  {staffingGaps.map((a: any) => (
+                    <div key={a.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/20 bg-background px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate text-sm font-medium text-foreground">{a.teacher_name}</p>
+                          <Chip tone={a.permanently_gone ? 'bad' : 'warn'}>
+                            {a.permanently_gone ? 'fix the timetable' : 'needs a stand-in teacher'}
+                          </Chip>
+                          {a.periods_affected > 0 && (
+                            <Chip>{a.periods_affected} period{a.periods_affected === 1 ? '' : 's'} today</Chip>
+                          )}
+                        </div>
+                        <p className="truncate text-xs text-muted-foreground">{a.reason}</p>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <Link
+                          href="/timetable/block"
+                          className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+                        >
+                          Reassign their periods →
+                        </Link>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Banner>
+            </div>
+          )}
 
           {proposed.length > 0 && canManage && (
             <div className="mb-5">
