@@ -15,21 +15,6 @@ import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
 
-/**
- * A heading inside an expanded group.
- *
- * Deliberately quiet — small, uppercase, muted, no rule. It is there to
- * be read once while scanning and then ignored; anything louder competes
- * with the links themselves, which are the thing being looked for.
- */
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="px-2.5 pb-0.5 pt-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 first:pt-0.5">
-      {children}
-    </p>
-  )
-}
-
 interface NavItem {
   label: string
   href?: string
@@ -51,15 +36,6 @@ interface NavItem {
    *  under "Recruitment") — the nav tree itself stays flat/one-level,
    *  this is styling only. */
   indent?: boolean
-  /** Heading rendered above this child, splitting a long group into
-   *  labelled runs. Set it on EVERY child in the run, not just the
-   *  first: the renderer emits a heading wherever the value changes from
-   *  the previous surviving sibling, so tagging only the first would
-   *  lose the heading whenever permissions hid that particular item.
-   *  A run whose every item is hidden correctly takes its heading with
-   *  it. Only worth using past roughly six children — below that the
-   *  heading costs more attention than the grouping saves. */
-  section?: string
   /** Which product module this belongs to. A school that has not bought
    *  the module never sees the entry, whatever permissions its roles
    *  hold — several entries below (Dashboard, My Payslips, My Leave)
@@ -139,28 +115,28 @@ const NAV: NavItem[] = [
       // order interleaved all three, so the screen somebody opens twenty
       // times a day sat below the one they open twice a term.
 
-      { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view', section: 'View' },
-      { label: 'Teacher View', href: '/timetable?view=teacher', icon: User, permission: 'timetable.view', indent: true, section: 'View' },
+      { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view' },
+      { label: 'Teacher View', href: '/timetable?view=teacher', icon: User, permission: 'timetable.view' },
       // Every class at once, live or draft, and the thing that prints
       // the whole set. timetable.view because printing the timetables is
       // an office job, not a manager's.
-      { label: 'Block View', href: '/timetable/block', icon: LayoutGrid, permission: 'timetable.view', section: 'View' },
+      { label: 'Block View', href: '/timetable/block', icon: LayoutGrid, permission: 'timetable.view' },
 
       // Who is away, who is covering, who is free, and what needs
       // attention right now. "Who's free" used to be a separate Free
       // Faculty page on the class-view screen; it is a tab here now,
       // beside the queue it exists to serve.
-      { label: 'Arrangements', href: '/timetable/arrangements', icon: UserCheck2, permission: 'arrangement.view', section: 'Today' },
+      { label: 'Arrangements', href: '/timetable/arrangements', icon: UserCheck2, permission: 'arrangement.view' },
       // Every teacher's own page: their week, the cover they have been
       // given, and their reserved periods. Gated on nothing but a login,
       // because it only ever shows the caller their own data — the
       // handler resolves identity from the token and ignores any id.
-      { label: 'My Week', href: '/timetable/my-week', icon: CalendarClock, section: 'Today' },
+      { label: 'My Week', href: '/timetable/my-week', icon: CalendarClock },
 
-      { label: 'Workload', href: '/timetable/workload', icon: Gauge, permission: 'timetable.workload_view', section: 'Build & manage' },
-      { label: 'Generate', href: '/timetable/generate', icon: Wand2, permission: 'timetable.generate', section: 'Build & manage' },
-      { label: 'Import', href: '/timetable/import', icon: FileSpreadsheet, permission: 'timetable.import', section: 'Build & manage' },
-      { label: 'Setup', href: '/timetable/setup', icon: SlidersHorizontal, permission: 'timetable.setup_manage', section: 'Build & manage' },
+      { label: 'Workload', href: '/timetable/workload', icon: Gauge, permission: 'timetable.workload_view' },
+      { label: 'Generate', href: '/timetable/generate', icon: Wand2, permission: 'timetable.generate' },
+      { label: 'Import', href: '/timetable/import', icon: FileSpreadsheet, permission: 'timetable.import' },
+      { label: 'Setup', href: '/timetable/setup', icon: SlidersHorizontal, permission: 'timetable.setup_manage' },
     ],
   },
   { label: 'Homework', href: '/homework', icon: NotebookPen, permission: 'homework.view', module: 'homework' },
@@ -465,19 +441,13 @@ function NavEntry({
         // than as this group revealing its contents. Short and slide-only —
         // this is opened a few times a session, so it must not feel like a wait.
         <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border pl-3 [animation-duration:var(--duration-fast)] animate-in fade-in-0 slide-in-from-top-1">
-          {item.children.map((child, i) => {
+          {item.children.map((child) => {
             const ChildIcon = child.icon
             const active = child.href ? isActive(child.href) : false
-            // Compared against the previous SURVIVING child, so a hidden
-            // run does not leave its heading stranded above the next one.
-            const heading = child.section && child.section !== item.children?.[i - 1]?.section
-              ? child.section
-              : null
             if (isLocked(child)) {
               return (
-                <React.Fragment key={child.label}>
-                  {heading && <SectionLabel>{heading}</SectionLabel>}
                 <div
+                  key={child.label}
                   className={cn(
                     'flex cursor-not-allowed items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground/50',
                     child.indent && 'ml-3 border-l border-border/60 pl-2.5 text-[13px]',
@@ -488,13 +458,11 @@ function NavEntry({
                   <span className="flex-1">{child.label}</span>
                   <Lock className="h-3 w-3 shrink-0" />
                 </div>
-                </React.Fragment>
               )
             }
             return (
-              <React.Fragment key={child.label}>
-                {heading && <SectionLabel>{heading}</SectionLabel>}
               <Link
+                key={child.label}
                 href={child.href ?? '#'}
                 onClick={onClose}
                 className={cn(
@@ -508,7 +476,6 @@ function NavEntry({
                 <ChildIcon className={cn('shrink-0', child.indent ? 'h-3 w-3' : 'h-3.5 w-3.5')} />
                 <span>{child.label}</span>
               </Link>
-              </React.Fragment>
             )
           })}
         </div>
