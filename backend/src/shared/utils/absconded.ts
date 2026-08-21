@@ -1,6 +1,7 @@
 import { supabase } from '../db/client'
 import { toLocalDateStr, getNonWorkingDaySets, isWorkingDate, dateRangeStrings } from './academicCalendar'
 import { createNotifications } from './notifications'
+import { fetchAll } from '../../modules/timetable/lib/core'
 import { getUserIdsWithPermission } from '../middleware/permissions-v2'
 
 // ── Absconded sweep ──────────────────────────────────────────────
@@ -85,19 +86,26 @@ export async function runAbscondedSweep(schoolId?: string) {
 
     const nonWorkingSets = await getNonWorkingDaySets(school.id, windowStart, windowEnd)
 
-    const [{ data: records }, { data: approvedLeaves }, { data: pendingRegs }] = await Promise.all([
-      supabase.from('staff_attendance').select('user_id, date, status')
-        .eq('school_id', school.id).in('user_id', targetUserIds).gte('date', windowStart).lte('date', windowEnd),
-      supabase.from('leave_requests').select('user_id, from_date, to_date')
+    // Paged, all three. Two months of attendance for ninety staff is
+    // ~3,900 rows and PostgREST returns 1,000 — so the sweep saw a
+    // quarter of the register, concluded that most of the school had no
+    // attendance at all, and reported forty-five people as having
+    // absconded for fifty days. They were present every day; the rows
+    // were simply past the end of the page.
+    const [records, approvedLeaves, pendingRegs] = await Promise.all([
+      fetchAll<any>((f, t) => supabase.from('staff_attendance').select('user_id, date, status')
+        .eq('school_id', school.id).in('user_id', targetUserIds)
+        .gte('date', windowStart).lte('date', windowEnd).range(f, t), 'staff attendance'),
+      fetchAll<any>((f, t) => supabase.from('leave_requests').select('user_id, from_date, to_date')
         .eq('school_id', school.id).eq('status', 'approved').in('user_id', targetUserIds)
-        .lte('from_date', windowEnd).gte('to_date', windowStart),
+        .lte('from_date', windowEnd).gte('to_date', windowStart).range(f, t), 'approved leave'),
       // Critical boundary: a PENDING regularization must exclude its date
       // from the streak too, not only an approved one — someone who
       // submitted a regularization covering the gap hasn't been ignored,
       // they're waiting on a decision.
-      supabase.from('staff_attendance_regularizations').select('user_id, date')
+      fetchAll<any>((f, t) => supabase.from('staff_attendance_regularizations').select('user_id, date')
         .eq('school_id', school.id).eq('status', 'pending').in('user_id', targetUserIds)
-        .gte('date', windowStart).lte('date', windowEnd),
+        .gte('date', windowStart).lte('date', windowEnd).range(f, t), 'regularizations'),
     ])
 
     const accountedByUser = new Map<string, Set<string>>()
@@ -106,7 +114,7 @@ export async function runAbscondedSweep(schoolId?: string) {
       accountedByUser.get(userId)!.add(date)
     }
     const lastSeenByUser = new Map<string, string>()
-    for (const r of (records ?? []) as any[]) {
+    for (const r of records) {
       if (['present', 'half_day', 'on_leave'].includes(r.status)) {
         addAccounted(r.user_id, r.date)
         if (r.status !== 'on_leave') {
@@ -118,12 +126,12 @@ export async function runAbscondedSweep(schoolId?: string) {
       // "accounted for" — someone recorded them as not there), so it's
       // deliberately NOT added here.
     }
-    for (const lr of (approvedLeaves ?? []) as any[]) {
+    for (const lr of approvedLeaves) {
       const start = lr.from_date < windowStart ? windowStart : lr.from_date
       const end = lr.to_date > windowEnd ? windowEnd : lr.to_date
       for (const d of dateRangeStrings(start, end)) addAccounted(lr.user_id, d)
     }
-    for (const reg of (pendingRegs ?? []) as any[]) addAccounted(reg.user_id, reg.date)
+    for (const reg of pendingRegs) addAccounted(reg.user_id, reg.date)
 
     for (const profile of (profiles ?? []) as any[]) {
       const userId = profile.user_id

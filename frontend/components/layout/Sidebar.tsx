@@ -109,23 +109,33 @@ const NAV: NavItem[] = [
     module: 'timetable',
     icon: Clock,
     children: [
+      // Ordered the way the module is actually used across a day:
+      // look at the timetable, work today's cover from it, then the
+      // things you do occasionally — analyse, build, configure. The old
+      // order interleaved all three, so the screen somebody opens twenty
+      // times a day sat below the one they open twice a term.
+
+      // ── looking at it ──
       { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view' },
       { label: 'Teacher View', href: '/timetable?view=teacher', icon: User, permission: 'timetable.view', indent: true },
-      // Gated on the permission its endpoint actually checks
-      // (timetable.manage), not on a role name. The role list said
-      // principal/school_admin, which hid it from the Timetable Manager —
-      // the one person whose job it is.
-      { label: 'Free Faculty', href: '/timetable?view=free', icon: UserCheck, permission: 'timetable.manage', indent: true },
-      // Every teacher's own page: their week, the cover they have been
-      // given, and their reserved periods. Gated on nothing but a login,
-      // because it only ever shows the caller their own data — the
-      // handler resolves identity from the token and ignores any id.
       // Every class at once, live or draft, and the thing that prints
       // the whole set. timetable.view because printing the timetables is
       // an office job, not a manager's.
       { label: 'Block View', href: '/timetable/block', icon: LayoutGrid, permission: 'timetable.view' },
-      { label: 'My Week', href: '/timetable/my-week', icon: CalendarClock },
+
+      // ── working the day ──
+      // Who is away, who is covering, who is free, and what needs
+      // attention right now. "Who's free" used to be a separate Free
+      // Faculty page on the class-view screen; it is a tab here now,
+      // beside the queue it exists to serve.
       { label: 'Arrangements', href: '/timetable/arrangements', icon: UserCheck2, permission: 'arrangement.view' },
+      // Every teacher's own page: their week, the cover they have been
+      // given, and their reserved periods. Gated on nothing but a login,
+      // because it only ever shows the caller their own data — the
+      // handler resolves identity from the token and ignores any id.
+      { label: 'My Week', href: '/timetable/my-week', icon: CalendarClock },
+
+      // ── building and maintaining it ──
       { label: 'Workload', href: '/timetable/workload', icon: Gauge, permission: 'timetable.workload_view' },
       { label: 'Generate', href: '/timetable/generate', icon: Wand2, permission: 'timetable.generate' },
       { label: 'Import', href: '/timetable/import', icon: FileSpreadsheet, permission: 'timetable.import' },

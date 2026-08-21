@@ -28,6 +28,7 @@ import {
 } from '@/lib/timetableApi'
 import { Banner, Chip, DateNav, StatusPill, TableSkeleton, subjectClasses } from '../components'
 import { ReturnedDialog } from './ReturnedDialog'
+import { FreeFacultyView } from '../CoverNow'
 
 // ═══════════════════════════════════════════════════════════════
 // The morning screen.
@@ -293,7 +294,14 @@ export default function ArrangementsPage() {
             </TabsContent>
 
             <TabsContent value="free">
+              {/* The per-period summary answers "how much slack is there
+                  on Thursday"; the finder answers "who can take period 4
+                  right now, and can teach Maths". Both are wanted, and
+                  they were on two different screens. */}
               <FreeTeachersTab day={dayNumber} date={date} />
+              <div className="mt-6 border-t border-border pt-6">
+                <FreeFacultyView />
+              </div>
             </TabsContent>
 
             <TabsContent value="register">
