@@ -15,12 +15,25 @@ import { supabase } from '../../../shared/db/client'
  * somebody who is temporarily out needs cover until they are back.
  */
 export const NOT_TEACHING_STATUSES: Record<string, { phrase: string; permanent: boolean }> = {
-  resigned:   { phrase: 'has resigned',                       permanent: true },
-  terminated: { phrase: 'has been terminated',                permanent: true },
-  absconded:  { phrase: 'has been recorded as absconded',     permanent: true },
-  suspended:  { phrase: 'is suspended',                       permanent: false },
-  on_leave:   { phrase: 'is on extended leave',               permanent: false },
+  resigned:   { phrase: 'has resigned',                   permanent: true },
+  terminated: { phrase: 'has been terminated',            permanent: true },
+  absconded:  { phrase: 'has been recorded as absconded', permanent: true },
+  suspended:  { phrase: 'is suspended',                   permanent: false },
 }
+
+// Deliberately NOT here: employment_status 'on_leave'.
+//
+// Leave is evidenced by an approved leave request, and that path already
+// works — syncApprovedLeave pulls it into the queue with source 'leave',
+// naming the type and the dates. The status field on its own is not
+// evidence of anything: at the school this was found on, five teachers
+// carried 'on_leave' with no leave record anywhere behind it, and the
+// timetable was announcing "is on extended leave — their periods need
+// cover until they are back" about people HR had no leave for. Saying a
+// thing no record supports is how a screen stops being believed.
+//
+// Somebody genuinely on long leave has a leave request, and that reaches
+// the queue by the honest route.
 
 /** Kept for callers that only care whether somebody is unavailable. */
 export const DEPARTED_STATUSES = Object.keys(NOT_TEACHING_STATUSES)

@@ -1253,7 +1253,11 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
     const { data: profileRows } = await supabase.from('staff_profiles')
       .select('user_id, employment_status').eq('school_id', school_id)
     const departedStaff = new Set((profileRows ?? [])
-      .filter((p: any) => ['resigned', 'terminated', 'absconded', 'suspended', 'on_leave'].includes(p.employment_status))
+      // Matches NOT_TEACHING_STATUSES: employment_status 'on_leave' is
+      // excluded on purpose, because leave is evidenced by a leave
+      // request and reaches this screen through today's attendance row
+      // instead.
+      .filter((p: any) => ['resigned', 'terminated', 'absconded', 'suspended'].includes(p.employment_status))
       .map((p: any) => p.user_id))
 
     const absenceByTeacher = new Map(absenceRows.map(a => [a.teacher_id, a.status]))
