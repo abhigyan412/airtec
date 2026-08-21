@@ -423,7 +423,18 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   }
 
   const dow = dayOfWeekFor(dateStr)
-  const nowTime = new Date().toTimeString().slice(0, 8)
+
+  // "Has this period already happened" depends on which day is being
+  // asked about, and the clock alone cannot answer it. Looking at
+  // tomorrow at half past one used to treat tomorrow morning as already
+  // gone, because the comparison was against today's time whatever date
+  // was passed. A future day has not started at all; a past one is
+  // entirely over.
+  const todayStr = toLocalDateStr(new Date())
+  const cutoff = dateStr > todayStr ? '00:00:00'
+    : dateStr < todayStr ? '23:59:59'
+    : new Date().toTimeString().slice(0, 8)
+  const isFuture = dateStr > todayStr
 
   const [periodsResult, attendanceResult, absencesResult] = await Promise.all([
     supabase.from('timetable_periods')
@@ -497,9 +508,12 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   // classes that had already been taught.
   const startedByTeacher = new Map<string, number[]>()
   const remainingByTeacher = new Map<string, number>()
+  /** Everyone who teaches at all that day, started or not. */
+  const teachesToday = new Set<string>()
   for (const row of periodsResult.data ?? []) {
     if (!row.start_time) continue
-    if (row.start_time > nowTime) {
+    teachesToday.add(row.teacher_id)
+    if (row.start_time > cutoff) {
       remainingByTeacher.set(row.teacher_id, (remainingByTeacher.get(row.teacher_id) ?? 0) + 1)
       continue
     }
@@ -516,9 +530,21 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   // being broken, which is exactly how it was reported.
   const absentButDayOver: string[] = []
 
-  for (const [teacherId, periods] of startedByTeacher) {
+  // Iterating everyone who teaches that day, not only those whose
+  // lessons have already begun. On a future date nothing has begun, so
+  // the old loop was empty and a teacher who has left never appeared
+  // when planning tomorrow — the one moment there is still time to move
+  // their classes to somebody else.
+  for (const teacherId of teachesToday) {
+    const periods = startedByTeacher.get(teacherId) ?? []
     if (alreadyHandled.has(teacherId)) continue
-    if (periods.length < settings.auto_detect_after_period) continue
+    // Somebody who has left needs no evidence from a register and no
+    // lesson to have elapsed: their classes are unstaffed on every day
+    // they appear on the timetable, today and every day after, until
+    // somebody reassigns the periods. Requiring an elapsed lesson meant
+    // they never showed up when planning tomorrow — which is precisely
+    // when there is still time to do something about it.
+    if (!departed.has(teacherId) && periods.length < settings.auto_detect_after_period) continue
     // Nothing left of their day, so nothing to arrange.
     if (!(remainingByTeacher.get(teacherId) ?? 0)) {
       const rec = attendance.get(teacherId)
@@ -528,7 +554,9 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
       continue
     }
 
-    const record = attendance.get(teacherId)
+    // Attendance is a record of a day that has happened. On a future
+    // date there is none, and its absence says nothing.
+    const record = isFuture ? undefined : attendance.get(teacherId)
 
     // Somebody who has left is not absent, but their classes still need
     // a teacher every day until the timetable is fixed, so they are
@@ -546,7 +574,7 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     // clocked in is still surfaced, on the attention panel, where it
     // reads as the observation it is rather than as a full-day absence.
     const explicitlyOut = !!record && (record.status === 'absent' || record.status === 'on_leave')
-    const unmarkedButRegisterTaken = !record && registerUsable && !hasLeft
+    const unmarkedButRegisterTaken = !isFuture && !record && registerUsable && !hasLeft
     if (!hasLeft && !explicitlyOut && !unmarkedButRegisterTaken) continue
 
     // The wording is the row's whole value: "marked absent" is somebody
@@ -588,7 +616,7 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
 
   return {
     proposed,
-    checked: startedByTeacher.size,
+    checked: teachesToday.size,
     /** So the caller can say "the register hasn't been taken yet". */
     registerTaken,
     /** Far enough through the register to read anything into omissions. */
