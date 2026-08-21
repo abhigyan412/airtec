@@ -130,7 +130,16 @@ export default function ArrangementsPage() {
       if (r.disabled) toast.info('Attendance checking is switched off in settings')
       else if (r.proposed) toast.success(`${r.proposed} possible absence${r.proposed === 1 ? '' : 's'} found — confirm below`)
       else if (!r.withPeriodsLeft) toast.info('No classes left today, so there is nothing to arrange cover for')
-      else toast.success('Everyone with a class still to come has checked in')
+      // "Nobody is missing" and "nobody has been marked yet" are
+      // different answers, and reporting the second as the first is how
+      // a school stops trusting the check.
+      else if (r.registerTaken === false) {
+        toast.info('Staff attendance has not been marked yet today — nothing to compare the timetable against')
+      }
+      else if (r.registerUsable === false) {
+        toast.info('Staff attendance is only part-marked, so only people explicitly marked absent were checked')
+      }
+      else toast.success('Everyone with a class still to come is marked in')
       invalidate()
     },
     onError: (e) => toast.error(timetableError(e)),

@@ -422,6 +422,34 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   const attendance = new Map((attendanceResult.data ?? []).map(a => [a.user_id, a]))
   const alreadyHandled = new Set((absencesResult.data ?? []).map(a => a.teacher_id))
 
+  // Has the register been taken today, and taken far enough to reason
+  // from?
+  //
+  // A missing attendance row means "not marked", and what that is
+  // evidence OF depends entirely on how much of the register is filled
+  // in. Once the office has worked through the staff, a teacher with no
+  // row stands out. Before they start, EVERY teacher has no row, and
+  // reading that as "nobody came to school" is how this sweep proposed
+  // 69 absences at a school where two people were away — it ran at 07:00
+  // and the register was filled in at 08:00.
+  //
+  // "Any row at all" is not enough either: it just moves the same
+  // catastrophe to the moment the first teacher is marked, when the
+  // other eighty-six are still unmarked and would all be proposed. So
+  // omission only counts once most of the staff have been dealt with.
+  // Below that the register is mid-entry, and the only evidence worth
+  // acting on is somebody explicitly marked absent or on leave.
+  const attendanceRows = attendanceResult.data ?? []
+  const { count: activeStaff } = await supabase.from('users')
+    .select('id', { count: 'exact', head: true })
+    .eq('school_id', schoolId).eq('is_active', true)
+    .not('role', 'in', '("parent","student")')
+
+  const REGISTER_COMPLETE_ENOUGH = 0.8
+  const registerTaken = attendanceRows.length > 0
+  const registerUsable = !!activeStaff && activeStaff > 0 &&
+    attendanceRows.length >= activeStaff * REGISTER_COMPLETE_ENOUGH
+
   // Two separate questions, and both have to be yes.
   //
   // Evidence: has a period they should already have taught started? A
@@ -453,18 +481,25 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     if (!(remainingByTeacher.get(teacherId) ?? 0)) continue
 
     const record = attendance.get(teacherId)
-    const present = record && record.status !== 'absent' && record.status !== 'on_leave' && !!record.check_in
-    if (present) continue
+
+    // Only three things justify proposing an absence, and a missing
+    // check-in TIME is not one of them. Plenty of schools record a
+    // status and never a clock time; treating that as absence proposed
+    // cover for every teacher in the building. Whether somebody has
+    // clocked in is still surfaced, on the attention panel, where it
+    // reads as the observation it is rather than as a full-day absence.
+    const explicitlyOut = !!record && (record.status === 'absent' || record.status === 'on_leave')
+    const unmarkedButRegisterTaken = !record && registerUsable
+    if (!explicitlyOut && !unmarkedButRegisterTaken) continue
 
     // The wording is the row's whole value: "marked absent" is somebody
     // stating a fact, "no check-in" is an inference, and a manager
     // deciding whether to confirm needs to know which one they are
     // looking at.
     const reason = !record
-      ? 'No attendance recorded today, and their first period has already started'
+      ? 'Everyone else has been marked today, but they have not been — and their first period has already started'
       : record.status === 'absent' ? 'Marked absent in staff attendance'
-      : record.status === 'on_leave' ? 'On approved leave'
-      : 'Marked present in staff attendance, but with no check-in time recorded'
+      : 'On approved leave'
 
     try {
       // created_by stays null when the sweep runs unattended. Crediting
@@ -495,6 +530,10 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   return {
     proposed,
     checked: startedByTeacher.size,
+    /** So the caller can say "the register hasn't been taken yet". */
+    registerTaken,
+    /** Far enough through the register to read anything into omissions. */
+    registerUsable,
     // So the caller can say "everyone has checked in" rather than
     // "nothing found", which reads as a failure.
     withPeriodsLeft: [...remainingByTeacher.keys()].filter(id => startedByTeacher.has(id)).length,
