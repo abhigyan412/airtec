@@ -626,6 +626,8 @@ function AttentionRequiredPanel({ onFindSubstitute }: { onFindSubstitute: (dayOf
     on_leave: 'bg-warning/10 text-warning',
     no_checkin_time: 'bg-warning/10 text-warning',
     checked_in_late: 'bg-warning/10 text-warning',
+    // Not a today problem — the timetable itself is wrong.
+    departed: 'bg-destructive/15 text-destructive font-semibold',
   }
 
   if (isLoading) {
