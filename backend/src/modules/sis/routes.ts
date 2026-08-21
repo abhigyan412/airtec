@@ -1253,7 +1253,7 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
     const { data: profileRows } = await supabase.from('staff_profiles')
       .select('user_id, employment_status').eq('school_id', school_id)
     const departedStaff = new Set((profileRows ?? [])
-      .filter((p: any) => ['resigned', 'terminated', 'absconded'].includes(p.employment_status))
+      .filter((p: any) => ['resigned', 'terminated', 'absconded', 'suspended', 'on_leave'].includes(p.employment_status))
       .map((p: any) => p.user_id))
 
     const absenceByTeacher = new Map(absenceRows.map(a => [a.teacher_id, a.status]))
@@ -1281,7 +1281,7 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
       on_leave: 'On approved leave',
       no_checkin_time: 'Present, but no check-in time recorded',
       checked_in_late: 'Checked in after this period started',
-      departed: 'No longer on the staff — this period has no teacher',
+      departed: 'Not teaching at present — this period has no teacher',
     }
 
     const flagged = periods

@@ -114,6 +114,37 @@ export default function ArrangementsPage() {
     qc.invalidateQueries({ queryKey: ['absences', date] })
   }
 
+  // Bring the queue up to date for whichever day is open.
+  //
+  // This screen used to show only what a background sweep had already
+  // written. Open a date the sweep had not reached — next Tuesday, say —
+  // and it said "Nobody is away" while three teachers who had left still
+  // held periods that day and a fourth was on approved leave. The page
+  // was reporting the state of a cron job, not the state of the school.
+  //
+  // So opening a day works it out. Both calls are the same ones behind
+  // the Sync leave and Check attendance buttons and both are idempotent:
+  // a teacher who already has an absence for that date is skipped, so
+  // this settles after one pass and re-running changes nothing. Only for
+  // somebody who could press those buttons anyway.
+  const [caughtUp, setCaughtUp] = useState<Record<string, boolean>>({})
+  useEffect(() => {
+    if (!canManage || caughtUp[date]) return
+    setCaughtUp(prev => ({ ...prev, [date]: true }))
+    ;(async () => {
+      try {
+        await Promise.all([
+          timetableApi.syncLeave(date).catch(() => null),
+          timetableApi.detectAbsences(date).catch(() => null),
+        ])
+      } finally {
+        invalidate()
+      }
+    })()
+    // invalidate closes over `date`, which is in the dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, canManage])
+
   const syncLeave = useMutation({
     mutationFn: () => timetableApi.syncLeave(date),
     onSuccess: (r: any) => {
@@ -226,16 +257,17 @@ export default function ArrangementsPage() {
             <div className="mb-5">
               <Banner
                 tone="warn"
-                title={`${proposed.length} teacher${proposed.length === 1 ? '' : 's'} may need cover today`}
+                title={`${proposed.length} teacher${proposed.length === 1 ? '' : 's'} may need cover on ${prettyDate(date)}`}
               >
                 {/* The heading stays neutral because the reasons differ:
                     one may be marked absent in staff attendance, another
-                    simply never checked in. Saying "a class running with
-                    no check-in" for all of them contradicted the row
-                    underneath it, and was wrong outright after the last
-                    bell. Each row carries its own reason instead. */}
-                Their attendance says they are not in, but their periods are still on the
-                timetable. Confirm to send those periods to the cover queue.
+                    has resigned and still holds periods, a third is
+                    suspended. Saying "a class running with no check-in"
+                    for all of them contradicted the row underneath it,
+                    and "today" was simply wrong whenever another date was
+                    open. Each row carries its own reason instead. */}
+                Their periods are still on the timetable but they will not be taking them.
+                Confirm to send those periods to the cover queue.
                 <div className="mt-2 space-y-2">
                   {proposed.map((a: any) => (
                     <ProposedAbsenceRow key={a.id} absence={a} date={date} onDone={invalidate} />

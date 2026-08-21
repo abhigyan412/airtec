@@ -1,7 +1,29 @@
 import { supabase } from '../../../shared/db/client'
 
-/** Employment statuses that mean somebody has left the school. */
-export const DEPARTED_STATUSES = ['resigned', 'terminated', 'absconded']
+/**
+ * Employment statuses that mean a teacher will not be taking their
+ * classes, and how to say each one.
+ *
+ * Not only the people who have left. A suspended teacher is employed and
+ * not teaching; somebody on extended leave is employed and not teaching.
+ * From the timetable's point of view those classes are just as unstaffed
+ * as a resigned teacher's, and treating only departures as a problem
+ * left the rest silently uncovered.
+ *
+ * The two kinds want different answers, so they are told apart:
+ * somebody who has gone needs their periods permanently reassigned,
+ * somebody who is temporarily out needs cover until they are back.
+ */
+export const NOT_TEACHING_STATUSES: Record<string, { phrase: string; permanent: boolean }> = {
+  resigned:   { phrase: 'has resigned',                       permanent: true },
+  terminated: { phrase: 'has been terminated',                permanent: true },
+  absconded:  { phrase: 'has been recorded as absconded',     permanent: true },
+  suspended:  { phrase: 'is suspended',                       permanent: false },
+  on_leave:   { phrase: 'is on extended leave',               permanent: false },
+}
+
+/** Kept for callers that only care whether somebody is unavailable. */
+export const DEPARTED_STATUSES = Object.keys(NOT_TEACHING_STATUSES)
 import { toLocalDateStr } from '../../../shared/utils/academicCalendar'
 import {
   arrangementManagers, audit, badRequest, conflict, dayOfWeekFor, formatTime,
@@ -481,9 +503,8 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   const { data: profiles } = await supabase.from('staff_profiles')
     .select('user_id, employment_status').eq('school_id', schoolId)
   const departed = new Map((profiles ?? [])
-    .filter(p => DEPARTED_STATUSES.includes(p.employment_status))
-    .map(p => [p.user_id, p.employment_status === 'terminated' ? 'terminated'
-      : p.employment_status === 'absconded' ? 'absconded' : 'resigned']))
+    .filter(p => !!NOT_TEACHING_STATUSES[p.employment_status])
+    .map(p => [p.user_id, p.employment_status as string]))
 
   const { count: onRegister } = await supabase.from('users')
     .select('id', { count: 'exact', head: true })
@@ -581,8 +602,14 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     // stating a fact, "no check-in" is an inference, and a manager
     // deciding whether to confirm needs to know which one they are
     // looking at.
-    const reason = hasLeft
-      ? `No longer on the staff (${departed.get(teacherId)}) — these periods need a permanent teacher, and cover until then`
+    const status = hasLeft ? NOT_TEACHING_STATUSES[departed.get(teacherId) as string] : null
+    // "Has been terminated — no longer on the staff…" rather than
+    // "No longer on the staff — been terminated…", which is not English.
+    const sentence = status ? status.phrase.charAt(0).toUpperCase() + status.phrase.slice(1) : ''
+    const reason = status
+      ? status.permanent
+        ? `${sentence} — no longer on the staff, so these periods need a permanent teacher, and cover until then`
+        : `${sentence} — their periods need cover until they are back`
       : !record
         ? 'Everyone else has been marked today, but they have not been — and their first period has already started'
         : record.status === 'absent' ? 'Marked absent in staff attendance'

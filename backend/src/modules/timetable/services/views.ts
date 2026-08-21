@@ -4,7 +4,7 @@ import {
   badRequest, DAY_NAMES, dayOfWeekFor, fetchAll, formatTime, getSettings,
 } from '../lib/core'
 import { PURPOSE_LABELS } from './bookings'
-import { DEPARTED_STATUSES } from './absences'
+import { NOT_TEACHING_STATUSES } from './absences'
 
 // ═══════════════════════════════════════════════════════════════
 // Reading the timetable, in the shapes a school actually asks for.
@@ -482,7 +482,7 @@ export async function blockGrid(
     .select('user_id, employment_status').eq('school_id', schoolId)
   const departedStatus = new Map<string, string>()
   for (const profile of staffProfiles ?? []) {
-    if (DEPARTED_STATUSES.includes(profile.employment_status)) {
+    if (NOT_TEACHING_STATUSES[profile.employment_status]) {
       departedStatus.set(profile.user_id, profile.employment_status)
     }
   }
@@ -558,18 +558,17 @@ export async function blockGrid(
     departedTeaching.set(row.teacher_id, [...(departedTeaching.get(row.teacher_id) ?? []), row])
   }
   for (const [teacherId, held] of Array.from(departedTeaching.entries())) {
-    // "has resigned" but "has been terminated" — the status words are
-    // not grammatically interchangeable, and a message about somebody
-    // losing their job should at least be written properly.
-    const raw = departedStatus.get(teacherId)
-    const status = raw === 'terminated' ? 'been terminated'
-      : raw === 'absconded' ? 'been recorded as absconded'
-      : 'resigned'
+    // "has resigned" but "has been terminated" but "is suspended" — the
+    // status words are not grammatically interchangeable, and a message
+    // about somebody's employment should at least be written properly.
+    const info = NOT_TEACHING_STATUSES[departedStatus.get(teacherId) as string]
     const classes = [...new Set(held.map(r => labelOf.get(r.section_id)).filter(Boolean))]
     conflicts.push({
       kind: 'teacher_departed', severity: 'block',
       day: held[0].day_of_week, periodNumber: held[0].period_number,
-      message: `${held[0].teacher?.full_name ?? 'A teacher'} has ${status} but still holds ${held.length} period${held.length === 1 ? '' : 's'} a week across ${classes.length} class${classes.length === 1 ? '' : 'es'} (${classes.slice(0, 4).join(', ')}${classes.length > 4 ? '…' : ''}). Nobody is going to teach those.`,
+      message: `${held[0].teacher?.full_name ?? 'A teacher'} ${info?.phrase ?? 'is not teaching'} but still holds ${held.length} period${held.length === 1 ? '' : 's'} a week across ${classes.length} class${classes.length === 1 ? '' : 'es'} (${classes.slice(0, 4).join(', ')}${classes.length > 4 ? '…' : ''}). ${
+        info?.permanent ? 'Those periods need reassigning.' : 'Those periods need cover until they are back.'
+      }`,
       sectionIds: held.map(r => r.section_id),
       cellIds: held.map(r => r.id),
       slotKeys: [],
