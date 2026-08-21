@@ -63,6 +63,20 @@ export default function LeavePage() {
     enabled: isAdmin,
   })
 
+  // Everything that has been decided. Approving a request used to make
+  // it vanish: the page only ever asked for status 'pending', so there
+  // was no way to see who is off next week, or to check what was agreed
+  // last month. An approval that leaves no visible record is not a
+  // record.
+  const [decidedStatus, setDecidedStatus] = useState<'approved' | 'rejected' | 'all'>('approved')
+  const { data: decided, isLoading: decidedLoading } = useQuery({
+    queryKey: ['leave-requests', 'decided', decidedStatus],
+    queryFn: () => hrmsApi.leaveRequests.list(
+      decidedStatus === 'all' ? { limit: 100 } : { status: decidedStatus, limit: 100 },
+    ).then(r => r.data),
+    enabled: isAdmin,
+  })
+
   const { data: pendingCompOff } = useQuery({
     queryKey: ['comp-off', 'pending-all'],
     queryFn: () => hrmsApi.compOff.list({ status: 'pending' }).then(r => r.data),
@@ -311,6 +325,83 @@ export default function LeavePage() {
                 </div>
               ))}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border">
+            <CardTitle className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-muted-foreground" />
+              Decided requests
+            </CardTitle>
+            <div className="flex overflow-hidden rounded-lg border border-border">
+              {([['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setDecidedStatus(key)}
+                  className={cn('px-3 py-1.5 text-sm transition-colors',
+                    decidedStatus === key ? 'bg-primary text-primary-foreground' : 'hover:bg-accent')}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {decidedLoading ? (
+              <div className="space-y-3 p-6">
+                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+              </div>
+            ) : !(decided ?? []).length ? (
+              <EmptyState
+                icon={Calendar}
+                title={decidedStatus === 'approved' ? 'No approved leave' : decidedStatus === 'rejected' ? 'Nothing has been rejected' : 'No requests yet'}
+                description="Requests appear here once somebody has decided them."
+              />
+            ) : (
+              <div className="divide-y divide-border">
+                {(decided ?? []).map((lr: any) => {
+                  // Leave that covers today, or has not started yet, is
+                  // the part anybody is actually planning around.
+                  const today = new Date().toISOString().slice(0, 10)
+                  const current = lr.from_date <= today && lr.to_date >= today
+                  const upcoming = lr.from_date > today
+                  return (
+                    <div key={lr.id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-medium text-foreground">{lr.users?.full_name ?? 'Unknown'}</p>
+                          <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-medium', STATUS_COLORS[lr.status])}>
+                            {lr.status}
+                          </span>
+                          {current && <Badge variant="warning">away now</Badge>}
+                          {upcoming && <Badge variant="secondary">upcoming</Badge>}
+                        </div>
+                        <p className="mt-0.5 text-sm text-muted-foreground">
+                          {lr.leave_types?.name ?? 'Leave'} · {lr.from_date}
+                          {lr.to_date !== lr.from_date && ` to ${lr.to_date}`}
+                          {lr.total_days ? ` · ${lr.total_days} day${lr.total_days === 1 ? '' : 's'}` : ''}
+                        </p>
+                        {lr.reason && <p className="mt-0.5 text-xs text-muted-foreground">{lr.reason}</p>}
+                        {lr.status === 'rejected' && lr.rejection_reason && (
+                          <p className="mt-0.5 text-xs text-destructive">Rejected: {lr.rejection_reason}</p>
+                        )}
+                      </div>
+                      {lr.status === 'approved' && (current || upcoming) && (
+                        <Link
+                          href={`/timetable/arrangements?date=${current ? today : lr.from_date}`}
+                          className="shrink-0 text-sm text-primary hover:underline"
+                        >
+                          Cover for this →
+                        </Link>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
