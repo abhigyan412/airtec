@@ -619,7 +619,17 @@ export async function blockGrid(
       const inDay = teachingRows.filter(r => r.section_id === section.sectionId && r.day_of_week === day)
       if (!inDay.length) continue
       const last = Math.max(...inDay.map(r => r.period_number))
-      const held = new Set(inDay.map(r => r.period_number))
+      // A break sitting in the middle of the numbering owns its slot.
+      // Where lunch is period 5 and teaching runs 1-4 then 6-10, period
+      // 5 is not a hole in the day — it is lunch. Counting it as one
+      // produced a warning for every section on every day, 96 of them,
+      // all of them saying the school stops for lunch.
+      const held = new Set([
+        ...inDay.map(r => r.period_number),
+        ...rows.filter(r => r.is_break
+          && r.section_id === section.sectionId
+          && r.day_of_week === day).map(r => r.period_number),
+      ])
       const missing: number[] = []
       for (let n = 1; n <= last; n++) if (!held.has(n)) missing.push(n)
       if (!missing.length) continue

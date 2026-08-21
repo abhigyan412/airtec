@@ -469,9 +469,10 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   // the block view reports it as one.
   const { data: profiles } = await supabase.from('staff_profiles')
     .select('user_id, employment_status').eq('school_id', schoolId)
-  const departed = new Set((profiles ?? [])
+  const departed = new Map((profiles ?? [])
     .filter(p => DEPARTED_STATUSES.includes(p.employment_status))
-    .map(p => p.user_id))
+    .map(p => [p.user_id, p.employment_status === 'terminated' ? 'terminated'
+      : p.employment_status === 'absconded' ? 'absconded' : 'resigned']))
 
   const { count: onRegister } = await supabase.from('users')
     .select('id', { count: 'exact', head: true })
@@ -517,8 +518,6 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
 
   for (const [teacherId, periods] of startedByTeacher) {
     if (alreadyHandled.has(teacherId)) continue
-    // See above: gone, not absent.
-    if (departed.has(teacherId)) continue
     if (periods.length < settings.auto_detect_after_period) continue
     // Nothing left of their day, so nothing to arrange.
     if (!(remainingByTeacher.get(teacherId) ?? 0)) {
@@ -531,6 +530,15 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
 
     const record = attendance.get(teacherId)
 
+    // Somebody who has left is not absent, but their classes still need
+    // a teacher every day until the timetable is fixed, so they are
+    // raised rather than hidden — with a reason that says what is
+    // actually wrong. Hiding them meant nobody covered those lessons and
+    // nothing said why. They have no attendance row and never will, so
+    // they are their own category of evidence rather than being judged
+    // against the register.
+    const hasLeft = departed.has(teacherId)
+
     // Only three things justify proposing an absence, and a missing
     // check-in TIME is not one of them. Plenty of schools record a
     // status and never a clock time; treating that as absence proposed
@@ -538,17 +546,19 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     // clocked in is still surfaced, on the attention panel, where it
     // reads as the observation it is rather than as a full-day absence.
     const explicitlyOut = !!record && (record.status === 'absent' || record.status === 'on_leave')
-    const unmarkedButRegisterTaken = !record && registerUsable
-    if (!explicitlyOut && !unmarkedButRegisterTaken) continue
+    const unmarkedButRegisterTaken = !record && registerUsable && !hasLeft
+    if (!hasLeft && !explicitlyOut && !unmarkedButRegisterTaken) continue
 
     // The wording is the row's whole value: "marked absent" is somebody
     // stating a fact, "no check-in" is an inference, and a manager
     // deciding whether to confirm needs to know which one they are
     // looking at.
-    const reason = !record
-      ? 'Everyone else has been marked today, but they have not been — and their first period has already started'
-      : record.status === 'absent' ? 'Marked absent in staff attendance'
-      : 'On approved leave'
+    const reason = hasLeft
+      ? `No longer on the staff (${departed.get(teacherId)}) — these periods need a permanent teacher, and cover until then`
+      : !record
+        ? 'Everyone else has been marked today, but they have not been — and their first period has already started'
+        : record.status === 'absent' ? 'Marked absent in staff attendance'
+        : 'On approved leave'
 
     try {
       // created_by stays null when the sweep runs unattended. Crediting
