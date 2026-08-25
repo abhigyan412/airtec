@@ -1,4 +1,42 @@
 import { supabase } from '../../../shared/db/client'
+
+/**
+ * Employment statuses that mean a teacher will not be taking their
+ * classes, and how to say each one.
+ *
+ * Not only the people who have left. A suspended teacher is employed and
+ * not teaching; somebody on extended leave is employed and not teaching.
+ * From the timetable's point of view those classes are just as unstaffed
+ * as a resigned teacher's, and treating only departures as a problem
+ * left the rest silently uncovered.
+ *
+ * The two kinds want different answers, so they are told apart:
+ * somebody who has gone needs their periods permanently reassigned,
+ * somebody who is temporarily out needs cover until they are back.
+ */
+export const NOT_TEACHING_STATUSES: Record<string, { phrase: string; permanent: boolean }> = {
+  resigned:   { phrase: 'has resigned',                   permanent: true },
+  terminated: { phrase: 'has been terminated',            permanent: true },
+  absconded:  { phrase: 'has been recorded as absconded', permanent: true },
+  suspended:  { phrase: 'is suspended',                   permanent: false },
+}
+
+// Deliberately NOT here: employment_status 'on_leave'.
+//
+// Leave is evidenced by an approved leave request, and that path already
+// works — syncApprovedLeave pulls it into the queue with source 'leave',
+// naming the type and the dates. The status field on its own is not
+// evidence of anything: at the school this was found on, five teachers
+// carried 'on_leave' with no leave record anywhere behind it, and the
+// timetable was announcing "is on extended leave — their periods need
+// cover until they are back" about people HR had no leave for. Saying a
+// thing no record supports is how a screen stops being believed.
+//
+// Somebody genuinely on long leave has a leave request, and that reaches
+// the queue by the honest route.
+
+/** Kept for callers that only care whether somebody is unavailable. */
+export const DEPARTED_STATUSES = Object.keys(NOT_TEACHING_STATUSES)
 import { toLocalDateStr } from '../../../shared/utils/academicCalendar'
 import {
   arrangementManagers, audit, badRequest, conflict, dayOfWeekFor, formatTime,
@@ -70,7 +108,7 @@ export async function createAbsence(schoolId: string, actorId: string | null, in
       }).eq('id', existing.id)
       await supabase.from('arrangements').delete()
         .eq('absence_id', existing.id).eq('status', 'unassigned')
-      const created = await materialize(existing.id)
+      const created = await materialize(existing.id, input.date)
       await audit(schoolId, actorId, 'confirm_absence', 'teacher_absence', existing.id, { created })
       return { id: existing.id, arrangementsCreated: created, upgraded: true }
     }
@@ -92,7 +130,7 @@ export async function createAbsence(schoolId: string, actorId: string | null, in
     created_by: actorId,
   }).select('id').single(), 'create absence')
 
-  const created = await materialize(absence.id)
+  const created = await materialize(absence.id, input.date)
 
   await audit(schoolId, actorId, 'create_absence', 'teacher_absence', absence.id, {
     teacher: input.teacherId, date: input.date, scope: input.scope, arrangements: created,
@@ -101,10 +139,24 @@ export async function createAbsence(schoolId: string, actorId: string | null, in
   return { id: absence.id, arrangementsCreated: created, upgraded: false }
 }
 
-async function materialize(absenceId: string): Promise<number> {
+/**
+ * Fan an absence out into the cover queue.
+ *
+ * For today, periods that have already started are left out: nobody can
+ * cover a lesson that finished an hour ago, and queueing them produced
+ * "8 periods · 8 still uncovered" at two in the afternoon for a day that
+ * was nearly over. The cutoff is computed here rather than in the
+ * database because period times are local wall-clock and the database
+ * runs in UTC.
+ */
+async function materialize(absenceId: string, dateStr?: string): Promise<number> {
+  const today = toLocalDateStr(new Date())
+  const notBefore = dateStr === today ? new Date().toTimeString().slice(0, 8) : null
+
   const { data, error } = await supabase.rpc('timetable_materialize_arrangements', {
     p_absence_id: absenceId,
-  })
+    p_not_before: notBefore,
+  } as any)
   if (error) throw badRequest('materialize_failed', error.message)
   return Number(data ?? 0)
 }
@@ -131,12 +183,32 @@ export async function listAbsences(schoolId: string, dateStr: string) {
     }
   }
 
-  return (data ?? []).map(row => ({
-    ...row,
-    teacher_name: (row as any).teacher?.full_name ?? null,
-    periods_affected: counts.get(row.id)?.total ?? 0,
-    periods_covered: counts.get(row.id)?.filled ?? 0,
-  }))
+  // Two different problems get listed on the same screen and they want
+  // different answers. "Mrs Sharma is off sick" is today's problem and
+  // is settled by finding cover. "Mr Nair resigned in June and still
+  // holds thirty periods" is a defect in the timetable: cover patches it
+  // for one day and it is back tomorrow, and every day after, until
+  // somebody reassigns the periods. Offering "They're here" against
+  // somebody who has left is nonsense — they are not coming back.
+  const { data: profiles } = await supabase.from('staff_profiles')
+    .select('user_id, employment_status').eq('school_id', schoolId)
+  const statusOf = new Map((profiles ?? []).map(p => [p.user_id, p.employment_status]))
+
+  return (data ?? []).map(row => {
+    const employmentStatus = statusOf.get(row.teacher_id) ?? null
+    const staffing = employmentStatus ? NOT_TEACHING_STATUSES[employmentStatus] : undefined
+    return {
+      ...row,
+      teacher_name: (row as any).teacher?.full_name ?? null,
+      periods_affected: counts.get(row.id)?.total ?? 0,
+      periods_covered: counts.get(row.id)?.filled ?? 0,
+      employment_status: employmentStatus,
+      /** The timetable itself is wrong; cover is only a stopgap. */
+      needs_timetable_fix: !!staffing,
+      /** Whether they are ever coming back to these classes. */
+      permanently_gone: staffing?.permanent ?? false,
+    }
+  })
 }
 
 /**
@@ -406,7 +478,18 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   }
 
   const dow = dayOfWeekFor(dateStr)
-  const nowTime = new Date().toTimeString().slice(0, 8)
+
+  // "Has this period already happened" depends on which day is being
+  // asked about, and the clock alone cannot answer it. Looking at
+  // tomorrow at half past one used to treat tomorrow morning as already
+  // gone, because the comparison was against today's time whatever date
+  // was passed. A future day has not started at all; a past one is
+  // entirely over.
+  const todayStr = toLocalDateStr(new Date())
+  const cutoff = dateStr > todayStr ? '00:00:00'
+    : dateStr < todayStr ? '23:59:59'
+    : new Date().toTimeString().slice(0, 8)
+  const isFuture = dateStr > todayStr
 
   const [periodsResult, attendanceResult, absencesResult] = await Promise.all([
     supabase.from('timetable_periods')
@@ -422,6 +505,51 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   const attendance = new Map((attendanceResult.data ?? []).map(a => [a.user_id, a]))
   const alreadyHandled = new Set((absencesResult.data ?? []).map(a => a.teacher_id))
 
+  // Has the register been taken today, and taken far enough to reason
+  // from?
+  //
+  // A missing attendance row means "not marked", and what that is
+  // evidence OF depends entirely on how much of the register is filled
+  // in. Once the office has worked through the staff, a teacher with no
+  // row stands out. Before they start, EVERY teacher has no row, and
+  // reading that as "nobody came to school" is how this sweep proposed
+  // 69 absences at a school where two people were away — it ran at 07:00
+  // and the register was filled in at 08:00.
+  //
+  // "Any row at all" is not enough either: it just moves the same
+  // catastrophe to the moment the first teacher is marked, when the
+  // other eighty-six are still unmarked and would all be proposed. So
+  // omission only counts once most of the staff have been dealt with.
+  // Below that the register is mid-entry, and the only evidence worth
+  // acting on is somebody explicitly marked absent or on leave.
+  const attendanceRows = attendanceResult.data ?? []
+
+  // Who can be marked at all.
+  //
+  // Somebody who has resigned or been terminated is off the staff
+  // register, so they have no attendance row and never will. Counting
+  // them as unmarked staff proposes them absent every day for the rest
+  // of time — and drags the denominator down so the register never looks
+  // complete. They are not absent; they have left. That the timetable
+  // still has them teaching is a separate and much worse problem, and
+  // the block view reports it as one.
+  const { data: profiles } = await supabase.from('staff_profiles')
+    .select('user_id, employment_status').eq('school_id', schoolId)
+  const departed = new Map((profiles ?? [])
+    .filter(p => !!NOT_TEACHING_STATUSES[p.employment_status])
+    .map(p => [p.user_id, p.employment_status as string]))
+
+  const { count: onRegister } = await supabase.from('users')
+    .select('id', { count: 'exact', head: true })
+    .eq('school_id', schoolId).eq('is_active', true)
+    .not('role', 'in', '("parent","student")')
+  const markable = Math.max(0, (onRegister ?? 0) - departed.size)
+
+  const REGISTER_COMPLETE_ENOUGH = 0.8
+  const registerTaken = attendanceRows.length > 0
+  const registerUsable = markable > 0 &&
+    attendanceRows.length >= markable * REGISTER_COMPLETE_ENOUGH
+
   // Two separate questions, and both have to be yes.
   //
   // Evidence: has a period they should already have taught started? A
@@ -434,9 +562,12 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
   // classes that had already been taught.
   const startedByTeacher = new Map<string, number[]>()
   const remainingByTeacher = new Map<string, number>()
+  /** Everyone who teaches at all that day, started or not. */
+  const teachesToday = new Set<string>()
   for (const row of periodsResult.data ?? []) {
     if (!row.start_time) continue
-    if (row.start_time > nowTime) {
+    teachesToday.add(row.teacher_id)
+    if (row.start_time > cutoff) {
       remainingByTeacher.set(row.teacher_id, (remainingByTeacher.get(row.teacher_id) ?? 0) + 1)
       continue
     }
@@ -445,26 +576,103 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
     startedByTeacher.set(row.teacher_id, list)
   }
 
-  let proposed = 0
-  for (const [teacherId, periods] of startedByTeacher) {
-    if (alreadyHandled.has(teacherId)) continue
-    if (periods.length < settings.auto_detect_after_period) continue
-    // Nothing left of their day, so nothing to arrange.
-    if (!(remainingByTeacher.get(teacherId) ?? 0)) continue
+  // An auto-raised absence that no longer has any basis is withdrawn.
+  //
+  // Reassign a departed teacher's periods and the alert must go: it was
+  // raised because the timetable pointed at somebody who would not
+  // teach, and it stops being true the moment that is fixed. Leaving it
+  // there would mean the only way to clear the warning was to dismiss
+  // it by hand, which trains people to dismiss warnings.
+  const { data: standing } = await supabase.from('teacher_absences')
+    .select('id, teacher_id, source').eq('school_id', schoolId)
+    .eq('absence_date', dateStr).eq('status', 'proposed')
+  let withdrawn = 0
+  for (const row of standing ?? []) {
+    if (row.source !== 'attendance') continue
+    const stillTeaching = teachesToday.has(row.teacher_id)
+    const stillUnavailable = departed.has(row.teacher_id) ||
+      ['absent', 'on_leave'].includes(attendance.get(row.teacher_id)?.status ?? '')
+    if (stillTeaching && stillUnavailable) continue
+    // Only ever withdraws rows nobody has acted on.
+    const { data: arr } = await supabase.from('arrangements')
+      .select('id, substitute_teacher_id, acknowledged_at').eq('absence_id', row.id)
+    if ((arr ?? []).some(a => a.substitute_teacher_id || a.acknowledged_at)) continue
+    await supabase.from('arrangements').delete().eq('absence_id', row.id)
+    await supabase.from('teacher_absences').delete().eq('id', row.id)
+    withdrawn++
+  }
 
-    const record = attendance.get(teacherId)
-    const present = record && record.status !== 'absent' && record.status !== 'on_leave' && !!record.check_in
-    if (present) continue
+  let proposed = 0
+  // Marked absent, but every one of their periods has already been and
+  // gone. No cover can be arranged for a lesson that finished an hour
+  // ago — but the check must SAY so. Reporting "nothing found" to
+  // somebody who has just marked two people absent reads as the feature
+  // being broken, which is exactly how it was reported.
+  const absentButDayOver: string[] = []
+
+  // Iterating everyone who teaches that day, not only those whose
+  // lessons have already begun. On a future date nothing has begun, so
+  // the old loop was empty and a teacher who has left never appeared
+  // when planning tomorrow — the one moment there is still time to move
+  // their classes to somebody else.
+  for (const teacherId of teachesToday) {
+    const periods = startedByTeacher.get(teacherId) ?? []
+    if (alreadyHandled.has(teacherId)) continue
+    // Somebody who has left needs no evidence from a register and no
+    // lesson to have elapsed: their classes are unstaffed on every day
+    // they appear on the timetable, today and every day after, until
+    // somebody reassigns the periods. Requiring an elapsed lesson meant
+    // they never showed up when planning tomorrow — which is precisely
+    // when there is still time to do something about it.
+    if (!departed.has(teacherId) && periods.length < settings.auto_detect_after_period) continue
+    // Nothing left of their day, so nothing to arrange.
+    if (!(remainingByTeacher.get(teacherId) ?? 0)) {
+      const rec = attendance.get(teacherId)
+      if (rec && (rec.status === 'absent' || rec.status === 'on_leave')) {
+        absentButDayOver.push(teacherId)
+      }
+      continue
+    }
+
+    // Attendance is a record of a day that has happened. On a future
+    // date there is none, and its absence says nothing.
+    const record = isFuture ? undefined : attendance.get(teacherId)
+
+    // Somebody who has left is not absent, but their classes still need
+    // a teacher every day until the timetable is fixed, so they are
+    // raised rather than hidden — with a reason that says what is
+    // actually wrong. Hiding them meant nobody covered those lessons and
+    // nothing said why. They have no attendance row and never will, so
+    // they are their own category of evidence rather than being judged
+    // against the register.
+    const hasLeft = departed.has(teacherId)
+
+    // Only three things justify proposing an absence, and a missing
+    // check-in TIME is not one of them. Plenty of schools record a
+    // status and never a clock time; treating that as absence proposed
+    // cover for every teacher in the building. Whether somebody has
+    // clocked in is still surfaced, on the attention panel, where it
+    // reads as the observation it is rather than as a full-day absence.
+    const explicitlyOut = !!record && (record.status === 'absent' || record.status === 'on_leave')
+    const unmarkedButRegisterTaken = !isFuture && !record && registerUsable && !hasLeft
+    if (!hasLeft && !explicitlyOut && !unmarkedButRegisterTaken) continue
 
     // The wording is the row's whole value: "marked absent" is somebody
     // stating a fact, "no check-in" is an inference, and a manager
     // deciding whether to confirm needs to know which one they are
     // looking at.
-    const reason = !record
-      ? 'No attendance recorded today, and their first period has already started'
-      : record.status === 'absent' ? 'Marked absent in staff attendance'
-      : record.status === 'on_leave' ? 'On approved leave'
-      : 'Marked present in staff attendance, but with no check-in time recorded'
+    const status = hasLeft ? NOT_TEACHING_STATUSES[departed.get(teacherId) as string] : null
+    // "Has been terminated — no longer on the staff…" rather than
+    // "No longer on the staff — been terminated…", which is not English.
+    const sentence = status ? status.phrase.charAt(0).toUpperCase() + status.phrase.slice(1) : ''
+    const reason = status
+      ? status.permanent
+        ? `${sentence} — no longer on the staff, so these periods need a permanent teacher, and cover until then`
+        : `${sentence} — their periods need cover until they are back`
+      : !record
+        ? 'Everyone else has been marked today, but they have not been — and their first period has already started'
+        : record.status === 'absent' ? 'Marked absent in staff attendance'
+        : 'On approved leave'
 
     try {
       // created_by stays null when the sweep runs unattended. Crediting
@@ -494,7 +702,17 @@ export async function detectAbsences(schoolId: string, actorId: string | null, d
 
   return {
     proposed,
-    checked: startedByTeacher.size,
+    checked: teachesToday.size,
+    /** So the caller can say "the register hasn't been taken yet". */
+    registerTaken,
+    /** Far enough through the register to read anything into omissions. */
+    registerUsable,
+    /** Still on the timetable despite having left. */
+    departedStillTeaching: [...startedByTeacher.keys()].filter(id => departed.has(id)).length,
+    /** Marked absent, but all their lessons had already finished. */
+    absentButDayOver: absentButDayOver.length,
+    /** Auto-raised alerts withdrawn because they no longer hold. */
+    withdrawn,
     // So the caller can say "everyone has checked in" rather than
     // "nothing found", which reads as a failure.
     withPeriodsLeft: [...remainingByTeacher.keys()].filter(id => startedByTeacher.has(id)).length,

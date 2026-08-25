@@ -304,6 +304,8 @@ function SummaryStrip({ data, isDraft, editable }: { data: any; isDraft: boolean
           {stat('Teacher clashes', s.teacherClashes, s.teacherClashes ? 'bad' : 'good')}
           {stat('Room clashes', s.roomClashes, s.roomClashes ? 'bad' : 'good')}
           {stat('Unstaffed', s.unstaffed, s.unstaffed ? 'warn' : 'good')}
+          {s.departedTeachers > 0 && stat(
+            `Left, still timetabled (${s.departedPeriods} periods)`, s.departedTeachers, 'bad')}
           {stat('Empty slots', s.gaps, s.gaps ? 'warn' : 'good')}
         </div>
 

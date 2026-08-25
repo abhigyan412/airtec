@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -28,6 +29,7 @@ import {
 } from '@/lib/timetableApi'
 import { Banner, Chip, DateNav, StatusPill, TableSkeleton, subjectClasses } from '../components'
 import { ReturnedDialog } from './ReturnedDialog'
+import { FreeFacultyView } from '../CoverNow'
 
 // ═══════════════════════════════════════════════════════════════
 // The morning screen.
@@ -88,7 +90,13 @@ export default function ArrangementsPage() {
     }
   }, [rows])
 
-  const proposed = absences.filter((a: any) => a.status === 'proposed')
+  const proposedAll = absences.filter((a: any) => a.status === 'proposed')
+  // Somebody off sick today, versus a timetable that still names a
+  // teacher who left in June. Same list until now, and they want
+  // opposite answers: one is settled by finding cover, the other comes
+  // back every single day until the periods are reassigned.
+  const proposed = proposedAll.filter((a: any) => !a.needs_timetable_fix)
+  const staffingGaps = proposedAll.filter((a: any) => a.needs_timetable_fix)
 
   const byTeacher = useMemo(() => {
     const groups = new Map<string, { name: string; teacherId: string; rows: Arrangement[] }>()
@@ -113,6 +121,37 @@ export default function ArrangementsPage() {
     qc.invalidateQueries({ queryKey: ['absences', date] })
   }
 
+  // Bring the queue up to date for whichever day is open.
+  //
+  // This screen used to show only what a background sweep had already
+  // written. Open a date the sweep had not reached — next Tuesday, say —
+  // and it said "Nobody is away" while three teachers who had left still
+  // held periods that day and a fourth was on approved leave. The page
+  // was reporting the state of a cron job, not the state of the school.
+  //
+  // So opening a day works it out. Both calls are the same ones behind
+  // the Sync leave and Check attendance buttons and both are idempotent:
+  // a teacher who already has an absence for that date is skipped, so
+  // this settles after one pass and re-running changes nothing. Only for
+  // somebody who could press those buttons anyway.
+  const [caughtUp, setCaughtUp] = useState<Record<string, boolean>>({})
+  useEffect(() => {
+    if (!canManage || caughtUp[date]) return
+    setCaughtUp(prev => ({ ...prev, [date]: true }))
+    ;(async () => {
+      try {
+        await Promise.all([
+          timetableApi.syncLeave(date).catch(() => null),
+          timetableApi.detectAbsences(date).catch(() => null),
+        ])
+      } finally {
+        invalidate()
+      }
+    })()
+    // invalidate closes over `date`, which is in the dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, canManage])
+
   const syncLeave = useMutation({
     mutationFn: () => timetableApi.syncLeave(date),
     onSuccess: (r: any) => {
@@ -129,8 +168,23 @@ export default function ArrangementsPage() {
     onSuccess: (r: any) => {
       if (r.disabled) toast.info('Attendance checking is switched off in settings')
       else if (r.proposed) toast.success(`${r.proposed} possible absence${r.proposed === 1 ? '' : 's'} found — confirm below`)
+      // Somebody who has just marked two people absent and is told
+      // "nothing found" concludes the check is broken. Say what was
+      // found and why it produced nothing.
+      else if (r.absentButDayOver) {
+        toast.info(`${r.absentButDayOver} teacher${r.absentButDayOver === 1 ? ' is' : 's are'} marked absent, but all their lessons today have already finished — there is nothing left to cover`)
+      }
       else if (!r.withPeriodsLeft) toast.info('No classes left today, so there is nothing to arrange cover for')
-      else toast.success('Everyone with a class still to come has checked in')
+      // "Nobody is missing" and "nobody has been marked yet" are
+      // different answers, and reporting the second as the first is how
+      // a school stops trusting the check.
+      else if (r.registerTaken === false) {
+        toast.info('Staff attendance has not been marked yet today — nothing to compare the timetable against')
+      }
+      else if (r.registerUsable === false) {
+        toast.info('Staff attendance is only part-marked, so only people explicitly marked absent were checked')
+      }
+      else toast.success('Everyone with a class still to come is marked in')
       invalidate()
     },
     onError: (e) => toast.error(timetableError(e)),
@@ -206,20 +260,61 @@ export default function ArrangementsPage() {
             <SummaryTile label="Teachers away" value={byTeacher.length} tone="neutral" hint={`${summary.total} periods affected`} />
           </div>
 
+          {staffingGaps.length > 0 && canManage && (
+            <div className="mb-4">
+              <Banner
+                tone="bad"
+                title={`${staffingGaps.length} class group${staffingGaps.length === 1 ? '' : 's'} on the timetable have no teacher`}
+              >
+                These are not absences. The timetable still gives periods to people who will
+                not be teaching them, so this will come back tomorrow and every day after
+                until the periods are reassigned. Cover is a stopgap.
+                <div className="mt-2 space-y-2">
+                  {staffingGaps.map((a: any) => (
+                    <div key={a.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/20 bg-background px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate text-sm font-medium text-foreground">{a.teacher_name}</p>
+                          <Chip tone={a.permanently_gone ? 'bad' : 'warn'}>
+                            {a.permanently_gone ? 'fix the timetable' : 'needs a stand-in teacher'}
+                          </Chip>
+                          {a.periods_affected > 0 && (
+                            <Chip>{a.periods_affected} period{a.periods_affected === 1 ? '' : 's'} today</Chip>
+                          )}
+                        </div>
+                        <p className="truncate text-xs text-muted-foreground">{a.reason}</p>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <Link
+                          href="/timetable/block"
+                          className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+                        >
+                          Reassign their periods →
+                        </Link>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Banner>
+            </div>
+          )}
+
           {proposed.length > 0 && canManage && (
             <div className="mb-5">
               <Banner
                 tone="warn"
-                title={`${proposed.length} teacher${proposed.length === 1 ? '' : 's'} may need cover today`}
+                title={`${proposed.length} teacher${proposed.length === 1 ? '' : 's'} may need cover on ${prettyDate(date)}`}
               >
                 {/* The heading stays neutral because the reasons differ:
                     one may be marked absent in staff attendance, another
-                    simply never checked in. Saying "a class running with
-                    no check-in" for all of them contradicted the row
-                    underneath it, and was wrong outright after the last
-                    bell. Each row carries its own reason instead. */}
-                Their attendance says they are not in, but their periods are still on the
-                timetable. Confirm to send those periods to the cover queue.
+                    has resigned and still holds periods, a third is
+                    suspended. Saying "a class running with no check-in"
+                    for all of them contradicted the row underneath it,
+                    and "today" was simply wrong whenever another date was
+                    open. Each row carries its own reason instead. */}
+                Their periods are still on the timetable but they will not be taking them.
+                Confirm to send those periods to the cover queue.
                 <div className="mt-2 space-y-2">
                   {proposed.map((a: any) => (
                     <ProposedAbsenceRow key={a.id} absence={a} date={date} onDone={invalidate} />
@@ -278,7 +373,14 @@ export default function ArrangementsPage() {
             </TabsContent>
 
             <TabsContent value="free">
+              {/* The per-period summary answers "how much slack is there
+                  on Thursday"; the finder answers "who can take period 4
+                  right now, and can teach Maths". Both are wanted, and
+                  they were on two different screens. */}
               <FreeTeachersTab day={dayNumber} date={date} />
+              <div className="mt-6 border-t border-border pt-6">
+                <FreeFacultyView />
+              </div>
             </TabsContent>
 
             <TabsContent value="register">
@@ -943,11 +1045,24 @@ function RegisterTab() {
               {data.map((row: any, i: number) => (
                 <tr key={i} className="hover:bg-muted/30">
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums">{prettyDate(row.date)}</td>
-                  <td className="px-3 py-2 tabular-nums">{row.period}</td>
-                  <td className="px-3 py-2">{row.class}</td>
-                  <td className="px-3 py-2">{row.subject}</td>
+                  {/* An absence that needed no cover still belongs in the
+                      register — it is a record of who was away, not only
+                      of cover that was arranged. It spans the lesson
+                      columns rather than showing four empty cells. */}
+                  {row.note ? (
+                    <td className="px-3 py-2 text-muted-foreground" colSpan={3}>{row.note}</td>
+                  ) : (
+                    <>
+                      <td className="px-3 py-2 tabular-nums">{row.period}</td>
+                      <td className="px-3 py-2">{row.class}</td>
+                      <td className="px-3 py-2">{row.subject}</td>
+                    </>
+                  )}
                   <td className="px-3 py-2">{row.absent}</td>
-                  <td className="px-3 py-2 font-medium">{row.substitute || <span className="text-destructive">Nobody</span>}</td>
+                  <td className="px-3 py-2 font-medium">
+                    {row.note ? <span className="text-muted-foreground">—</span>
+                      : row.substitute || <span className="text-destructive">Nobody</span>}
+                  </td>
                   <td className="px-3 py-2"><StatusPill status={row.status} /></td>
                 </tr>
               ))}

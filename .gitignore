@@ -13,3 +13,6 @@ New Time table*.xlsx
 
 # One-time credential handovers written by provisionTimetableSchool.ts
 credentials-*.txt
+
+# transient probe scripts
+backend/watch-cron-tick.ts

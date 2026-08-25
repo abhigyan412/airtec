@@ -1251,6 +1251,16 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
     const arrangementRows = (arrangementRes.data ?? []) as
       { timetable_period_id: string | null; status: string; substitute_teacher_id: string | null }[]
 
+    const { data: profileRows } = await supabase.from('staff_profiles')
+      .select('user_id, employment_status').eq('school_id', school_id)
+    const departedStaff = new Set((profileRows ?? [])
+      // Matches NOT_TEACHING_STATUSES: employment_status 'on_leave' is
+      // excluded on purpose, because leave is evidenced by a leave
+      // request and reaches this screen through today's attendance row
+      // instead.
+      .filter((p: any) => ['resigned', 'terminated', 'absconded', 'suspended'].includes(p.employment_status))
+      .map((p: any) => p.user_id))
+
     const absenceByTeacher = new Map(absenceRows.map(a => [a.teacher_id, a.status]))
     // A period counts as covered once somebody is named against it.
     // 'declined' and 'unassigned' deliberately do not count: those are
@@ -1276,6 +1286,7 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
       on_leave: 'On approved leave',
       no_checkin_time: 'Present, but no check-in time recorded',
       checked_in_late: 'Checked in after this period started',
+      departed: 'Not teaching at present — this period has no teacher',
     }
 
     const flagged = periods
@@ -1283,7 +1294,12 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
       .map(p => {
         const att = attendanceByUser.get(p.teacher_id as string)
         let reason: string | null = null
-        if (!att) reason = 'not_checked_in'
+        // Somebody who has resigned is not "not checked in yet" — they
+        // are never going to check in, and the period is unstaffed for
+        // good rather than for this morning. Saying the first thing
+        // sends a manager looking for a person who does not work here.
+        if (departedStaff.has(p.teacher_id as string)) reason = 'departed'
+        else if (!att) reason = 'not_checked_in'
         else if (att.status === 'absent') reason = 'absent'
         else if (att.status === 'on_leave') reason = 'on_leave'
         else if (!att.check_in) reason = 'no_checkin_time'
@@ -1301,6 +1317,9 @@ router.get('/timetable/attention-required', requirePermissionV2('timetable.manag
       : []
     const missingByTeacher = new Map<string, typeof morningPeriods>()
     for (const p of morningPeriods) {
+      // Departed staff belong in the block view's "still timetabled"
+      // report, not in a list of people who might turn up later.
+      if (departedStaff.has(p.teacher_id as string)) continue
       const att = attendanceByUser.get(p.teacher_id as string)
       const checkedIn = !!att && att.status !== 'absent' && att.status !== 'on_leave' && !!att.check_in
       if (checkedIn) continue

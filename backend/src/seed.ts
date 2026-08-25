@@ -532,7 +532,7 @@ async function seed() {
     })
   })
 
-  const staff: { id: string; name: string; role: string; designation: string; dept: string; subject: string | null; photo: string | null; minLevel?: number; maxLevel?: number }[] = []
+  const staff: { id: string; name: string; role: string; designation: string; dept: string; subject: string | null; photo: string | null; minLevel?: number; maxLevel?: number; employmentStatus?: string }[] = []
   const usedEmails = new Set<string>(['admin@dpslucknow.com'])
   const staffPhotos = await mapLimit(staffDefs, UPLOAD_CONCURRENCY, (s, i) =>
     // Same gender rule the staff_profiles rows use below, so the face
@@ -552,7 +552,14 @@ async function seed() {
     const uid = au?.user?.id
     if (!uid) continue
     const photo = staffPhotos[i]
-    staff.push({ id: uid, name: s.name, role: s.role, designation: s.designation, dept: s.dept, subject: s.subject, photo, minLevel: s.minLevel, maxLevel: s.maxLevel })
+    // Worked out here rather than inline below, because the teaching
+    // pool has to be able to see it.
+    const employmentStatus = i % 19 === 7 ? 'on_leave'
+      : i % 29 === 11 ? 'resigned'
+      : i % 31 === 13 ? 'suspended'
+      : i === 41 ? 'terminated'
+      : 'active'
+    staff.push({ id: uid, name: s.name, role: s.role, designation: s.designation, dept: s.dept, subject: s.subject, photo, minLevel: s.minLevel, maxLevel: s.maxLevel, employmentStatus })
     staffUserRows.push({ id: uid, school_id: schoolId, full_name: s.name, email, role: s.role, avatar_url: photo, phone: `+91 ${9500000000 + i}` })
     staffProfileRows.push({
       school_id: schoolId, user_id: uid, employee_id: `EMP${String(i + 1).padStart(3, '0')}`,
@@ -567,13 +574,22 @@ async function seed() {
       // Every employment_type and employment_status value the HR filters
       // offer needs at least one person behind it.
       employment_type: i % 17 === 5 ? 'part_time' : i % 17 === 9 ? 'contract' : i % 17 === 13 ? 'probation' : 'full_time',
-      employment_status: i % 19 === 7 ? 'on_leave' : i % 29 === 11 ? 'resigned' : i % 31 === 13 ? 'suspended' : i === 41 ? 'terminated' : 'active',
+      employment_status: employmentStatus,
     })
   }
   await ins('users', staffUserRows)
   await ins('staff_profiles', staffProfileRows)
   staff.forEach(s => grantRole(s.id, s.role))
-  const teachers = staff.filter(s => s.role === 'teacher')
+  // Somebody who has resigned or been terminated does not get a
+  // timetable. The seed used to hand them one, which produced a school
+  // where four departed teachers held 118 periods a week between them —
+  // classes with nobody to teach them, invisible because HR drops
+  // departed staff from the attendance register so they never even
+  // showed up as absent. They keep their employment_status so the HR
+  // filters still have somebody behind each value; they just stop
+  // teaching, which is what leaving a job means.
+  const DEPARTED = ['resigned', 'terminated', 'absconded']
+  const teachers = staff.filter(s => s.role === 'teacher' && !DEPARTED.includes(s.employmentStatus ?? 'active'))
   const subjectTeachers = (sub: string) => teachers.filter(t => t.subject === sub)
   const anyTeacher = () => teachers[0]?.id ?? adminId
   const accountantId = staff.find(s => s.role === 'accountant')?.id ?? adminId

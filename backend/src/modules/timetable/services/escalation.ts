@@ -176,21 +176,38 @@ export async function runUnfilledSweep(schoolIdFilter?: string): Promise<{ schoo
  * in the queue before anybody looks), then detection (so it does not
  * propose an absence for somebody whose leave was just synced).
  */
+/** How far ahead approved leave is pulled into the cover queue. */
+const LEAVE_LOOKAHEAD_DAYS = 7
+
 export async function runMorningSweep(): Promise<{
   schools: number; leaveSynced: number; detected: number
 }> {
   const today = toLocalDateStr(new Date())
   const { data: schools } = await supabase.from('schools').select('id')
 
+  // Today, and the week after it. Leave is approved in advance and the
+  // whole point of knowing about it is to arrange cover before the day
+  // arrives — syncing only today meant a manager opening tomorrow saw an
+  // empty queue for a teacher whose leave was approved a fortnight ago,
+  // and found out on the morning.
+  const horizon: string[] = []
+  for (let i = 0; i <= LEAVE_LOOKAHEAD_DAYS; i++) {
+    const d = new Date()
+    d.setDate(d.getDate() + i)
+    horizon.push(toLocalDateStr(d))
+  }
+
   let leaveSynced = 0
   let detected = 0
 
   for (const school of schools ?? []) {
-    try {
-      const leave = await syncApprovedLeave(school.id, null as any, today)
-      leaveSynced += leave.created
-    } catch (err: any) {
-      console.error(`[timetable-morning] leave sync failed for ${school.id}:`, err?.message)
+    for (const date of horizon) {
+      try {
+        const leave = await syncApprovedLeave(school.id, null as any, date)
+        leaveSynced += leave.created
+      } catch (err: any) {
+        console.error(`[timetable-morning] leave sync failed for ${school.id} on ${date}:`, err?.message)
+      }
     }
     try {
       const detection = await detectAbsences(school.id, null, today)
@@ -201,6 +218,60 @@ export async function runMorningSweep(): Promise<{
   }
 
   return { schools: (schools ?? []).length, leaveSynced, detected }
+}
+
+/**
+ * Look for teachers who have not turned up, across every school.
+ *
+ * Split out from the morning sweep, which runs at 06:45 — before the
+ * first bell, which is right for pulling approved leave into the queue
+ * because leave is known in advance. It is exactly wrong for attendance
+ * detection, which only flags a teacher whose period has ALREADY
+ * started: at 06:45 no period has, so that half of the sweep proposed
+ * nothing, every day, at both schools on this installation. The feature
+ * worked only when somebody pressed the button by hand.
+ *
+ * So it runs on a cadence through the teaching day instead. That also
+ * catches the case the single morning pass never could — somebody who
+ * was in at nine and gone by noon.
+ *
+ * Safe to repeat: detectAbsences skips any teacher who already has a
+ * non-cancelled absence for the date, so a teacher is proposed once and
+ * managers are told once, however often this runs.
+ */
+export async function runAbsenceDetectionSweep(): Promise<{
+  schools: number; detected: number
+}> {
+  const { data: schools } = await supabase.from('schools').select('id')
+
+  // Today, and the same week ahead the leave sync covers.
+  //
+  // Today's pass is the attendance one — who has not turned up. The
+  // forward passes cannot be about attendance, because there is none
+  // yet; they exist to surface the problems that are already knowable,
+  // chiefly a teacher who has left and still holds periods. Those
+  // classes are unstaffed every day until somebody reassigns them, and
+  // the only useful time to find that out is before the day starts.
+  const horizon: string[] = []
+  for (let i = 0; i <= LEAVE_LOOKAHEAD_DAYS; i++) {
+    const d = new Date()
+    d.setDate(d.getDate() + i)
+    horizon.push(toLocalDateStr(d))
+  }
+
+  let detected = 0
+  for (const school of schools ?? []) {
+    for (const date of horizon) {
+      try {
+        const detection = await detectAbsences(school.id, null, date)
+        detected += detection.proposed
+      } catch (err: any) {
+        console.error(`[timetable-detect] failed for ${school.id} on ${date}:`, err?.message)
+      }
+    }
+  }
+
+  return { schools: (schools ?? []).length, detected }
 }
 
 /** Weekly workload check across every school. */

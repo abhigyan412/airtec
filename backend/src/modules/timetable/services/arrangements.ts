@@ -705,31 +705,76 @@ export async function cancelArrangement(
 
 // ── register and fairness ───────────────────────────────────────
 
+/**
+ * The cover register.
+ *
+ * Built from the ABSENCES, not only from the cover rows. An absence that
+ * produced no arrangements — because every one of that teacher's lessons
+ * had already been taught by the time anybody marked them absent, or
+ * because they teach nothing that day — used to leave no trace at all:
+ * two teachers were away, the school knew, and the register was empty.
+ * A register that only records the days cover was arranged is not a
+ * register of absence, it is a register of successful cover.
+ *
+ * So every absence appears. Ones with periods show a line per period and
+ * who took it, or "Nobody"; ones with none show a single line saying so.
+ */
 export async function register(schoolId: string, from: string, to: string) {
-  const { data, error } = await supabase.from('arrangements')
-    .select(`
-      arrangement_date, period_number, start_time, status, reason,
-      subject_name, classes(name), sections(name),
-      absent:absent_teacher_id(full_name), substitute:substitute_teacher_id(full_name)
-    `)
-    .eq('school_id', schoolId)
-    .gte('arrangement_date', from).lte('arrangement_date', to)
-    .order('arrangement_date', { ascending: false })
-    .order('period_number', { ascending: true })
+  const [rows, absences] = await Promise.all([
+    // Paged: a term's worth of cover at a large school is well past the
+    // 1000 rows PostgREST returns by default, and a register that
+    // silently stops two-thirds of the way through is worse than none.
+    fetchAll<any>((f, t) => supabase.from('arrangements')
+      .select(`
+        absence_id, arrangement_date, period_number, start_time, status, reason,
+        subject_name, classes(name), sections(name),
+        absent:absent_teacher_id(full_name), substitute:substitute_teacher_id(full_name)
+      `)
+      .eq('school_id', schoolId)
+      .gte('arrangement_date', from).lte('arrangement_date', to)
+      .order('arrangement_date', { ascending: false })
+      .order('period_number', { ascending: true })
+      .range(f, t), 'arrangements'),
+    fetchAll<any>((f, t) => supabase.from('teacher_absences')
+      .select('id, absence_date, scope, reason, status, teacher:teacher_id(full_name)')
+      .eq('school_id', schoolId).neq('status', 'cancelled')
+      .gte('absence_date', from).lte('absence_date', to)
+      .range(f, t), 'absences'),
+  ])
 
-  if (error) throw badRequest('query_failed', error.message)
-
-  return (data ?? []).map(row => ({
+  const covered = rows.map(row => ({
     date: row.arrangement_date,
     period: row.period_number,
     time: formatTime(row.start_time),
-    class: `${(row as any).classes?.name ?? ''} ${(row as any).sections?.name ?? ''}`.trim(),
+    class: `${row.classes?.name ?? ''} ${row.sections?.name ?? ''}`.trim(),
     subject: row.subject_name,
-    absent: (row as any).absent?.full_name ?? '',
-    substitute: (row as any).substitute?.full_name ?? '',
+    absent: row.absent?.full_name ?? '',
+    substitute: row.substitute?.full_name ?? '',
     status: row.status,
     reason: row.reason,
   }))
+
+  const withArrangements = new Set(rows.map(r => r.absence_id).filter(Boolean))
+  const unrepresented = absences
+    .filter(a => !withArrangements.has(a.id))
+    .map(a => ({
+      date: a.absence_date,
+      period: null as number | null,
+      time: '',
+      class: '',
+      subject: '',
+      absent: a.teacher?.full_name ?? '',
+      substitute: '',
+      status: a.status,
+      reason: a.reason,
+      /** Nothing needed covering — say which, rather than showing a blank row. */
+      note: a.scope === 'full_day'
+        ? 'Away all day; no lessons left to cover'
+        : 'Away; no lessons left to cover',
+    }))
+
+  return [...covered, ...unrepresented].sort((a, b) =>
+    b.date.localeCompare(a.date) || ((a.period ?? 99) - (b.period ?? 99)))
 }
 
 /**
