@@ -1,8 +1,9 @@
 'use client'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, LabelList } from 'recharts'
-import { TrendingUp, Users } from 'lucide-react'
+import { TrendingUp, Users, Filter } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 
 // Sequential pipeline stages, in the order a real inquiry actually moves
 // through. Rejected/Lost are deliberately excluded from this chart — they
@@ -58,8 +59,14 @@ export function PipelineCharts({ stats }: { stats: any }) {
   const sourceData = [...bySource].sort((a: any, b: any) => a.count - b.count)
   const hasPipelineData = pipelineData.some(s => s.count > 0)
   const hasSourceData = sourceData.length > 0
+  // remaining-work-plan.md Section B4: same by_source rows the bar chart
+  // uses, sorted by volume instead of ascending (the bar chart sorts
+  // ascending so recharts' vertical layout reads top-to-bottom largest
+  // first — a table doesn't have that constraint).
+  const funnelData = [...bySource].sort((a: any, b: any) => b.count - a.count)
 
   return (
+    <div className="space-y-6">
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Pipeline distribution */}
       <Card className="lg:col-span-2">
@@ -138,6 +145,50 @@ export function PipelineCharts({ stats }: { stats: any }) {
           )}
         </CardContent>
       </Card>
+    </div>
+
+    {/* Source conversion funnel */}
+    <Card>
+      <CardHeader className="space-y-1 pb-4">
+        <CardTitle className="flex items-center gap-2">
+          <Filter className="w-4 h-4 text-muted-foreground" /> Conversion by Source
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">How far each lead source actually converts — not just how many leads it brings in</p>
+      </CardHeader>
+      <CardContent>
+        {funnelData.length === 0 ? (
+          <EmptyState
+            icon={Filter}
+            title="No inquiries yet"
+            description="Conversion by source appears here once inquiries start coming in."
+            className="h-40 py-0"
+          />
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="uppercase text-xs">Source</TableHead>
+                <TableHead className="uppercase text-xs text-right">Inquiries</TableHead>
+                <TableHead className="uppercase text-xs text-right">Reached Application</TableHead>
+                <TableHead className="uppercase text-xs text-right">Admitted</TableHead>
+                <TableHead className="uppercase text-xs text-right">Conversion</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {funnelData.map((s: any) => (
+                <TableRow key={s.source} className="hover:bg-transparent">
+                  <TableCell className="font-semibold text-foreground">{s.source}</TableCell>
+                  <TableCell className="text-right text-muted-foreground">{s.count}</TableCell>
+                  <TableCell className="text-right text-muted-foreground">{s.reached_application ?? 0}</TableCell>
+                  <TableCell className="text-right text-muted-foreground">{s.admitted ?? 0}</TableCell>
+                  <TableCell className="text-right font-semibold text-foreground">{s.conversion_rate ?? 0}%</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
     </div>
   )
 }

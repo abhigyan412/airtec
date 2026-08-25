@@ -5,6 +5,7 @@ import { admissionApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { classLabel } from '@/lib/utils'
 import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
+import { ADMISSION_DOC_TYPES as DOC_TYPES } from '@/lib/admissionDocumentTypes'
 import { FileCheck2, ShieldOff, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -12,19 +13,6 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
-
-// Same vocabulary the document-upload modal on the application detail
-// page uses — kept as one shared list so a school can only ever require
-// a document type that actually exists as an upload option.
-export const DOC_TYPES = [
-  { value: 'birth_certificate', label: 'Birth Certificate' },
-  { value: 'transfer_certificate', label: 'Transfer Certificate' },
-  { value: 'marksheet', label: 'Marksheet' },
-  { value: 'aadhaar', label: 'Aadhaar Card' },
-  { value: 'address_proof', label: 'Address Proof' },
-  { value: 'photo_id', label: 'Photo ID' },
-  { value: 'other', label: 'Other' },
-]
 
 export default function DocumentRequirementsPage() {
   const { user } = useAuth()

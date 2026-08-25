@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import { describe, it, expect } from 'vitest'
 import { supabase } from '../../../shared/db/client'
+import { fetchAllRows } from '../../../shared/utils/helpers'
 import { DEFAULT_ROLE_PERMISSIONS, LEGACY_ROLE_TO_RBAC_ROLE } from '../seed'
 
 // ═══════════════════════════════════════════════════════════════
@@ -64,13 +65,31 @@ describe('RBAC live-data sync invariant', () => {
   })
 
   it('no role sits at zero permissions', async () => {
+    // Same fixture exclusion as every other check in this file (was
+    // missing here — found 2026-08-25 when adding 5 new default roles
+    // made this test flaky specifically when run alongside seed.test.ts:
+    // that suite's own throwaway __vitest school inserts its roles and
+    // their permission mappings as two separate sequential writes, and
+    // this check could catch it mid-window, between the two, and report
+    // a role that is about to have permissions as if it never would).
+    const { data: allSchools } = await supabase.from('schools').select('id, name')
+    const fixtureSchoolIds = new Set((allSchools ?? []).filter(s => isFixtureName((s as any).name)).map(s => s.id))
+
     const { data: allRoles } = await supabase.from('roles').select('id, name, school_id')
-    const { data: rolePerms } = await supabase.from('role_permissions_v2').select('role_id')
+    const roles = (allRoles ?? []).filter(r => !fixtureSchoolIds.has(r.school_id))
+    // fetchAllRows, not a bare select: role_permissions_v2 crossed
+    // PostgREST's 1000-row default page size on 2026-08-25 (confirmed live
+    // at 1010 rows right after this pass added 5 more default roles) — a
+    // bare unscoped select here would silently truncate and this
+    // invariant would start reporting false positives for whichever roles
+    // happened to fall past row 1000, for the rest of this table's life.
+    const rolePerms = await fetchAllRows<{ role_id: string }>((from, to) =>
+      supabase.from('role_permissions_v2').select('role_id', { count: 'exact' }).range(from, to))
 
     const permCount = new Map<string, number>()
     for (const rp of rolePerms ?? []) permCount.set(rp.role_id, (permCount.get(rp.role_id) ?? 0) + 1)
 
-    const zeroPermRoles = (allRoles ?? [])
+    const zeroPermRoles = roles
       .filter(r => !permCount.get(r.id))
       .map(r => `${r.name} (school ${r.school_id})`)
 

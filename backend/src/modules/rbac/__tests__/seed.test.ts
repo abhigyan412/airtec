@@ -67,7 +67,7 @@ describe('rbac seeding functions', () => {
     return authData.user.id
   }
 
-  it('seedDefaultRoles creates all 16 default roles with permissions attached', async () => {
+  it('seedDefaultRoles creates every default role with permissions attached', async () => {
     const roleIdByName = await seedDefaultRoles(schoolId)
     const expectedNames = Object.keys(DEFAULT_ROLE_PERMISSIONS)
 

@@ -169,9 +169,10 @@ outstanding decisions instead of two:
 | Decision | Status |
 |---|---|
 | Should approval chain depth be configurable per class, or only per school globally? | Open |
-| Is e-signature a hard requirement for the offer letter, or is a generated PDF sufficient for v1? | Open |
-| Which SMS/WhatsApp provider should the communication integration target (Gupshup / Twilio / MSG91 / other)? | Open — blocks Phase 8 entirely |
-| Should RTE/sibling/staff quota categories be enforced as hard caps at admission time, or advisory only? | Open — note the existing RTE reimbursement module doesn't enforce its own 25% cap either, so "advisory only, matching current practice" is the lower-risk default if no one has an opinion |
+| Is e-signature a hard requirement for the offer letter, or is a generated PDF sufficient for v1? | **Decided 2026-08-25 by the user: the current printable HTML offer letter is sufficient for v1.** e-signature capture remains a real, separate initiative if wanted later — not scoped further. |
+| Which SMS/WhatsApp provider should the communication integration target (Gupshup / Twilio / MSG91 / other)? | Open — blocks Phase 8 entirely. User confirmed 2026-08-25 this stays parked deliberately, not an oversight. |
+| Should RTE/sibling/staff quota categories be enforced as hard caps at admission time, or advisory only? | **Decided 2026-08-25 by the user: advisory only**, matching current practice — the existing RTE reimbursement module doesn't enforce its own 25% cap either. No build required. |
+| Which payment gateway should the admission-fee collection step target? | Open — blocks `remaining-work-plan.md` Section B2 entirely. User confirmed 2026-08-25 this stays parked deliberately, same as the SMS/WhatsApp decision above. |
 
 ---
 

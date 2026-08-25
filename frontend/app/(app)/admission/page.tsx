@@ -1,8 +1,8 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Phone, Search, ChevronRight, FileCheck, UserPlus } from 'lucide-react'
-import { admissionApi } from '@/lib/api'
+import { Plus, Phone, Search, ChevronRight, FileCheck, UserPlus, CalendarClock } from 'lucide-react'
+import { admissionApi, academicYearsApi } from '@/lib/api'
 import { cn, STATUS_COLORS, formatDate, admissionApplicationStatusBadge, classLabel } from '@/lib/utils'
 import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
 import { toast } from 'sonner'
@@ -54,18 +54,37 @@ export default function AdmissionPage() {
   const [showNewApp, setShowNewApp] = useState(false)
   const [page, setPage]             = useState(1)
   const [sourceFilter, setSourceFilter] = useState('')
+  const [yearFilter, setYearFilter] = useState('')
   const [appSearch, setAppSearch]   = useState('')
   const [appStatus, setAppStatus]   = useState('')
   const [appClassId, setAppClassId] = useState('')
+  const [appYearId, setAppYearId]   = useState('')
   const [appDateFrom, setAppDateFrom] = useState('')
   const [appDateTo, setAppDateTo]   = useState('')
 
+  const { data: years } = useQuery({
+    queryKey: ['academic-years'],
+    queryFn: () => academicYearsApi.list().then(r => r.data),
+  })
+  // Both tabs default to the current academic year rather than mixing
+  // every session together — a school's "who's applying" view should be
+  // this year's activity unless someone deliberately asks to see more.
+  // Only sets once (guarded on the filter still being unset), so it never
+  // stomps on a year the user has since picked or cleared.
+  useEffect(() => {
+    if (!years?.length) return
+    const current = years.find((y: any) => y.is_current) ?? years[0]
+    setYearFilter(f => f || current.id)
+    setAppYearId(f => f || current.id)
+  }, [years])
+
   const { data: inquiries, isLoading } = useQuery({
-    queryKey: ['inquiries', search, statusFilter, sourceFilter, page],
+    queryKey: ['inquiries', search, statusFilter, sourceFilter, yearFilter, page],
     queryFn: () => admissionApi.inquiries.list({
       search: search || undefined,
       status: statusFilter || undefined,
       source_id: sourceFilter || undefined,
+      academic_year_id: yearFilter || undefined,
       page, limit: 25,
     }).then(r => r),
     placeholderData: (prev: any) => prev,
@@ -73,8 +92,8 @@ export default function AdmissionPage() {
   })
 
   const { data: stats } = useQuery({
-    queryKey: ['inquiry-stats'],
-    queryFn: () => admissionApi.inquiries.stats().then(r => r.data),
+    queryKey: ['inquiry-stats', yearFilter],
+    queryFn: () => admissionApi.inquiries.stats({ academic_year_id: yearFilter || undefined }).then(r => r.data),
   })
 
   const { data: sourcesData } = useQuery({
@@ -88,15 +107,16 @@ export default function AdmissionPage() {
   })
 
   const { data: applications, isLoading: appsLoading } = useQuery({
-    queryKey: ['admission-applications', appSearch, appStatus, appClassId, appDateFrom, appDateTo],
+    queryKey: ['admission-applications', appSearch, appStatus, appClassId, appYearId, appDateFrom, appDateTo],
     queryFn: () => admissionApi.applications.list({
       search: appSearch || undefined, status: appStatus || undefined, class_id: appClassId || undefined,
+      academic_year_id: appYearId || undefined,
       date_from: appDateFrom || undefined, date_to: appDateTo || undefined,
     }).then(r => r.data),
     enabled: tab === 'applications',
   })
-  const appHasFilters = !!(appSearch || appStatus || appClassId || appDateFrom || appDateTo)
-  const clearAppFilters = () => { setAppSearch(''); setAppStatus(''); setAppClassId(''); setAppDateFrom(''); setAppDateTo('') }
+  const appHasFilters = !!(appSearch || appStatus || appClassId || appYearId || appDateFrom || appDateTo)
+  const clearAppFilters = () => { setAppSearch(''); setAppStatus(''); setAppClassId(''); setAppYearId(''); setAppDateFrom(''); setAppDateTo('') }
 
   const meta = inquiries?.meta ?? { total: 0, page: 1, limit: 25 }
 
@@ -116,6 +136,10 @@ export default function AdmissionPage() {
           </Button>
         )}
       />
+
+      {/* Cycle status for whichever year is current — visible on both tabs,
+          since it affects both New Inquiry and New Application. */}
+      <AdmissionCycleStatus />
 
       {/* Tabs: Inquiries (CRM) vs Applications (formal, workflow-driven) */}
       <TabsList>
@@ -184,8 +208,20 @@ export default function AdmissionPage() {
               ))}
             </SelectContent>
           </Select>
-          {(statusFilter || sourceFilter) && (
-            <Button variant="outline" onClick={() => { setStatus(''); setSourceFilter(''); setPage(1) }}>Clear filter</Button>
+          <Select value={yearFilter || '__all__'}
+            onValueChange={v => { setYearFilter(v === '__all__' ? '' : v); setPage(1) }}>
+            <SelectTrigger className="w-auto min-w-[150px]">
+              <SelectValue placeholder="All Years" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All Years</SelectItem>
+              {(years ?? []).map((y: any) => (
+                <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {(statusFilter || sourceFilter || yearFilter) && (
+            <Button variant="outline" onClick={() => { setStatus(''); setSourceFilter(''); setYearFilter(''); setPage(1) }}>Clear filter</Button>
           )}
         </Card>
 
@@ -198,12 +234,12 @@ export default function AdmissionPage() {
           ) : (inquiries?.data ?? []).length === 0 ? (
             <EmptyState
               icon={Search}
-              title={search || statusFilter ? 'No inquiries match your filters' : 'No inquiries yet'}
-              description={search || statusFilter
-                ? 'Nothing in the pipeline matches this search or stage. Widen the filters to see more.'
+              title={search || statusFilter || yearFilter ? 'No inquiries match your filters' : 'No inquiries yet'}
+              description={search || statusFilter || yearFilter
+                ? 'Nothing in the pipeline matches this search, stage, or academic year. Widen the filters to see more.'
                 : 'Log your first inquiry to start tracking parents through the admission pipeline.'}
-              action={search || statusFilter ? (
-                <Button variant="outline" onClick={() => { setSearch(''); setStatus(''); setPage(1) }}>
+              action={search || statusFilter || yearFilter ? (
+                <Button variant="outline" onClick={() => { setSearch(''); setStatus(''); setYearFilter(''); setPage(1) }}>
                   Clear filters
                 </Button>
               ) : (
@@ -307,6 +343,15 @@ export default function AdmissionPage() {
               {(classesData ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
+          <Select value={appYearId || '__all__'} onValueChange={v => setAppYearId(v === '__all__' ? '' : v)}>
+            <SelectTrigger className="w-auto min-w-[150px]">
+              <SelectValue placeholder="All Years" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All Years</SelectItem>
+              {(years ?? []).map((y: any) => <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <Input type="date" value={appDateFrom} onChange={e => setAppDateFrom(e.target.value)} className="w-auto" aria-label="From date" />
           <Input type="date" value={appDateTo} onChange={e => setAppDateTo(e.target.value)} className="w-auto" aria-label="To date" />
           {appHasFilters && (
@@ -407,13 +452,86 @@ function Field({ label, children, span = 1 }: { label: string, children: React.R
   )
 }
 
+// Surfaces the admission cycle for whichever academic year is current —
+// previously the Cycles settings page was the only place this data was
+// ever shown, so a school could configure an open/close window and never
+// see any sign of it anywhere else. Silent (renders nothing) when no
+// cycle is configured for the current year, matching the backend's own
+// "no cycle = unrestricted" convention — nothing to flag in that case.
+function AdmissionCycleStatus() {
+  const { data: years } = useQuery({
+    queryKey: ['academic-years'],
+    queryFn: () => academicYearsApi.list().then(r => r.data),
+  })
+  const { data: cycles } = useQuery({
+    queryKey: ['admission-cycles'],
+    queryFn: () => admissionApi.cycles.list().then(r => r.data),
+  })
+
+  const currentYear = years?.find((y: any) => y.is_current) ?? years?.[0]
+  const cycle = currentYear ? cycles?.find((c: any) => c.academic_year_id === currentYear.id) : null
+  if (!currentYear || !cycle) return null
+
+  const now = new Date()
+  const opensAt = cycle.opens_at ? new Date(cycle.opens_at) : null
+  const closesAt = cycle.closes_at ? new Date(cycle.closes_at) : null
+
+  let state: 'open' | 'not_open' | 'closed' = 'open'
+  if (opensAt && now < opensAt) state = 'not_open'
+  else if (closesAt && now > closesAt) state = 'closed'
+
+  const copy = {
+    open: {
+      label: `Admission open for ${currentYear.name}`,
+      sub: closesAt ? `Closes ${formatDate(cycle.closes_at)}` : null,
+      tone: 'border-success/20 bg-success/5 text-success',
+    },
+    not_open: {
+      label: `Admission not yet open for ${currentYear.name}`,
+      sub: `Opens ${formatDate(cycle.opens_at)}`,
+      tone: 'border-primary/20 bg-primary/5 text-primary',
+    },
+    closed: {
+      label: `Admission closed for ${currentYear.name}`,
+      sub: `Closed ${formatDate(cycle.closes_at)}`,
+      tone: 'border-destructive/20 bg-destructive/5 text-destructive',
+    },
+  }[state]
+
+  return (
+    <div className={cn('flex flex-wrap items-center gap-2 rounded-xl border px-4 py-2.5 text-sm', copy.tone)}>
+      <CalendarClock className="h-4 w-4 shrink-0" />
+      <span className="font-medium">{copy.label}</span>
+      {copy.sub && <span className="text-muted-foreground">· {copy.sub}</span>}
+      <Link href="/admission/cycles" className="ml-auto text-xs font-medium underline-offset-2 hover:underline shrink-0">
+        Manage
+      </Link>
+    </div>
+  )
+}
+
 function NewInquiryModal({ classes, onClose }: { classes: any[], onClose: () => void }) {
   const qc = useQueryClient()
   const [form, setForm] = useState({
     student_name: '', parent_name: '', parent_phone: '', parent_email: '',
     gender: '', notes: '', applying_for_class_id: '', previous_school: '',
-    budget_range: '', source_id: '',
+    budget_range: '', source_id: '', academic_year_id: '',
   })
+
+  // Determines whether checkAdmissionCycleOpen() has anything to check —
+  // omitting this silently made the cycle gate unreachable (see
+  // decisions.md), so it defaults to the current year rather than being
+  // left for the counselor to remember to pick.
+  const { data: years } = useQuery({
+    queryKey: ['academic-years'],
+    queryFn: () => academicYearsApi.list().then(r => r.data),
+  })
+  useEffect(() => {
+    if (!form.academic_year_id && years?.length) {
+      const current = years.find((y: any) => y.is_current) ?? years[0]
+      setForm(f => ({ ...f, academic_year_id: current.id }))
+    }
+  }, [years])
 
   // Was previously a dead stub — called the unrelated inquiries list
   // endpoint, threw the result away, and always resolved to []. No
@@ -495,6 +613,14 @@ function NewInquiryModal({ classes, onClose }: { classes: any[], onClose: () => 
               </SelectContent>
             </Select>
           </Field>
+          <Field label="Academic Year">
+            <Select value={form.academic_year_id} onValueChange={v => setForm(f => ({ ...f, academic_year_id: v }))}>
+              <SelectTrigger><SelectValue placeholder="Select year" /></SelectTrigger>
+              <SelectContent>
+                {(years ?? []).map((y: any) => <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </Field>
           <Field label="Previous School">
             <Input value={form.previous_school}
               onChange={e => setForm(f => ({ ...f, previous_school: e.target.value }))}
@@ -563,7 +689,20 @@ function NewApplicationModal({ classes, onClose }: { classes: any[], onClose: ()
   const [form, setForm] = useState({
     student_first_name: '', student_last_name: '', father_name: '', father_phone: '',
     mother_name: '', mother_phone: '', applying_for_class_id: '', date_of_birth: '', gender: '',
+    academic_year_id: '',
   })
+
+  // Same default-to-current-year reasoning as NewInquiryModal.
+  const { data: years } = useQuery({
+    queryKey: ['academic-years'],
+    queryFn: () => academicYearsApi.list().then(r => r.data),
+  })
+  useEffect(() => {
+    if (!form.academic_year_id && years?.length) {
+      const current = years.find((y: any) => y.is_current) ?? years[0]
+      setForm(f => ({ ...f, academic_year_id: current.id }))
+    }
+  }, [years])
 
   const mutation = useMutation({
     mutationFn: (data: any) => admissionApi.applications.create(data),
@@ -634,12 +773,21 @@ function NewApplicationModal({ classes, onClose }: { classes: any[], onClose: ()
               </SelectContent>
             </Select>
           </div>
-          <div className="col-span-2">
+          <div>
             <Label className="mb-1.5 block">Applying for Class</Label>
             <Select value={form.applying_for_class_id} onValueChange={v => setForm(f => ({ ...f, applying_for_class_id: v }))}>
               <SelectTrigger><SelectValue placeholder="Select class" /></SelectTrigger>
               <SelectContent>
                 {classes.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="mb-1.5 block">Academic Year</Label>
+            <Select value={form.academic_year_id} onValueChange={v => setForm(f => ({ ...f, academic_year_id: v }))}>
+              <SelectTrigger><SelectValue placeholder="Select year" /></SelectTrigger>
+              <SelectContent>
+                {(years ?? []).map((y: any) => <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>

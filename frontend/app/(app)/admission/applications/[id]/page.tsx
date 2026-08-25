@@ -6,6 +6,7 @@ import { admissionApi, documentsApi } from '@/lib/api'
 import { WorkflowPipeline } from '@/components/admission/WorkflowPipeline'
 import { formatDate, admissionApplicationStatusBadge, cn, classLabel } from '@/lib/utils'
 import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
+import { ADMISSION_DOC_TYPES as DOC_TYPES } from '@/lib/admissionDocumentTypes'
 import {
   ArrowLeft, Phone, User, ClipboardList, FileText, Upload, Eye, Trash2,
   CheckCircle, XCircle, Wallet, Award, Loader2,
@@ -24,15 +25,6 @@ import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { SlotBookingCard } from '@/components/admission/SlotBookingCard'
 
-const DOC_TYPES = [
-  { value: 'birth_certificate', label: 'Birth Certificate' },
-  { value: 'transfer_certificate', label: 'Transfer Certificate' },
-  { value: 'marksheet', label: 'Marksheet' },
-  { value: 'aadhaar', label: 'Aadhaar Card' },
-  { value: 'address_proof', label: 'Address Proof' },
-  { value: 'photo_id', label: 'Photo ID' },
-  { value: 'other', label: 'Other' },
-]
 
 const FEE_METHODS = [
   { value: 'cash', label: 'Cash' }, { value: 'cheque', label: 'Cheque' }, { value: 'neft', label: 'NEFT' },

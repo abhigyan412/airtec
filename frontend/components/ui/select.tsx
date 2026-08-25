@@ -75,10 +75,44 @@ const SelectContent = React.forwardRef<
     >
       <SelectScrollUpButton />
       <SelectPrimitive.Viewport
+        // Found 2026-08-25, same investigation as the scroll fix below:
+        // Radix auto-scrolls the viewport to keep the currently-selected
+        // item in view when the popup reopens — reasonable in isolation,
+        // but with enough options it means the FIRST item (and often the
+        // second, partially) opens already scrolled out of view above the
+        // fold, with only a small scroll-up chevron hinting there's more.
+        // A user reported this as "classes are missing" — reproduced live
+        // by selecting the last item in a 12-class list, reopening, and
+        // confirming Class 1 was genuinely off-screen on open (scrolling
+        // up did reveal it, but nothing signals a first-time user should).
+        // Forcing scrollTop to 0 on every open — after Radix's own mount
+        // effects run, via requestAnimationFrame, or its adjustment would
+        // just win the race and put us back where we started — makes
+        // "open the dropdown, see the first option" the reliable default
+        // everywhere in the app, not just for lists short enough to avoid
+        // triggering Radix's behavior at all.
+        ref={(node) => {
+          if (!node) return
+          requestAnimationFrame(() => { node.scrollTop = 0 })
+        }}
         className={cn(
           "p-1",
+          // Found 2026-08-25: h-[var(--radix-select-trigger-height)] here
+          // (copied from the shadcn/ui template) locks the Viewport's
+          // height to the TRIGGER button's height — one row tall — instead
+          // of letting it size to the available popper space. That
+          // mismatch fights Radix's own internal scroll-position
+          // management (which re-syncs scrollTop against the highlighted
+          // item), so a real mouse-wheel scroll snaps back almost
+          // immediately — confirmed live: forcing scrollTop directly only
+          // ever stuck at 4px out of 34px of real overflow. Any Select
+          // with more options than fit in one row-height's worth of space
+          // (e.g. a 12-class dropdown) had items below the fold that a
+          // mouse-wheel user couldn't actually reach. Width constraint
+          // (matching the trigger's width) is the only part of this line
+          // that was ever needed — kept, height dropped.
           position === "popper" &&
-            "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]",
+            "w-full min-w-[var(--radix-select-trigger-width)]",
         )}
       >
         {children}

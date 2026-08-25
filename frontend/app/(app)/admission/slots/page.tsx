@@ -469,8 +469,13 @@ function BookingsModal({ slotId, slotTitle, onClose }: { slotId: string; slotTit
                     className="w-16 h-8 text-sm"
                     placeholder="—"
                     onBlur={(e) => {
+                      // Found live 2026-08-25: v undefined !== b.marks_obtained
+                      // null was true, so blurring an already-empty field (no
+                      // typing at all) still fired an update — normalizing
+                      // both to null before comparing is what "did this
+                      // actually change" should have meant all along.
                       const v = e.target.value === '' ? undefined : Number(e.target.value)
-                      if (v !== b.marks_obtained) updateMutation.mutate({ id: b.id, marks_obtained: v as any })
+                      if ((v ?? null) !== (b.marks_obtained ?? null)) updateMutation.mutate({ id: b.id, marks_obtained: v as any })
                     }}
                   />
                   <span className="text-xs text-muted-foreground">/</span>
@@ -480,7 +485,7 @@ function BookingsModal({ slotId, slotTitle, onClose }: { slotId: string; slotTit
                     placeholder="max"
                     onBlur={(e) => {
                       const v = e.target.value === '' ? undefined : Number(e.target.value)
-                      if (v !== b.max_marks) updateMutation.mutate({ id: b.id, max_marks: v as any })
+                      if ((v ?? null) !== (b.max_marks ?? null)) updateMutation.mutate({ id: b.id, max_marks: v as any })
                     }}
                   />
                   {b.is_pass != null && (

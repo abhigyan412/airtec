@@ -34,6 +34,7 @@ import notificationsRoutes from './modules/notifications/routes'
 import teacherRoutes from './modules/teacher/routes'
 import principalRoutes from './modules/principal/routes'
 import timetableRoutes from './modules/timetable/routes'
+import publicRoutes from './modules/public/routes'
 import {
   runAbsenceDetectionSweep, runAcknowledgementSweep, runMorningSweep, runUnfilledSweep, runWorkloadSweep,
 } from './modules/timetable/services/escalation'
@@ -125,9 +126,17 @@ app.use('/api/auth/register-school', credentialLimiter)
 
 app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 300 }))
 
+// Unauthenticated by design (the QR admission form) — its own, stricter
+// limiter on top of the general one above, same layered pattern as
+// credentialLimiter on /api/auth/login. Generous enough that one wifi
+// network at an open house doesn't lock itself out (see the comment on
+// credentialLimiter), but a real throttle on scripted abuse.
+app.use('/api/public', rateLimit({ windowMs: 15 * 60 * 1000, max: 15 }))
+
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'airtec-api' }))
 
 app.use('/api/auth', authRoutes)
+app.use('/api/public', publicRoutes)
 app.use('/api/students', sisRoutes)
 app.use('/api/admission', admissionRoutes)
 app.use('/api/fees', feeRoutes)

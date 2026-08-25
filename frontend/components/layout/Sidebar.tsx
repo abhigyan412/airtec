@@ -9,7 +9,7 @@ import {
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
   Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
-  SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2,
+  SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -20,6 +20,10 @@ interface NavItem {
   href?: string
   icon: React.ComponentType<{ className?: string }>
   children?: NavItem[]
+  /** Short pulsing pill shown after the label, e.g. to draw attention to
+   *  a newly-added surface reachable from this item (Cycles -> the
+   *  Admission QR & Link card). Purely decorative, not a count or status. */
+  badge?: string
   /** Single permission code that gates this leaf. */
   permission?: string
   /** Visible if the user holds ANY of these codes. */
@@ -77,9 +81,10 @@ const NAV: NavItem[] = [
       { label: 'Pipeline', href: '/admission', icon: UserPlus, permission: 'admission.view' },
       { label: 'Applications', href: '/admission/applications', icon: ClipboardList, permission: 'admission.view' },
       { label: 'Seats', href: '/admission/seats', icon: LayoutGrid, permission: 'admission.view' },
-      { label: 'Cycles', href: '/admission/cycles', icon: CalendarClock, permission: 'admission.view' },
+      { label: 'Cycles', href: '/admission/cycles', icon: CalendarClock, permission: 'admission.view', badge: 'QR' },
       { label: 'Test / Interview Slots', href: '/admission/slots', icon: ClipboardList, permission: 'admission.view' },
       { label: 'Document Requirements', href: '/admission/document-requirements', icon: FileText, permission: 'admission.view' },
+      { label: 'Settings', href: '/admission/settings', icon: SettingsIcon, permission: 'admission.view' },
     ],
   },
   {
@@ -182,11 +187,18 @@ const NAV: NavItem[] = [
 // Footer settings group — Classes & Calendar historically gated to principal /
 // school-admin; keep that gate.
 const SETTINGS: NavItem[] = [
-  { label: 'Team & Settings', href: '/settings/team', icon: SettingsIcon, requireAny: ['team.view', 'team.invite', 'role.manage'], module: 'settings' },
-  { label: 'Classes & Sections', href: '/settings/classes', icon: School, roles: ['principal'], module: 'settings' },
-  { label: 'Class Teachers', href: '/settings/teaching-assignments', icon: GraduationCap, roles: ['principal'], module: 'settings' },
-  // Holidays and the weekly-off pattern, which the timetable reads.
-  { label: 'Academic Calendar', href: '/settings/calendar', icon: CalendarDays, roles: ['principal', 'teacher'], module: 'settings' },
+  {
+    label: 'Organizational Settings',
+    icon: Building2,
+    module: 'settings',
+    children: [
+      { label: 'Team & Settings', href: '/settings/team', icon: SettingsIcon, requireAny: ['team.view', 'team.invite', 'role.manage'], badge: 'Accounts' },
+      { label: 'Classes & Sections', href: '/settings/classes', icon: School, roles: ['principal'] },
+      { label: 'Class Teachers', href: '/settings/teaching-assignments', icon: GraduationCap, roles: ['principal'] },
+      // Holidays and the weekly-off pattern, which the timetable reads.
+      { label: 'Academic Calendar', href: '/settings/calendar', icon: CalendarDays, roles: ['principal', 'teacher'] },
+    ],
+  },
 ]
 
 interface SidebarProps {
@@ -264,9 +276,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
   const getActiveGroup = React.useCallback(
     (path: string) =>
-      NAV.filter((i) => i.children?.some((c) => c.href && (path === c.href.split('?')[0] || path.startsWith(c.href.split('?')[0] + '/')))).map(
-        (i) => i.label,
-      ),
+      [...NAV, ...SETTINGS]
+        .filter((i) => i.children?.some((c) => c.href && (path === c.href.split('?')[0] || path.startsWith(c.href.split('?')[0] + '/'))))
+        .map((i) => i.label),
     [],
   )
 
@@ -360,17 +372,22 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
         {/* Settings footer */}
         <div className="shrink-0 space-y-0.5 border-t border-sidebar-border p-3">
-          {SETTINGS.filter(allowed).map((item) => (
-            <NavEntry
-              key={item.label}
-              item={item}
-              expanded={expanded}
-              onToggle={toggle}
-              isActive={isActive}
-              isLocked={locked}
-              onClose={onClose}
-            />
-          ))}
+          {SETTINGS.map((item) => {
+            if (!allowed(item)) return null
+            const children = item.children?.filter(allowed)
+            if (item.children && !children?.length) return null
+            return (
+              <NavEntry
+                key={item.label}
+                item={{ ...item, children }}
+                expanded={expanded}
+                onToggle={toggle}
+                isActive={isActive}
+                isLocked={locked}
+                onClose={onClose}
+              />
+            )
+          })}
         </div>
       </aside>
     </>
@@ -480,7 +497,12 @@ function NavEntry({
                 )}
               >
                 <ChildIcon className={cn('shrink-0', child.indent ? 'h-3 w-3' : 'h-3.5 w-3.5')} />
-                <span>{child.label}</span>
+                <span className="flex-1">{child.label}</span>
+                {child.badge && (
+                  <span className="flex shrink-0 items-center rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-primary animate-pulse">
+                    {child.badge}
+                  </span>
+                )}
               </Link>
             )
           })}

@@ -235,8 +235,8 @@ export const admissionApi = {
       api.post('/admission/inquiries', data).then(r => r.data),
     update: (id: string, data: any) =>
       api.patch(`/admission/inquiries/${id}`, data).then(r => r.data),
-    stats: () =>
-      api.get('/admission/inquiries/stats').then(r => r.data),
+    stats: (params?: { academic_year_id?: string }) =>
+      api.get('/admission/inquiries/stats', { params }).then(r => r.data),
     addFollowUp: (id: string, data: any) =>
       api.post(`/admission/inquiries/${id}/follow-ups`, data).then(r => r.data),
     convertToApplication: (id: string) =>
@@ -283,6 +283,18 @@ export const admissionApi = {
   classDisplayStyle: {
     get: () => api.get('/admission/class-display-style').then(r => r.data),
     update: (style: 'numeric' | 'roman') => api.patch('/admission/class-display-style', { style }).then(r => r.data),
+  },
+
+  settings: {
+    get: () => api.get('/admission/admission-settings').then(r => r.data),
+    update: (data: Partial<{
+      admission_fee_hold_days: number
+      admission_fee_hold_grace_days: number
+      admission_waitlist_response_days: number
+      admission_stage_aging_days: number
+      admission_occupancy_warning_percent: number
+      admission_occupancy_warning_days: number
+    }>) => api.patch('/admission/admission-settings', data).then(r => r.data),
   },
 
   cycles: {

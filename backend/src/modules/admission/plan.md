@@ -14,6 +14,12 @@
 > slot scheduling — all built and verified against the live database. This plan is the
 > next layer on top of that baseline, not a restart.
 >
+> **This file is now mostly history, not a forward plan** — 9 of its 10 phases below
+> are ✅ shipped. For a single, current view of what's actually left to build (blocked
+> phases, deferred fast-follows, and the gaps a 2026-08-25 competitive comparison
+> surfaced that were never in this plan's original scope), see
+> `remaining-work-plan.md` in this same folder.
+>
 > (That file used to be named `PLAN.md`. It was renamed after an earlier version of
 > this document was accidentally written to `plan.md` in the same directory — on this
 > Windows filesystem, `PLAN.md` and `plan.md` resolve to the same file, so the write
@@ -999,6 +1005,139 @@ restored.
 
 ---
 
+## Admission Cycle wired into the actual creation flow (2026-08-25)
+
+User asked for a walkthrough of the full admission flow and, independently, flagged
+that Admission Cycle "seems to not be usable anywhere." Investigated and confirmed:
+it wasn't a visibility problem, the feature was structurally dead. `checkAdmissionCycleOpen()`
+(`admission/routes.ts`) starts with `if (!academicYearId) return null` — unrestricted
+by design when no year is given — but neither "New Inquiry" nor "New Application"
+had an academic-year field at all, so `academic_year_id` was never sent by the real
+UI. The Cycles settings page was a fully working CRUD screen writing to a table the
+rest of the module never actually read from in practice. Confirmed via a live test:
+closing the current year's cycle had zero effect on inquiry creation until this fix.
+
+Asked the user whether to wire up the existing per-year design or simplify it to a
+single school-wide toggle (matching how the seat ledger and everything else in this
+module already treats classes as year-agnostic — a real inconsistency worth
+surfacing). User chose to wire up what's already built.
+
+**Frontend** (`admission/page.tsx`): both `NewInquiryModal` and `NewApplicationModal`
+gained an "Academic Year" field, defaulting to the school's current year
+(`academic_years.is_current`) the moment years load, still freely changeable. New
+`AdmissionCycleStatus` component — a banner shown above the Pipeline/Applications
+tabs (visible regardless of which tab is active, since a cycle affects both creation
+flows) reading the current year's cycle: green "Admission open... closes X",
+blue "not yet open... opens X", or red "closed... closed X". Silent (renders
+nothing) when no cycle is configured for the current year, matching the backend's
+own "absence means unrestricted" convention — nothing to flag in the default case.
+
+**Backend**: no changes — `academic_year_id` was already accepted by both create
+endpoints; it just needed something to actually send it.
+
+✅ shipped 2026-08-25, verified live: temporarily closed the real current-year cycle
+(closes_at backdated), confirmed `POST /inquiries` now genuinely rejects with
+"Admission for this academic year closed on 8/1/2026." — reverted the cycle to its
+original window immediately after and confirmed creation works again. Test inquiry
+row removed.
+
+---
+
+## Public QR admission inquiry form (2026-08-25)
+
+The one piece missing from the whole funnel: everything from Pipeline stage onward
+required a staff member to type an inquiry in by hand. Scoped originally in
+`admission-history.md` Phase 3 ("Shareable QR / public inquiry link") and never
+built. Built now: a school gets one QR code and link (`/apply/:schoolId`); a parent
+scans it, fills a public form with no login, and it creates a real
+`admission_inquiries` row at `status: 'new'` — every workflow already built this
+session (follow-up, documents, entrance test, approval, fee, admission) picks it up
+from there exactly as if a counselor had typed it in. Not a new funnel, the missing
+first step of the existing one.
+
+Two decisions made with the user before building: one QR per school, not per
+academic year (the currently-open cycle decides whether the form accepts
+submissions, same as it already gates the authenticated New Inquiry/New Application
+forms); and spam protection via a honeypot field + rate limiting rather than a
+CAPTCHA provider (no provider is set up anywhere in this codebase — picking one
+would block this the same way the SMS/WhatsApp provider blocks Phase 8).
+
+**Backend**: new `backend/src/modules/public/routes.ts` — the first genuinely
+public, unauthenticated *write* surface in this app (mounted at `/api/public`, no
+`authenticate` call anywhere in the file; the admission router couldn't host this
+directly since it applies `authenticate` before any route is declared).
+`GET /schools/:schoolId/admission-info` returns class list + cycle status in one
+call, so the form can show "admissions closed" up front rather than only
+discovering it on submit. `POST /schools/:schoolId/inquiries` validates the school
+and class both exist and belong together, checks a honeypot field (filled = fake
+success, nothing written, so a bot's script has nothing to learn from), reuses
+`checkAdmissionCycleOpen` (exported from `admission/routes.ts` for this — the only
+change to that file), find-or-creates the school's `"QR Code"` `inquiry_sources`
+row rather than requiring a seed backfill, and inserts with `status: 'new'`,
+`counselor_id: null`, `academic_year_id` forced to the current year — never
+client-supplied. Own rate limiter in `index.ts` (15/15min per IP, layered on the
+general 300/min like `credentialLimiter` already is for login).
+
+**Frontend**: new `frontend/app/apply/[schoolId]/page.tsx` — outside `(app)/`,
+therefore public with zero extra wiring (confirmed: the only auth redirect in this
+app lives inside `(app)/layout.tsx`, scoped to that route group). Styled after the
+staff login page's two-panel pattern rather than a bare form. Shows the cycle
+state up front; a closed/not-yet-open cycle replaces the form with a plain
+explanation instead of letting someone fill it out only to be rejected at the end.
+New `frontend/lib/publicApi.ts` — a deliberately separate axios instance from the
+authenticated `api` client, so a staff member who opens this link in the same
+browser they're signed in on never risks a stray bearer token or an accidental
+logout. `frontend/app/(app)/admission/cycles/page.tsx` gained an "Admission QR &
+Link" card — QR rendered client-side via the new `qrcode.react` dependency
+directly from the plain URL, no backend image generation, placed here specifically
+because the QR's usefulness is tied to whether a cycle is open, same page that
+already manages that.
+
+✅ shipped 2026-08-25, verified live end to end against the real school: confirmed
+the public info endpoint reflects real class list and the school's actual
+(currently closed) cycle state; confirmed submission is correctly rejected while
+genuinely closed; temporarily opened the cycle, submitted a real inquiry, confirmed
+it landed on the live Pipeline at `status: 'new'` with source `"QR Code"`
+(auto-created); confirmed the honeypot path returns a fake success and writes
+nothing; confirmed a class_id from outside the school is rejected. Cycle restored
+to its exact original window and the test inquiry removed afterward — the
+auto-created "QR Code" source was left in place, since that's real feature
+infrastructure, not test debris.
+
+---
+
+## Academic year filter on Pipeline and Applications (2026-08-25)
+
+User asked directly whether the admission module could be viewed session-wise —
+answer at the time was no: every inquiry/application has carried `academic_year_id`
+since the schema was written, but no list view exposed it and neither `GET
+/inquiries` nor `GET /applications` even accepted it as a query param. Every
+session's activity showed up mixed together, distinguishable only by whatever date
+range a user happened to filter by.
+
+**Backend**: both endpoints now accept `academic_year_id`, filtered with the same
+`.eq()` pattern as every other filter already on these routes. No schema change —
+the column was already there and already populated (more reliably so since the
+cycle-wiring fix).
+
+**Frontend**: added the same Academic Year `<Select>` (populated from
+`academicYearsApi.list()`) to all three list surfaces that show inquiries or
+applications — the Pipeline tab, the Applications tab (both inside
+`admission/page.tsx`), and the standalone `/admission/applications` page. All three
+default to the school's current academic year on first load (a `useEffect` guarded
+on the filter still being unset, so it never overrides a year the user has since
+picked or deliberately cleared) rather than showing every session mixed — "All
+Years" is still one click away via the same select, and remains what "Clear
+filters" resets to, matching how every other filter on these pages already behaves.
+
+✅ shipped 2026-08-25, verified live: confirmed `GET /inquiries` and `GET
+/applications` correctly return a smaller, real subset of rows when
+`academic_year_id` is passed (46 of 48 inquiries and 36 of 42 applications belong
+to the current year; the remainder have no year set, which the filter correctly
+excludes).
+
+---
+
 ## Post-Phase-9 bug fixes (2026-08-21)
 
 Three real bugs found from live user testing, not part of the phased plan — recorded
@@ -1123,3 +1262,530 @@ they touch the same schema/routes.
    `classLabel()` there is a separate, larger follow-up (dozens of files across
    modules this session didn't build), not silently done. ✅ shipped 2026-08-20,
    verified live via direct GET/PATCH.
+
+## remaining-work-plan.md Section A4 fast-follows (2026-08-25)
+
+Started working through `remaining-work-plan.md` in its own recommended order,
+beginning with Section A4 (small, unblocked fast-follows found during earlier
+phases but deliberately deferred).
+
+**Config-table audit columns.** Migration
+`20260830220000_admission_config_audit_columns.sql`: `created_by`/`updated_by` on
+`admission_cycles`, `admission_slots`, `admission_class_settings`; `created_by`
+only on `admission_document_requirements` (confirmed it has no UPDATE path
+anywhere in the codebase, only insert/delete). Wired into every write site:
+`POST /admission-cycles` and `PATCH /class-settings/:classId` are both upserts,
+so each now pre-fetches the existing row's `created_by` first and preserves it
+rather than overwriting it with whoever happens to save next; `POST
+/admission-slots`, `PATCH /admission-slots/:id`, and `POST
+/document-requirements` set theirs directly on insert/update. ✅ shipped
+2026-08-25, verified live: patched a real `admission_class_settings` row through
+the actual endpoint, confirmed `created_by`/`updated_by` populated correctly.
+
+**Admission Process Settings.** New combined `GET`/`PATCH
+/admission/admission-settings` (School Admin to write, `admission.view` to read)
+covering the six school-level tuning knobs that have existed since Phases 3/4/9
+shipped but had no edit surface: fee-hold duration/grace, waitlist response
+window, stage-aging alert threshold, occupancy-warning threshold/lead-time — all
+previously DB-edit only. New `/admission/settings` tab (Sidebar + the admission
+tab bar, kept in sync per both files' own cross-reference comments) — a plain
+form, School Admin can edit, everyone else sees the values read-only since they
+explain behavior visible elsewhere in the module. ✅ shipped 2026-08-25, verified
+live: changed `admission_stage_aging_days` via the real endpoint, confirmed it
+persisted, reverted to its original value.
+
+**Stale seeded-application status backfill — and a real bug caught mid-fix.**
+Ran the `backfill-status.ts` script flagged in the 2026-08-21 bug-fix entry above
+(previously blocked by this session's write-permission settings) against the
+real local dev database. It fixed 6 rows, not the 4 originally counted — but
+**the script itself was stale**: it predates the 2026-08-21 fee-sequencing
+rework and still mapped a `workflow_instances.status = 'approved'` straight to
+`admission_applications.status = 'admitted'`, which was correct before that
+rework but is wrong now — under the current model, an approved workflow means
+`fee_pending` until the fee is actually collected (which is also what creates
+the student record). Running it blind mis-set 4 real applications (Raghav
+Sharma, Aarav Sharma, Aditya Bansal, Navya Singh) to `admitted` with
+`fee_paid_at` still null and no student record — a genuine data-integrity break,
+caught immediately by checking the 6 changed rows against `fee_paid_at` and a
+matching `students` row before moving on. Corrected all 4 back to `fee_pending`
+(their real, unpaid state) via a second targeted script. The other 2 rows
+(Ishita Malhotra, Nikhil Chauhan — `pending` → `rejected`, matching a genuinely
+rejected workflow) needed no fee/student and were correct as the script left
+them. **Lesson applied going forward:** don't re-run a leftover scratchpad
+script against real data without re-checking its assumptions against whatever
+shipped since it was written. ✅ shipped 2026-08-25, net state verified correct
+against `fee_paid_at` and `students` for all 6 rows.
+
+**Dead status enum cleanup — investigated, deliberately NOT done.** This
+document's "Also flagged for this pass: legacy cleanup" section (above) asserted
+`counselor_approved`/`documents_verified`/`fee_paid`/`principal_approved` were
+dead. Checked directly against live data before touching the constraint:
+**they are not dead** — 17 real rows still carry these four values (4 + 4 + 4 +
+5). Given the backfill incident immediately above, did not attempt to
+remap these to current-model statuses via the same kind of blind status
+inference that just had to be caught and reversed — that's a real, careful
+per-row migration (checking each one's actual `fee_paid_at`/student-record
+state, the same way the backfill fix above did), not a constraint cleanup, and
+deserves its own pass. `remaining-work-plan.md` updated to reflect this finding
+instead of the stale "confirmed dead" claim.
+
+**Not started this pass:** rolling `classLabel()`/`class_display_style` out
+beyond the admission module (SIS/Fee/Exam/Timetable/HR) — confirmed still
+admission-only, genuinely the size of its own follow-up as already flagged, not
+attempted alongside these smaller items (see the item 3 continuation directly
+above this section, which already flagged the same gap on 2026-08-20).
+
+---
+
+## Lead-source conversion funnel (remaining-work-plan.md Section B4, 2026-08-25)
+
+The competitive comparison named this directly: source is recorded on every
+inquiry (`inquiry_sources`), but nothing ever turned it into a conversion
+report — `GET /inquiries/stats`'s `by_source` was a bare count, no sense of how
+far each source's leads actually got.
+
+**Backend:** `GET /inquiries/stats` gained an optional `academic_year_id` filter
+(same convention as every other list endpoint this module already filters by
+year) applied to both the status-count queries and the source query. The source
+query now also selects each row's own `status`, so per-source
+`reached_application` (status at or past `documents_submitted` — reusing
+`admission_inquiries.status`, which the 2026-08-21 fee-sequencing follow-up fix
+already keeps mirrored from the linked application) and `admitted` counts, plus
+a per-source `conversion_rate`, are computed from the same single query rather
+than a second round trip.
+
+**Frontend:** `PipelineCharts.tsx` gained a new "Conversion by Source" table
+(Source / Inquiries / Reached Application / Admitted / Conversion) below the
+existing pipeline and source-volume charts — the existing bar chart already
+answers "where are leads coming from," this answers "which of those sources are
+actually worth the money." Wired to the admission page's existing `yearFilter`
+state (already there from the earlier academic-year-filter work), so the
+funnel scopes to whichever year is selected.
+
+✅ shipped 2026-08-25, verified live against real data: unfiltered totalled 44
+inquiries across 9 sources (including the real "QR Code" source from the public
+form work, sitting at 1 inquiry / 0% converted so far); filtering to the current
+academic year correctly narrowed to 42/8; a bogus academic year id correctly
+returned 0 rather than erroring.
+
+---
+
+## RBAC Finalization (remaining-work-plan.md Section A1, 2026-08-25)
+
+Plan.md's own Phase 10 was blocked in name only — the base-role-mapping
+decision it depended on was resolved back on 2026-08-20 (new titles map onto
+RBAC v2, not the fixed 8-value `users.role` enum). What was actually missing
+was just the work of seeding them.
+
+**Five roles added to `DEFAULT_ROLE_PERMISSIONS`** (`rbac/seed.ts`): Director
+(identical permission set to Principal, deliberately — a spread of the same
+arrays, not a hand-copied approximation that could drift), Admission Officer
+(the clean version of Counselor's admission scope, without Counselor's legacy
+carryover grants), Exam Coordinator and Examiner (both scoped to admission's
+entrance-test flow specifically — `student.view`/`admission.view`/
+`admission.edit` — not the separate main Examinations module, which already
+has its own "Exam Controller"), and IT Admin (`team.*`/`role.*`/
+`settings.manage` only — deliberately zero student/admission/fee/exam data
+access). Full rationale for each lives as inline comments in `seed.ts` next to
+the entries themselves, matching every other role in that file.
+
+**Backfilled live, not just added to the code:** `seedDefaultRoles()` is
+additive and idempotent by design (only creates roles missing for a given
+school), so running it against the real local dev school picked up all 5
+immediately — verified via `GET /rbac/roles`, all 22 roles present, each new
+role's `role_permissions_v2` mappings matching the intended set exactly.
+
+**No new UI needed.** `decisions.md` had flagged that mapping new titles onto
+RBAC v2 "needs to be an explicit, visible choice in the invite/assign-role UI,
+not buried in a seed script." Checked before building anything: Settings →
+Team already has exactly this — a per-user "Manage Roles" modal
+(`RoleManagerModal`, `frontend/app/(app)/settings/team/page.tsx`) that shows
+the user's locked primary role alongside every RBAC v2 role as an
+Assign/Remove list, fetched generically from `GET /rbac/roles`. The five new
+titles appear there automatically now that they exist — the UI itself needed
+no changes.
+
+**Phase 6c's placeholder role chain repointed.** `ensureEntranceResultWorkflowDefinition`
+now targets Examiner (step 1, "Confirm Result") instead of the Counselor
+placeholder 6c shipped with, matching plan.md's original intent more closely.
+Kept the existing 2-step shape (Examiner → Principal) rather than expanding to
+the full "Examiner → Review → Principal Approval → Publish" chain the original
+settings default described — that would be a real workflow-structure change,
+not a role repoint, and wasn't asked for. Since `ensureMultiStepWorkflow`
+no-ops once a school already has a definition by this name, this only affects
+schools seeded fresh from now on — checked the real local dev school directly
+first (one existing "Entrance Result Publishing" instance, already in a
+terminal `approved` state, so repointing its step's `role_id` going forward
+was safe) and updated that school's existing step 1 row directly via SQL,
+verified live: step 1 now correctly shows role "Examiner".
+
+---
+
+**Deliverable:** `rbac/permissions.md` — full matrix. Explicitly separates the
+**four** gating mechanisms this codebase actually uses (not the two
+`decisions.md` originally named): `requireRole()` (28 call sites, listed
+individually), `requirePermissionV2()` (240 call sites, the dominant
+mechanism), the `NON_STAFF_ROLES` own-record exclusion (a filter, not a
+pass/fail gate), and workflow-engine `workflow_steps.role_id` membership (used
+by workflow-action routes that carry no `requirePermissionV2()` gate at all —
+exactly why seeding real Examiner mattered for 6c). Includes the exact,
+generated-not-guessed permission count for all 22 roles.
+
+Not attempted this pass, correctly out of scope: expanding Phase 6c's
+workflow beyond 2 steps, and repointing any *other* school's existing
+Entrance Result Publishing definition (there was only one to check against in
+local dev — a school seeded after this change ships gets the new role chain
+automatically; one seeded before it and never checked keeps the Counselor
+placeholder until someone repoints it the same way).
+
+**A second real bug caught while shipping this — `role_permissions_v2`'s
+1000-row ceiling.** Running `backend/src/modules/rbac/__tests__/seed.test.ts`
+after adding the 5 roles broke 5 of its 8 tests with
+`duplicate key value violates unique constraint
+role_permissions_v2_role_id_permission_id_key`. Root cause: `seedDefaultRoles()`'s
+guard against re-seeding an already-mapped role (`hasMappings`) queried
+`role_permissions_v2.select('role_id')` with **no scope and no pagination at
+all** — every row in the entire table, across every school. PostgREST caps an
+unscoped select at 1000 rows; the local dev database's `role_permissions_v2`
+sat at 900 rows before this pass, and adding 5 roles' worth of new mappings
+(both the live backfill into the real school and the test's own throwaway
+school) was enough to tip it over that line mid-test-run — at which point the
+query came back silently truncated, a role that genuinely had mappings looked
+unmapped, and the seed tried to insert its rows a second time. This was a
+latent bug already sitting in shipped code, not something introduced by
+adding roles — adding roles just happened to be what finally pushed the total
+row count past the threshold. Fixed by scoping the query to
+`.in('role_id', Object.values(roleIdByName))` — correct regardless of how
+large the table grows globally, not merely a higher limit that pushes the
+same failure mode further out. ✅ fixed 2026-08-25, verified: all 8 tests in
+`seed.test.ts` pass (previously 3/8), confirmed live against the real school
+that its 22 roles (including the new Examiner row) are still intact after the
+fix, and confirmed the test's own throwaway school was fully torn down with
+no orphaned rows left behind.
+
+**Two more findings while chasing that one down.** First: `weefwef`, a second
+real school already in this local dev database, had never been backfilled —
+`seedDefaultRoles()` is per-school and I'd only run it against the school I
+was testing against. Caught by `rbac-sync-invariant.test.ts`'s own "every
+school has all default roles seeded" check, which exists exactly to catch
+this class of drift. Backfilled both real schools directly (idempotent, safe
+to run any time). Second: with both schools backfilled, `role_permissions_v2`
+crossed 1000 total rows for the first time (confirmed live: 1010) —
+`rbac-sync-invariant.test.ts`'s own "no role sits at zero permissions" check
+had the identical unscoped-select bug as the one just fixed in `seed.ts`
+itself, except this one was no longer just a race — at 1010 rows it now
+truncates on every single run, permanently, not intermittently. Fixed the
+same way the codebase already solves this elsewhere: switched it to the
+existing `fetchAllRows()` helper (`shared/utils/helpers.ts`, already used by
+several other modules for exactly this) instead of a bare `.select()`. Also
+added the fixture-school exclusion this specific test was missing, matching
+the pattern the other three tests in the same file already use — confirmed
+that was the direct cause of the original flaky failure between the two test
+files. ✅ fixed 2026-08-25, verified: all 12 tests across both RBAC test files
+pass together, three runs in a row, no flakiness.
+
+---
+
+## Parent self-service status portal (remaining-work-plan.md Section B1, 2026-08-25)
+
+The gap named directly in the competitive comparison: a parent who submits
+the public QR inquiry form gets a reference number and nothing else — no way
+to check status or fill a document gap without calling the school.
+
+**Access model, per the plan's own recommendation:** a tokenized link, not a
+real parent account. The inquiry's own `id` doubles as the token — already a
+v4 UUID (122 bits of randomness), never previously disclosed (only the
+sequential, human-readable `inquiry_number` was ever shown), so reusing it
+avoids minting a second bearer token that would carry the exact same trust
+properties. Same "unguessable link, no login" model as a calendar invite or
+an exam hall-ticket link — a deliberate choice, not a placeholder for real
+parent auth (a full account is still the separate, bigger initiative
+`remaining-work-plan.md` scoped it as).
+
+**Backend** (`public/routes.ts`): `POST /schools/:schoolId/inquiries` now
+returns `inquiry_id` alongside `inquiry_number`. New `GET
+/schools/:schoolId/inquiries/:inquiryId/status` reads
+`admission_inquiries.status` directly — already the authoritative,
+mirrored-from-the-application status for the whole journey (the 2026-08-21
+fee-sequencing rework's follow-up fix keeps it that way), so this never
+needs to separately reconcile inquiry vs. application state. Looks up the
+linked application via `admission_applications.inquiry_id`; if one exists,
+computes the same document-requirements-vs-uploaded comparison
+`checkDocumentCompleteness()` uses internally, but returns it as a
+structured per-document list (not-uploaded / uploaded-pending-review /
+verified) instead of a pass/fail string. New `POST
+/schools/:schoolId/inquiries/:inquiryId/documents` lets a parent fill a gap —
+same base64-in-JSON upload pattern and `admission-documents` storage bucket
+as the authenticated `POST /applications/:id/documents`, deliberately not a
+second upload mechanism. Always lands `is_verified: false` — a parent
+uploading their own document is exactly the case verification exists to
+check. Blocked with a clear message if the inquiry hasn't converted to an
+application yet (nothing to attach a document to before that).
+
+**Frontend:** new `frontend/app/apply/[schoolId]/status/[inquiryId]/page.tsx`
+— public by the same mechanism as the form itself (outside `app/(app)/`).
+Shows the student name, a parent-friendly status label/description (mapped
+from the internal status enum — "Fee Pending" reads as "Approved! Please
+contact the school to complete the admission fee," not the raw internal
+value), and — once an application exists — a document checklist with
+inline upload per missing/unverified item. The form page's own success
+screen gained a "Check Application Status" link using the newly-returned
+`inquiry_id`.
+
+**A real, pre-existing bug found and fixed while wiring this up, unrelated to
+B1 itself:** the form's success handler read `res.data?.inquiry_number` —
+but `submitInquiry()`'s `.then(r => r.data)` already unwraps the axios
+response, and the backend returns a flat `{success, inquiry_number}` body
+with no nested `data` key. `res.data` was always `undefined`, so the
+reference-number confirmation this page's original build claimed to show
+("a clear success state with the returned inquiry number, not just a
+toast") never actually rendered — the earlier live verification confirmed
+the backend returned the right value, but evidently didn't specifically
+check the frontend displayed it. Fixed alongside adding `inquiry_id` to the
+same success-state object.
+
+✅ shipped 2026-08-25, verified live end-to-end against the real school:
+submitted a real public inquiry (confirmed `can_upload_documents: false`,
+empty checklist, since no application existed yet), converted it to an
+application via the authenticated endpoint, confirmed the status call now
+returned the configured `birth_certificate` requirement as
+`uploaded: false`, uploaded a real document through the new public
+endpoint, confirmed the status call flipped it to `uploaded: true,
+verified: false`, and confirmed the exact same document is visible on the
+authenticated admin side (`GET /applications/:id/documents`) with
+`uploaded_by: null` and `is_verified: false` — a real staff member can
+verify it exactly like any other upload. All test rows (storage file,
+document, application, inquiry) removed afterward; no seat-ledger effect
+ever occurred since the test application never reached approval.
+
+---
+
+## Parent-facing slot self-booking (remaining-work-plan.md Section B3, 2026-08-25)
+
+Slot booking (`admission_slots`/`admission_slot_bookings`) has always been
+staff-driven only — a counselor books a candidate in from the authenticated
+app. B3's own scoping note said this could ship narrower once B1 existed,
+since B1 already built exactly the "scoped, parent-reachable surface" B3 was
+waiting on — so this extends the same status page rather than adding a
+second public surface.
+
+**Backend** (`public/routes.ts`): new `GET
+/schools/:schoolId/inquiries/:inquiryId/slots` — strictly class-filtered,
+same as the staff-side booking dropdown (`GET
+/admission-slots?class_id=...`, from the "no cross-class booking mistakes"
+fix earlier this project) — a class-agnostic slot is never offered here
+either. Returns each future slot for the candidate's applying-for class with
+`full`/`already_booked` computed server-side. New `POST
+.../slots/:slotId/book` — reuses the exact same capacity-enforcement logic
+as the staff-side `POST /admission-slots/:id/book` (active-booking count vs.
+`capacity`, not just displayed) and the same entrance-exam status-advance
+side effect (never regresses an inquiry already further along). Added one
+thing the staff-side endpoint doesn't have: an explicit pre-check against a
+duplicate booking for the same inquiry/application on the same slot — there's
+no unique constraint to lean on (confirmed neither endpoint has one), and a
+parent accidentally double-booking themselves felt like a real enough case to
+guard explicitly here, even though the staff-side equivalent leaves the same
+gap unaddressed.
+
+**Frontend:** the status page (`/apply/[schoolId]/status/[inquiryId]`)
+gained an "Available Slots" section — each slot shows title, type, date/time,
+location, and a Book button that becomes "Booked" or "Full" once no longer
+actionable. Rendered unconditionally, not gated behind `can_upload_documents`
+like the document checklist above it — a slot can exist for a class from the
+moment an inquiry is created, before any application does.
+
+✅ shipped 2026-08-25, verified live end-to-end against the real school:
+created a real capacity-1 test slot for Class 11, confirmed a fresh test
+inquiry's slot list strictly returned only Class 11 slots (including the
+real pre-existing "Class 11 MCQ Test"), booked the test slot, confirmed a
+second booking attempt for the same inquiry was correctly rejected as a
+duplicate, confirmed the inquiry's own status advanced to `entrance_exam`,
+confirmed the slot then correctly showed `full: true`, and confirmed a
+*second*, different test inquiry was correctly rejected from booking the
+now-full slot. All test rows (bookings, slot, both test inquiries) removed
+afterward.
+
+---
+
+## Printable QR, three sizes (2026-08-25)
+
+User asked, from the Cycles page's Admission QR & Link card, for an option
+to print the QR at a few different physical sizes.
+
+**Three presets**, matching how a school actually puts a QR up rather than
+generic S/M/L labels: **Small — sheet of stickers** (12× 40mm QR codes on
+one A4 sheet, cuttable, for handing out one per parent visit or pasting
+around campus), **Medium — A5 flyer** (single 70mm QR with the school name
+and "Scan to apply" caption, sized for the front desk or a notice board),
+**Large — A4 poster** (single 130mm QR, big heading, for a standee at an
+event). A `Select` next to the existing Copy Link/Preview Form buttons picks
+the size; a new Print button calls `window.print()`.
+
+**Rendering approach, matching the Timetable module's established
+convention** (`timetable/block/PrintSheets.tsx`) rather than inventing a new
+one: a `hidden print:block` sheet with its own `@media print` CSS (`@page`
+size/margin, and the QR's physical dimensions set in real `mm` units on the
+SVG — it stays crisp at any size since it's vector, no separate
+high-resolution asset needed). The three sizes are three different CSS
+configurations of the same pattern, not three different components.
+
+**Two real, unglamorous print bugs found and fixed while verifying this live
+in an actual browser (Playwright, not just a code read):**
+
+1. **The rest of the page printed too, stacked above the QR sheet.**
+   Confirmed via a print-media screenshot: the sidebar/header were correctly
+   hidden (`AppShell.tsx` already handles that globally), but this page's
+   own chrome — the `PageHeader`, the on-screen QR card, and the Cycles list
+   below it — had no `print:hidden` of its own, and neither did the
+   admission module's shared tab bar (`admission/layout.tsx`), which wraps
+   every page in this module. Fixed both, following the exact pattern the
+   Timetable page already established for its own chrome — confirmed this
+   was a real, previously-unnoticed gap in that established convention
+   itself, not something specific to this new feature.
+2. **The printed sheet's background wasn't white.** The app shell's root
+   div carries `bg-background` and is never hidden for print (only its
+   Sidebar/Header *children* are) — a bare `body { background: #fff }`
+   override doesn't paint over a foreground div's own background, so the
+   printed sheet inherited the app's normal light-lavender theme color.
+   Fixed by setting the background explicitly on the printable elements
+   themselves, not just `body`. Also found mid-fix: `height: 100%` on the
+   centered single-QR layout had nothing to resolve against (no unbroken
+   chain of resolved heights from `html` down through Next.js's wrapper
+   divs to the element), so vertical centering silently did nothing —
+   switched to `position: fixed; inset: 0`, which centers on the print page
+   box regardless of ancestor heights.
+
+✅ shipped 2026-08-25, verified live in a real browser via Playwright
+(logged in as the real school, `page.emulateMedia({ media: 'print' })`,
+screenshotted all three sizes): confirmed page chrome no longer leaks into
+print, confirmed all three presets render at the correct relative sizes with
+a clean white background and (for medium/large) the QR properly centered,
+and confirmed the small preset's 12-sticker grid is class-agnostic and
+correctly repeats the school name under each one. (One non-issue ruled out
+during verification: the sticker caption briefly appeared multi-colored in
+a screenshot — checked its computed style directly, confirmed `rgb(0,0,0)`;
+that was Chromium's own spell-check underlining on "Delhi"/"Lucknow"
+rendering oddly at 7pt in an emulated print capture, not a real styling bug,
+and spell-check decoration never appears on actual printed output.)
+
+---
+
+## "Cannot coerce the result to a single JSON object" on marks entry (2026-08-25)
+
+User hit this real, pre-existing bug live on the Slots page's Bookings modal
+(entering marks for "Aarav Kapoor," Class 3 Entrance Test) and asked what it
+was. Root cause chain, confirmed by direct reproduction against the real
+backend, not guessed:
+
+`BookingsModal`'s marks inputs (`slots/page.tsx`) fire their update
+`onBlur`, guarded by `if (v !== b.marks_obtained)` — but `v` is `undefined`
+when the field is empty, and `b.marks_obtained` is `null` from the database,
+and `undefined !== null` is `true` in JS. Blurring an already-empty field
+(clicking in and back out, or tabbing through, with nothing typed) fired an
+update anyway. `updateMutation.mutate({ id, marks_obtained: undefined })`
+reaches axios, which `JSON.stringify`s the payload — and `JSON.stringify`
+silently drops keys whose value is `undefined`, so the actual HTTP body sent
+was `{}`. On the backend, `UpdateBookingSchema.parse({})` succeeds (every
+field is optional), so `update` ends up `{}` too — and
+`.update({}).eq(...).eq(...).select().single()` is a no-op UPDATE that
+returns zero rows from its `RETURNING` clause, which is exactly the case
+`.single()` throws Postgres's own "Cannot coerce the result to a single JSON
+object" for. A real, confusing database-flavored error surfacing for what
+was, from the user's side, a no-op.
+
+**Fixed in both places, not just one:** the real behavioral fix is the
+frontend no longer firing a pointless request — both marks inputs now
+compare `(v ?? null) !== (b.field ?? null)`, treating "still empty" as no
+change. Backend also hardened independently (same "don't trust every caller
+to get this right" reasoning as the rest of this session's route-level
+validation): `PATCH /admission-slot-bookings/:id` now checks
+`Object.keys(update).length === 0` before touching the database and returns
+a plain `400 "Nothing to update"` instead of ever reaching `.single()` on an
+empty patch.
+
+✅ fixed 2026-08-25, verified live against the real booking row the user hit
+this on: reproduced the exact failure with a raw empty-body PATCH first
+(confirmed the same Postgres error), then confirmed the fix returns
+`"Nothing to update"` instead, and confirmed a real marks update
+(`marks_obtained: 0`, matching this booking's actual already-saved value)
+still succeeds normally — no behavior change for genuine updates, only the
+no-op case.
+
+---
+
+## Class dropdown scroll bug + expanded document types (2026-08-25)
+
+User reported the class-selection dropdown on the Document Requirements
+page "misbehaving" and asked for more document types.
+
+**The dropdown bug, found by driving a real browser (Playwright), not by
+reading the code.** Selecting a class visually and via keyboard worked
+fine; the actual complaint only showed up trying to reach items below the
+fold with the mouse wheel — scrolling appeared to do nothing. Traced it to
+`components/ui/select.tsx`'s `SelectContent`: the Viewport's className
+locked its height to `h-[var(--radix-select-trigger-height)]` — the
+*trigger button's* height (one row), copied in from the shadcn/ui template.
+Confirmed live: forcing `scrollTop` directly on the real viewport element
+only ever stuck at 4px out of 34px of actual overflow — that CSS lock fights
+Radix's own internal scroll-position management (which re-syncs scrollTop
+against whichever item is highlighted), so a real wheel-scroll snapped back
+almost immediately. This is a **shared component**, not page-specific — any
+Select in the app with enough options to overflow one row-height of visible
+space had the same problem; Document Requirements' 12-class list just
+happened to be long enough to surface it. Fixed by dropping the height class
+(the width-matching part of that line was the only part ever needed) —
+verified live: a real mouse-wheel scroll over the open listbox now correctly
+scrolls from Class 1 through Class 12, and a short list elsewhere in the app
+(Pipeline tab's status filter, 10 items) still renders correctly, confirming
+the fix doesn't regress lists that already fit without scrolling.
+
+**Document types expanded from 7 to 15**, and — found while making the
+change — this vocabulary was independently hand-duplicated in **three**
+places (`document-requirements/page.tsx`'s `DOC_TYPES`,
+`applications/[id]/page.tsx`'s own separate `DOC_TYPES`, and the new public
+status page's `DOC_LABELS`), all still in sync with each other by luck, not
+by construction. Consolidated into one new file,
+`frontend/lib/admissionDocumentTypes.ts` (`ADMISSION_DOC_TYPES` array +
+`ADMISSION_DOC_LABELS` lookup, generated from it), and pointed all three
+call sites at it — confirmed nothing already imported the old exported
+`DOC_TYPES` from `document-requirements/page.tsx`, so this was safe to do
+without a wider search-and-replace. The public status page's copy was
+originally hand-duplicated on purpose (documented reasoning: "this page must
+not pull in the authenticated app tree's other imports") — re-checked that
+concern against the new shared file specifically, confirmed it's pure data
+with zero app-tree coupling, so the original reasoning no longer applies and
+importing it is safe. New types added, chosen against what Indian K-12
+admissions actually ask for and what this codebase's own RTE/quota concepts
+(`admission/decisions.md`) need proof of: migration certificate, character
+certificate, medical/immunization certificate, parent's Aadhaar (distinct
+from the student's), caste certificate, income certificate, domicile
+certificate, and a CWSN disability certificate. No backend change needed —
+confirmed `document_type` has always been free text with no CHECK
+constraint or enum validation anywhere in the admission routes, so this is
+a pure frontend vocabulary expansion.
+
+✅ shipped 2026-08-25, verified live: selected a real class, confirmed all
+15 document-type toggle buttons render with the correct expanded labels, and
+confirmed the same request also exercised the scroll fix (needed to scroll
+down within the class list to select classes further down before this fix
+would have worked reliably by mouse).
+
+**Follow-up, same day — the scroll fix above wasn't the whole story.** User
+reported the dropdown was "still" not showing all classes after a hard
+refresh, specifically: "classes from the top are cut off." Reproduced live:
+selected Class 12 (the last item), closed and reopened the dropdown — Radix
+auto-scrolls the popup to keep the *currently selected* item in view on
+open, which for a late-list selection pushes Class 1 (and part of Class 2)
+above the fold, with only a small scroll-up chevron hinting there's more.
+Confirmed scrolling up did reveal Class 1 (the data and the earlier fix were
+both fine), but nothing about the closed state signals a user should. Fixed
+in the same shared `SelectContent`: the Viewport now force-resets
+`scrollTop` to `0` on every open, via a ref callback deferred one
+`requestAnimationFrame` so it runs after Radix's own auto-scroll rather than
+racing it. Applies everywhere in the app (confirmed no `Select` anywhere
+uses `position="item-aligned"`, the one mode this wouldn't apply to) — "open
+a dropdown, see the first option" is now the reliable default, not just for
+lists short enough to never trigger Radix's behavior in the first place.
+✅ fixed 2026-08-25, verified live with the exact reproduction: selected
+Class 12, reopened, confirmed `scrollTop: 0` and Class 1 visible immediately
+with no scroll-up chevron shown.

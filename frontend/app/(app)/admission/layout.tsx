@@ -1,7 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { UserPlus, ClipboardList, LayoutGrid, CalendarClock, FileText } from 'lucide-react'
+import { UserPlus, ClipboardList, LayoutGrid, CalendarClock, FileText, Settings } from 'lucide-react'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
 
@@ -17,6 +17,7 @@ const TABS = [
   { href: '/admission/cycles', label: 'Cycles', icon: CalendarClock, anyOf: ['admission.view'] },
   { href: '/admission/slots', label: 'Slots', icon: ClipboardList, anyOf: ['admission.view'] },
   { href: '/admission/document-requirements', label: 'Documents', icon: FileText, anyOf: ['admission.view'] },
+  { href: '/admission/settings', label: 'Settings', icon: Settings, anyOf: ['admission.view'] },
 ]
 
 export default function AdmissionLayout({ children }: { children: React.ReactNode }) {
@@ -27,7 +28,11 @@ export default function AdmissionLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="animate-fade-in">
-      <div className="mb-6 flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1">
+      {/* print:hidden — this tab bar wraps every page in the module, so
+          without it, it would stack above any page's own printable content
+          (e.g. the Cycles page's QR print sheet) instead of being replaced
+          by it, the same fix applied to that page's own chrome. */}
+      <div className="mb-6 flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1 print:hidden">
         {visible.map(t => {
           const active = t.exact ? pathname === t.href : pathname?.startsWith(t.href)
           const Icon = t.icon

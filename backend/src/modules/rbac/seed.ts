@@ -121,6 +121,56 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   'Transport Manager': ['student.view'],
   'Hostel Warden': ['student.view'],
   'Coordinator': ['student.view', 'timetable.view', ...TIMETABLE_TEACHER],
+
+  // ── remaining-work-plan.md Section A1 (RBAC Finalization) ──────
+  // Five titles admission/plan.md and decisions.md assumed throughout
+  // (Director, Admission Officer, Exam Coordinator, Examiner, IT Admin)
+  // but never actually seeded — decisions.md's adopted resolution was
+  // that each maps onto RBAC v2 as an *additional* granted role, while
+  // every real person holding one still logs in under one of the 8
+  // existing users.role base values (see LEGACY_ROLE_TO_RBAC_ROLE below,
+  // unchanged — none of these five get a base-role mapping, they're
+  // assigned as a second RBAC role on top of whichever base role the
+  // person actually logs in as).
+
+  // Same operational authority as Principal — decisions.md's adopted
+  // answer was "map Director onto the closest existing base role
+  // (school_admin/principal)", not invent a separate authority tier.
+  // Giving it Principal's exact permission set (not a copy that drifts)
+  // means a school whose top authority is titled "Director" rather than
+  // "Principal" sees the same capabilities under the name they actually
+  // use, with zero risk of the two silently diverging over time.
+  'Director': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, 'role.manage', 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
+
+  // The formal title for what 'Counselor' already covers on the
+  // admissions side — deliberately without Counselor's extra legacy
+  // grants (fee.discount, staff.recruitment_manage, complaint.*), which
+  // were kept on Counselor only so converting old hardcoded requireRole()
+  // gates didn't silently take away access a real Counselor already had.
+  // Admission Officer is a clean role with no such history to preserve.
+  'Admission Officer': ['student.view', 'student.create', 'admission.view', 'admission.create', 'admission.edit', 'admission.follow_up'],
+
+  // Scoped to the admission module specifically — plan.md's Phase 6c
+  // ("Examiner -> Review -> Principal Approval -> Publish") ties this
+  // title to admission's entrance-test result-publishing workflow, not
+  // the separate main Examinations module (which already has its own
+  // 'Exam Controller' role). admission.edit covers entering/reviewing
+  // entrance-test marks via PATCH /admission-slot-bookings/:id.
+  'Exam Coordinator': ['student.view', 'admission.view', 'admission.edit'],
+
+  // Narrowest of the five: enters marks for the candidates they examined
+  // and nothing else — the same admission.edit grant Exam Coordinator
+  // has, without admission.create/follow_up, since an Examiner's job is
+  // scoring, not running the pipeline.
+  'Examiner': ['student.view', 'admission.view', 'admission.edit'],
+
+  // Technical/system administration — team and role management only,
+  // deliberately no student/admission/fee/exam data access. Mirrors the
+  // narrow-by-design intent already used for Timetable Manager: a school
+  // handing someone the "IT Admin" title is usually handing them account
+  // and permission administration, not access to academic or financial
+  // records.
+  'IT Admin': ['team.view', 'team.invite', 'team.deactivate', 'team.credentials_manage', 'team.edit', 'role.view', 'role.manage', 'role.assign', 'settings.manage'],
 }
 
 // Maps the legacy `users.role` text value to the RBAC role name it
@@ -187,7 +237,20 @@ export async function seedDefaultRoles(schoolId: string): Promise<Record<string,
   // permissions is not an edit anyone made on purpose — it is a role that was
   // created while the registry was missing, and it can do nothing until it is
   // filled in.
-  const { data: mapped } = await supabase.from('role_permissions_v2').select('role_id')
+  //
+  // Found 2026-08-25, while adding 5 more default roles: this used to select
+  // role_id with NO scope at all — every role_permissions_v2 row in the
+  // entire database, across every school. PostgREST caps an unscoped select
+  // at its default row limit (1000), so once the table's total row count
+  // (all schools combined) crossed that line, this silently came back
+  // truncated — a role that genuinely had mappings could be missing from
+  // the resulting Set, get incorrectly added to needsMappings below, and
+  // then abort the whole seed on the (role_id, permission_id) unique
+  // constraint when its rows were inserted a second time. Scoped to just
+  // this school's own role ids — correct regardless of how large the table
+  // grows globally, not merely a higher limit that pushes the same failure
+  // mode further out.
+  const { data: mapped } = await supabase.from('role_permissions_v2').select('role_id').in('role_id', Object.values(roleIdByName))
   const hasMappings = new Set((mapped ?? []).map((m: any) => m.role_id))
   const needsMappings = Object.keys(DEFAULT_ROLE_PERMISSIONS).filter(name =>
     missing.includes(name) || (roleIdByName[name] && !hasMappings.has(roleIdByName[name])))
@@ -419,23 +482,26 @@ export async function ensureAdmissionApprovalWorkflowDefinition(schoolId: string
 }
 
 // Phase 6c of admission/plan.md — entrance-test result publishing.
-// plan.md's own settings default names this chain "Examiner -> Review ->
-// Principal Approval -> Publish", but ensureMultiStepWorkflow silently
-// no-ops if ANY named role isn't seeded for the school (see its own
-// comment above — this is exactly the class of bug already found and
-// fixed once for the Transfer Certificate workflow). "Examiner" and
-// "Exam Coordinator" aren't seeded roles anywhere yet — inventing and
-// seeding them is Phase 10 (RBAC Finalization) work, not 6c's. Using
-// Counselor/Principal instead — both guaranteed seeded, and Counselor is
-// already this app's primary admission-process actor — keeps this
-// workflow actually functional today. Once Phase 10 seeds real Examiner/
-// Exam Coordinator roles, these steps' role_id can be repointed without
-// a schema change; nothing here needs to be rebuilt for that to happen.
+// remaining-work-plan.md Section A1: Examiner now exists as a real seeded
+// RBAC role (see DEFAULT_ROLE_PERMISSIONS above), so step 1 is repointed
+// to it — the person actually confirming the marks they entered, matching
+// plan.md's original "Examiner -> ... -> Principal Approval -> Publish"
+// intent more closely than the Counselor placeholder ever did. Kept to
+// the same 2-step shape rather than expanding to the full 4-name chain
+// plan.md's settings default described — the shipped workflow has always
+// been 2 steps (Confirm Result / Approve & Publish), and turning that into
+// a 4-step chain is a real workflow-structure change, not a role
+// repoint, so it's left for a deliberate follow-up if actually wanted.
+// This only affects NEW schools — ensureMultiStepWorkflow no-ops once a
+// school already has a definition by this name, so any school seeded
+// before this change keeps its existing Counselor step until repointed
+// directly (see the one-off fix applied to the pre-existing local dev
+// school's row when this shipped, 2026-08-25).
 export async function ensureEntranceResultWorkflowDefinition(schoolId: string): Promise<void> {
   return ensureMultiStepWorkflow(schoolId, {
     name: 'Entrance Result Publishing', module: 'admission', entityType: 'admission_slot_booking',
     steps: [
-      { roleName: 'Counselor', actionName: 'Confirm Result' },
+      { roleName: 'Examiner', actionName: 'Confirm Result' },
       { roleName: 'Principal', actionName: 'Approve & Publish' },
     ],
   })

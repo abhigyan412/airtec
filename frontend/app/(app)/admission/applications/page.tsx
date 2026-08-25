@@ -1,7 +1,7 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { admissionApi } from '@/lib/api'
+import { admissionApi, academicYearsApi } from '@/lib/api'
 import { formatDate, admissionApplicationStatusBadge, classLabel } from '@/lib/utils'
 import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
 import { ArrowLeft, FileText, ChevronRight, ClipboardList, Plus, Search } from 'lucide-react'
@@ -31,6 +31,7 @@ export default function ApplicationsListPage() {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
   const [classId, setClassId] = useState('')
+  const [yearId, setYearId] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
@@ -39,16 +40,31 @@ export default function ApplicationsListPage() {
     queryFn: () => admissionApi.classes().then(r => r.data),
   })
 
+  const { data: years } = useQuery({
+    queryKey: ['academic-years'],
+    queryFn: () => academicYearsApi.list().then(r => r.data),
+  })
+  // Defaults to the current academic year rather than mixing every
+  // session together — only fires once (guarded on yearId still being
+  // unset), so it never overrides a year the user has since picked or
+  // deliberately cleared to "All Years".
+  useEffect(() => {
+    if (!years?.length) return
+    const current = years.find((y: any) => y.is_current) ?? years[0]
+    setYearId(y => y || current.id)
+  }, [years])
+
   const { data, isLoading } = useQuery({
-    queryKey: ['admission-applications', search, status, classId, dateFrom, dateTo],
+    queryKey: ['admission-applications', search, status, classId, yearId, dateFrom, dateTo],
     queryFn: () => admissionApi.applications.list({
       search: search || undefined, status: status || undefined, class_id: classId || undefined,
+      academic_year_id: yearId || undefined,
       date_from: dateFrom || undefined, date_to: dateTo || undefined,
     }).then(r => r.data),
   })
 
-  const hasFilters = !!(search || status || classId || dateFrom || dateTo)
-  const clearFilters = () => { setSearch(''); setStatus(''); setClassId(''); setDateFrom(''); setDateTo('') }
+  const hasFilters = !!(search || status || classId || yearId || dateFrom || dateTo)
+  const clearFilters = () => { setSearch(''); setStatus(''); setClassId(''); setYearId(''); setDateFrom(''); setDateTo('') }
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -89,6 +105,16 @@ export default function ApplicationsListPage() {
             <SelectContent>
               <SelectItem value="all">All classes</SelectItem>
               {(classes ?? []).map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="min-w-[150px] space-y-1.5">
+          <Label>Academic Year</Label>
+          <Select value={yearId || 'all'} onValueChange={v => setYearId(v === 'all' ? '' : v)}>
+            <SelectTrigger><SelectValue placeholder="All Years" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Years</SelectItem>
+              {(years ?? []).map((y: any) => <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>

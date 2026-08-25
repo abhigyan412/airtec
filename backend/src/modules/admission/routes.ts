@@ -252,7 +252,7 @@ async function completeAdmissionWorkflow(
  * a year gets no admission_cycles row at all, which is treated as always
  * open — same NULL-means-unrestricted convention as schools.enabled_modules.
  */
-async function checkAdmissionCycleOpen(schoolId: string, academicYearId: unknown): Promise<string | null> {
+export async function checkAdmissionCycleOpen(schoolId: string, academicYearId: unknown): Promise<string | null> {
   if (!academicYearId || typeof academicYearId !== 'string') return null
 
   const { data: cycle } = await supabase
@@ -376,7 +376,7 @@ const UpdateBookingSchema = z.object({
 // ── INQUIRIES ───────────────────────────────────────────────
 
 router.get('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { page = '1', limit = '20', search, status, counselor_id, source_id } = req.query
+  const { page = '1', limit = '20', search, status, counselor_id, source_id, academic_year_id } = req.query
   const { from, to, limit: lim, page: pg } = getPagination(Number(page), Number(limit))
   const school_id = req.user!.school_id
 
@@ -397,6 +397,7 @@ router.get('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) =>
   if (status) query = query.eq('status', status)
   if (counselor_id) query = query.eq('counselor_id', counselor_id)
   if (source_id) query = query.eq('source_id', source_id as string)
+  if (academic_year_id) query = query.eq('academic_year_id', academic_year_id as string)
 
   const { data, error, count } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })
@@ -406,35 +407,67 @@ router.get('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) =>
 
 router.get('/inquiries/stats', asyncHandler(async (req: AuthRequest, res: Response) => {
   const school_id = req.user!.school_id
+  // remaining-work-plan.md Section B4: optional year scope, matching the
+  // academic_year_id filter every other list view on this module already
+  // gained 2026-08-25 — without it, this endpoint silently mixed every
+  // session's activity together forever.
+  const { academic_year_id } = req.query
 
   const statuses = ['new', 'follow_up', 'interested', 'documents_submitted', 'entrance_exam', 'approved', 'waitlisted', 'admitted', 'rejected', 'lost']
   const [counts, { data: sourceRows }] = await Promise.all([
     Promise.all(
-      statuses.map(s =>
-        supabase.from('admission_inquiries')
+      statuses.map(s => {
+        let q = supabase.from('admission_inquiries')
           .select('*', { count: 'exact', head: true })
           .eq('school_id', school_id)
           .eq('status', s)
-          .then(({ count }) => ({ status: s, count: count ?? 0 }))
-      )
+        if (academic_year_id) q = q.eq('academic_year_id', academic_year_id as string)
+        return q.then(({ count }) => ({ status: s, count: count ?? 0 }))
+      })
     ),
     // Grouped in JS rather than a per-source count(*) loop — sources are
     // admin-defined and open-ended (unlike the fixed status enum above),
-    // so there's no fixed list to loop over up front.
-    supabase.from('admission_inquiries').select('inquiry_sources(name)').eq('school_id', school_id),
+    // so there's no fixed list to loop over up front. Also carries each
+    // row's own status now, so the per-source conversion rate below can be
+    // computed from the same single query rather than a second round trip.
+    (() => {
+      let q = supabase.from('admission_inquiries').select('status, inquiry_sources(name)').eq('school_id', school_id)
+      if (academic_year_id) q = q.eq('academic_year_id', academic_year_id as string)
+      return q
+    })(),
   ])
 
   const total = counts.reduce((s, c) => s + c.count, 0)
   const admitted = counts.find(c => c.status === 'admitted')?.count ?? 0
   const conversion_rate = total > 0 ? Math.round((admitted / total) * 100) : 0
 
-  const bySourceMap = new Map<string, number>()
-  for (const row of sourceRows ?? []) {
-    const name = (row as any).inquiry_sources?.name ?? 'Unknown'
-    bySourceMap.set(name, (bySourceMap.get(name) ?? 0) + 1)
+  // Funnel per source: how many inquiries came in vs. how many actually
+  // converted all the way to admitted — the specific gap named in the
+  // competitive comparison ("no lead-source/conversion funnel analytics").
+  // "Reached application" reuses this same admission_inquiries.status
+  // (documents_submitted onward means the inquiry has, at minimum,
+  // progressed past a bare lead) rather than a second query against
+  // admission_applications, since every application-stage status is
+  // already mirrored back onto its source inquiry (see the 2026-08-21
+  // "Fee sequencing rework" follow-up fix in plan.md).
+  const PAST_INQUIRY_STAGE = new Set(['documents_submitted', 'entrance_exam', 'approved', 'waitlisted', 'fee_pending', 'admitted'])
+  const bySourceStats = new Map<string, { total: number; reached_application: number; admitted: number }>()
+  for (const row of (sourceRows ?? []) as any[]) {
+    const name = row.inquiry_sources?.name ?? 'Unknown'
+    const entry = bySourceStats.get(name) ?? { total: 0, reached_application: 0, admitted: 0 }
+    entry.total++
+    if (PAST_INQUIRY_STAGE.has(row.status)) entry.reached_application++
+    if (row.status === 'admitted') entry.admitted++
+    bySourceStats.set(name, entry)
   }
-  const by_source = [...bySourceMap.entries()]
-    .map(([source, count]) => ({ source, count }))
+  const by_source = [...bySourceStats.entries()]
+    .map(([source, s]) => ({
+      source,
+      count: s.total,
+      reached_application: s.reached_application,
+      admitted: s.admitted,
+      conversion_rate: s.total > 0 ? Math.round((s.admitted / s.total) * 100) : 0,
+    }))
     .sort((a, b) => b.count - a.count)
 
   res.json({
@@ -770,7 +803,7 @@ router.post('/inquiries/:id/follow-ups', requirePermissionV2('admission.follow_u
 // ── APPLICATIONS ────────────────────────────────────────────
 
 router.get('/applications', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { page = '1', limit = '20', status, search, class_id, date_from, date_to } = req.query
+  const { page = '1', limit = '20', status, search, class_id, date_from, date_to, academic_year_id } = req.query
   const { from, to, limit: lim, page: pg } = getPagination(Number(page), Number(limit))
   const school_id = req.user!.school_id
 
@@ -787,6 +820,7 @@ router.get('/applications', asyncHandler(async (req: AuthRequest, res: Response)
 
   if (status) query = query.eq('status', status)
   if (class_id) query = query.eq('applying_for_class_id', class_id as string)
+  if (academic_year_id) query = query.eq('academic_year_id', academic_year_id as string)
   // One box searching name/phone/application number — same multi-column
   // .or() ilike idiom used for job-application search in hrms/routes.ts.
   if (search) {
@@ -1579,6 +1613,70 @@ router.patch('/class-display-style', requireRole('school_admin'),
   })
 )
 
+// ── ADMISSION PROCESS SETTINGS ────────────────────────────────────
+// remaining-work-plan.md Section A4: these six columns (fee-hold
+// duration/grace, waitlist response window, stage-aging threshold,
+// occupancy-warning threshold/lead-time) have existed since Phases 3/4/9
+// shipped, each with a safe default, but with no way to change them short
+// of editing the database directly. One combined GET/PATCH — same
+// "school-level tuning knobs" grouping as class-display-style, but
+// bundled since these six are read together everywhere they're used and
+// a school configuring one is likely configuring the rest at the same
+// sitting.
+const ADMISSION_SETTINGS_COLUMNS = [
+  'admission_fee_hold_days',
+  'admission_fee_hold_grace_days',
+  'admission_waitlist_response_days',
+  'admission_stage_aging_days',
+  'admission_occupancy_warning_percent',
+  'admission_occupancy_warning_days',
+] as const
+
+router.get('/admission-settings', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { data } = await supabase
+      .from('schools')
+      .select(ADMISSION_SETTINGS_COLUMNS.join(', '))
+      .eq('id', req.user!.school_id)
+      .maybeSingle()
+    const row = (data as any) ?? {}
+    res.json({
+      success: true,
+      data: {
+        admission_fee_hold_days: row.admission_fee_hold_days ?? 7,
+        admission_fee_hold_grace_days: row.admission_fee_hold_grace_days ?? 0,
+        admission_waitlist_response_days: row.admission_waitlist_response_days ?? 3,
+        admission_stage_aging_days: row.admission_stage_aging_days ?? 10,
+        admission_occupancy_warning_percent: row.admission_occupancy_warning_percent ?? 70,
+        admission_occupancy_warning_days: row.admission_occupancy_warning_days ?? 60,
+      },
+    })
+  })
+)
+
+router.patch('/admission-settings', requireRole('school_admin'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const update: Record<string, number> = {}
+    for (const key of ADMISSION_SETTINGS_COLUMNS) {
+      const value = req.body[key]
+      if (value === undefined) continue
+      if (!Number.isInteger(value) || value < 0) {
+        return res.status(400).json({ success: false, error: `${key} must be a non-negative integer` })
+      }
+      if (key === 'admission_occupancy_warning_percent' && value > 100) {
+        return res.status(400).json({ success: false, error: 'admission_occupancy_warning_percent must be between 0 and 100' })
+      }
+      update[key] = value
+    }
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ success: false, error: `Provide at least one of: ${ADMISSION_SETTINGS_COLUMNS.join(', ')}` })
+    }
+    const { error } = await supabase.from('schools').update(update).eq('id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data: update })
+  })
+)
+
 // ── CLASS SETTINGS (Phase 6a) ────────────────────────────────────
 // Entrance mode + admission fee, per class — School Admin/Principal
 // owned. No row for a class = 'interview' / 40% pass mark (the schema
@@ -1636,7 +1734,7 @@ router.patch('/class-settings/:classId', requireRole('school_admin', 'principal'
 
     const { data: existing } = await supabase
       .from('admission_class_settings' as any)
-      .select('entrance_mode, pass_marks_percent, admission_fee_amount')
+      .select('entrance_mode, pass_marks_percent, admission_fee_amount, created_by')
       .eq('school_id', school_id).eq('class_id', classId).maybeSingle()
 
     const { data, error } = await supabase
@@ -1646,6 +1744,8 @@ router.patch('/class-settings/:classId', requireRole('school_admin', 'principal'
         entrance_mode: entrance_mode ?? (existing as any)?.entrance_mode ?? 'interview',
         pass_marks_percent: pass_marks_percent ?? (existing as any)?.pass_marks_percent ?? 40,
         admission_fee_amount: admission_fee_amount !== undefined ? admission_fee_amount : (existing as any)?.admission_fee_amount ?? null,
+        created_by: (existing as any)?.created_by ?? req.user!.id,
+        updated_by: req.user!.id,
       }, { onConflict: 'school_id,class_id' })
       .select()
       .single()
@@ -1681,7 +1781,7 @@ router.post('/document-requirements', requireRole('school_admin'),
     }
     const { data, error } = await supabase
       .from('admission_document_requirements' as any)
-      .insert({ school_id: req.user!.school_id, class_id, document_type })
+      .insert({ school_id: req.user!.school_id, class_id, document_type, created_by: req.user!.id })
       .select()
       .single()
     if (error) return res.status(400).json({ success: false, error: error.message })
@@ -1721,10 +1821,15 @@ router.post('/admission-cycles', requirePermissionV2('settings.manage'),
     const school_id = req.user!.school_id
     const body = AdmissionCycleSchema.parse(req.body)
 
+    const { data: existing } = await supabase
+      .from('admission_cycles' as any)
+      .select('created_by')
+      .eq('school_id', school_id).eq('academic_year_id', body.academic_year_id).maybeSingle()
+
     const { data, error } = await supabase
       .from('admission_cycles' as any)
       .upsert(
-        { school_id, ...body },
+        { school_id, ...body, created_by: (existing as any)?.created_by ?? req.user!.id, updated_by: req.user!.id },
         { onConflict: 'school_id,academic_year_id' },
       )
       .select()
@@ -1782,7 +1887,7 @@ router.post('/admission-slots', requirePermissionV2('admission.edit'),
 
     const { data, error } = await supabase
       .from('admission_slots' as any)
-      .insert({ ...body, school_id })
+      .insert({ ...body, school_id, created_by: req.user!.id })
       .select()
       .single()
     if (error) return res.status(400).json({ success: false, error: error.message })
@@ -1795,7 +1900,7 @@ router.patch('/admission-slots/:id', requirePermissionV2('admission.edit'),
     const body = UpdateSlotSchema.parse(req.body)
     const { data, error } = await supabase
       .from('admission_slots' as any)
-      .update(body)
+      .update({ ...body, updated_by: req.user!.id })
       .eq('id', req.params.id)
       .eq('school_id', req.user!.school_id)
       .select()
@@ -1901,6 +2006,21 @@ router.patch('/admission-slot-bookings/:id', requirePermissionV2('admission.edit
     const body = UpdateBookingSchema.parse(req.body)
     const school_id = req.user!.school_id
     const update: Record<string, unknown> = { ...body }
+
+    // Found live 2026-08-25: a genuinely empty update (every field
+    // undefined — the frontend's marks inputs fire on blur even when
+    // nothing changed, e.g. tabbing through an already-empty field, since
+    // undefined !== null) reaches here as {} once JSON.stringify drops the
+    // undefined keys. Supabase's .update({}).select().single() then
+    // returns zero rows (an empty patch is a no-op, so nothing comes back
+    // from the RETURNING clause), and .single() throws Postgres's own
+    // "Cannot coerce the result to a single JSON object" — a real error a
+    // user could see for what is, from their side, a no-op. Guarded here
+    // rather than only in the frontend, since this endpoint shouldn't
+    // depend on every caller getting that comparison right.
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ success: false, error: 'Nothing to update' })
+    }
 
     // Phase 6b-i: pass/fail is a plain percentage-vs-threshold computation
     // (same spirit as the exam module's computeGrade() percentage bucket)
