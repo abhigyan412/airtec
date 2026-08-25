@@ -15,12 +15,21 @@ import { EmptyState } from '@/components/shared/EmptyState'
 // mode, and mirror the hue each stage gets in the pill map on the pipeline page
 // (indigo / amber / purple / orange / teal / green) so the chart and the stage
 // counters below it agree.
+// Phase 9 of admission/plan.md: entrance_exam, waitlisted, and
+// fee_pending existed in the schema and had UI elsewhere (status pills,
+// the Move-Stage picker) but were never added here — a real inquiry
+// sitting at any of these three simply vanished from this chart with no
+// indication it existed. Free fix while already touching this file for
+// the dashboard alerts work; not otherwise part of Phase 9's scope.
 const STAGE_ORDER = [
   { key: 'new', label: 'New', color: 'hsl(243 75% 62%)' },
   { key: 'follow_up', label: 'Follow Up', color: 'hsl(38 92% 55%)' },
   { key: 'interested', label: 'Interested', color: 'hsl(262 70% 62%)' },
   { key: 'documents_submitted', label: 'Docs Submitted', color: 'hsl(25 95% 58%)' },
+  { key: 'entrance_exam', label: 'Entrance Exam', color: 'hsl(192 75% 48%)' },
   { key: 'approved', label: 'Approved', color: 'hsl(173 58% 45%)' },
+  { key: 'waitlisted', label: 'Waitlisted', color: 'hsl(45 90% 52%)' },
+  { key: 'fee_pending', label: 'Fee Pending', color: 'hsl(330 70% 60%)' },
   { key: 'admitted', label: 'Admitted', color: 'hsl(152 62% 45%)' },
 ]
 const EXIT_STAGES = [

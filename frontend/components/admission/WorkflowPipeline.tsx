@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { workflowApi, admissionApi } from '@/lib/api'
+import { workflowApi, admissionApi, classesApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
 import { Check, X, MessageSquare, ArrowUpCircle, Loader2, GitBranch } from 'lucide-react'
@@ -34,6 +34,8 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
   const [notes, setNotes] = useState('')
   const [showNotesFor, setShowNotesFor] = useState<string | null>(null)
   const [sectionId, setSectionId] = useState('')
+  const [overrideDocGap, setOverrideDocGap] = useState(false)
+  const [overrideReason, setOverrideReason] = useState('')
 
   const { data: workflow, isLoading } = useQuery({
     queryKey: ['workflow-status', applicationId],
@@ -53,14 +55,29 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
     queryKey: ['classes'],
     queryFn: () => admissionApi.classes().then(r => r.data),
   })
+  // Live enrolled/capacity per section, so whoever picks a section at
+  // admission time can see how full each one already is instead of
+  // choosing blind — same data source as the admission Seats page.
+  const { data: strength } = useQuery({
+    queryKey: ['classes-strength'],
+    queryFn: () => classesApi.strength().then(r => r.data),
+  })
 
   const actMutation = useMutation({
-    mutationFn: ({ status, notes, section_id }: { status: 'approved' | 'rejected' | 'commented', notes?: string, section_id?: string }) =>
-      workflowApi.act(applicationId, status, notes, section_id),
+    mutationFn: ({ status, notes, section_id, override }: {
+      status: 'approved' | 'rejected' | 'commented', notes?: string, section_id?: string,
+      override?: { override_document_gap: boolean; override_reason?: string },
+    }) => workflowApi.act(applicationId, status, notes, section_id, override),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['workflow-status', applicationId] })
+      // The chain completing changes the application's own status (Fee
+      // Pending or Rejected) — the Fee card and top badge read that from
+      // the main application query, which workflow-status alone won't refresh.
+      qc.invalidateQueries({ queryKey: ['admission-application', applicationId] })
       if (res.data?.completed) {
-        toast.success(res.data.instance.status === 'approved' ? 'Application fully approved!' : 'Application rejected')
+        toast.success(res.data.instance.status === 'approved'
+          ? 'Approval chain complete — moved to Fee Pending'
+          : 'Application rejected')
       } else {
         toast.success('Action recorded — moved to next step')
       }
@@ -146,6 +163,9 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
   const needsSection = isFinalStep && !application?.student_id
   const sections: any[] =
     classes?.find((c: any) => c.id === application?.applying_for_class_id)?.sections ?? []
+  const strengthBySection = new Map((strength?.sections ?? []).map((s: any) => [s.section_id, s]))
+
+  const canOverrideDocGap = isFinalStep && user?.role === 'principal'
 
   const handleAction = (actionStatus: 'approved' | 'rejected' | 'commented') => {
     if (actionStatus === 'rejected' && !notes.trim()) {
@@ -156,10 +176,17 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
       toast.error('Pick the section this student will be enrolled into.')
       return
     }
+    if (actionStatus === 'approved' && overrideDocGap && !overrideReason.trim()) {
+      toast.error('A reason is required to override missing documents.')
+      return
+    }
     actMutation.mutate({
       status: actionStatus,
       notes: notes.trim() || undefined,
       section_id: actionStatus === 'approved' && needsSection ? sectionId : undefined,
+      override: actionStatus === 'approved' && overrideDocGap
+        ? { override_document_gap: true, override_reason: overrideReason.trim() }
+        : undefined,
     })
   }
 
@@ -207,9 +234,20 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
                         <Select value={sectionId} onValueChange={setSectionId}>
                           <SelectTrigger className="h-9"><SelectValue placeholder="Choose a section…" /></SelectTrigger>
                           <SelectContent>
-                            {sections.map((s: any) => (
-                              <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                            ))}
+                            {sections.map((s: any) => {
+                              const st = strengthBySection.get(s.id) as any
+                              const full = st?.capacity > 0 && st.enrolled >= st.capacity
+                              return (
+                                <SelectItem key={s.id} value={s.id}>
+                                  {s.name}
+                                  {st && (
+                                    <span className={cn('ml-1.5', full ? 'text-destructive' : 'text-muted-foreground')}>
+                                      — {st.enrolled}{st.capacity > 0 ? `/${st.capacity}` : ''} student{st.enrolled === 1 ? '' : 's'}{full ? ' · full' : ''}
+                                    </span>
+                                  )}
+                                </SelectItem>
+                              )
+                            })}
                           </SelectContent>
                         </Select>
                         <p className="mt-1.5 text-[11px] text-muted-foreground">
@@ -217,6 +255,27 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
                         </p>
                       </>
                     )}
+                  </div>
+                )}
+                {canOverrideDocGap && (
+                  <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-2">
+                    <label className="flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer">
+                      <input type="checkbox" checked={overrideDocGap} onChange={e => setOverrideDocGap(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-input" />
+                      Override missing document requirement (if any) — Principal only
+                    </label>
+                    {overrideDocGap && (
+                      <Textarea
+                        value={overrideReason}
+                        onChange={e => setOverrideReason(e.target.value)}
+                        placeholder="Reason for overriding the missing-document block (required)..."
+                        rows={2}
+                        className="resize-none"
+                      />
+                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      Only takes effect if this class has a document checklist configured and it isn't fully met — otherwise it's ignored.
+                    </p>
                   </div>
                 )}
                 {showNotesFor && (

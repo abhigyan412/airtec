@@ -138,6 +138,7 @@ export default function StudentDetailPage() {
           <Card title="Personal Information" icon={User}>
             <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
               <Detail label="Date of Birth" value={s.date_of_birth ? formatDate(s.date_of_birth) : '—'} />
+              <Detail label="Admission Date" value={s.admission_date ? formatDate(s.admission_date) : '—'} />
               <Detail label="Gender" value={s.gender ? s.gender.charAt(0).toUpperCase() + s.gender.slice(1) : '—'} />
               <Detail label="Blood Group" value={s.blood_group ?? '—'} />
               <Detail label="Aadhaar" value={s.aadhaar_number ?? '—'} />

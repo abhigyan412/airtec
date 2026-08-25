@@ -2,7 +2,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { admissionApi } from '@/lib/api'
-import { formatDate, admissionApplicationStatusBadge } from '@/lib/utils'
+import { formatDate, admissionApplicationStatusBadge, classLabel } from '@/lib/utils'
+import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
 import { ArrowLeft, FileText, ChevronRight, ClipboardList, Plus, Search } from 'lucide-react'
 import Link from 'next/link'
 import { Card } from '@/components/ui/card'
@@ -26,6 +27,7 @@ const APPLICATION_STATUSES = ['pending', 'counselor_approved', 'documents_verifi
 const titleCaseStatus = (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
 export default function ApplicationsListPage() {
+  const classStyle = useClassDisplayStyle()
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
   const [classId, setClassId] = useState('')
@@ -146,7 +148,7 @@ export default function ApplicationsListPage() {
                   <TableRow key={app.id} onClick={() => window.location.href = `/admission/applications/${app.id}`}>
                     <TableCell className="font-mono text-xs text-muted-foreground">{app.application_number}</TableCell>
                     <TableCell className="font-semibold text-foreground">{app.student_first_name} {app.student_last_name}</TableCell>
-                    <TableCell className="text-muted-foreground">{app.classes?.name ?? '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">{app.classes ? classLabel(app.classes.name, app.classes.numeric_level, classStyle) : '—'}</TableCell>
                     <TableCell className="text-muted-foreground">{app.father_phone}</TableCell>
                     <TableCell>
                       <Badge variant={badge.variant}>{badge.label}</Badge>

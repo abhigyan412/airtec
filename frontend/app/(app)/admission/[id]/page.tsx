@@ -3,7 +3,8 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { admissionApi } from '@/lib/api'
-import { cn, formatDate } from '@/lib/utils'
+import { cn, formatDate, classLabel } from '@/lib/utils'
+import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
 import { ArrowLeft, Phone, Mail, MessageSquare, Calendar, CheckCircle, Loader2, Plus, User, FileCheck, UserPlus } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
@@ -18,15 +19,18 @@ import {
 } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { SlotBookingCard } from '@/components/admission/SlotBookingCard'
 
+// 'fee_pending' and 'admitted' are deliberately absent — both are set
+// automatically from the linked application's own progress (see
+// admission/routes.ts, PATCH /inquiries/:id), never picked by hand, so
+// offering them here would be a dead-end the backend always rejects.
 const STAGES = [
   { key: 'new',                 label: 'New' },
   { key: 'follow_up',           label: 'Follow Up' },
   { key: 'interested',          label: 'Interested' },
   { key: 'documents_submitted', label: 'Docs Submitted' },
   { key: 'approved',            label: 'Approved' },
-  { key: 'fee_pending',         label: 'Fee Pending' },
-  { key: 'admitted',            label: 'Admitted' },
 ]
 
 // Pipeline stages are categorical (a stage identifies *where* an inquiry is,
@@ -42,6 +46,7 @@ const ALL_STATUSES = [
   { key: 'documents_submitted', label: 'Documents Submitted', color: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
   { key: 'entrance_exam',       label: 'Entrance Exam',       color: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400' },
   { key: 'approved',            label: 'Approved',            color: 'bg-teal-500/10 text-teal-600 dark:text-teal-400' },
+  { key: 'waitlisted',          label: 'Waitlisted',          color: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
   { key: 'fee_pending',         label: 'Fee Pending',         color: 'bg-pink-500/10 text-pink-600 dark:text-pink-400' },
   { key: 'admitted',            label: 'Admitted',            color: 'bg-success/10 text-success', locked: true },
   { key: 'rejected',            label: 'Rejected',            color: 'bg-destructive/10 text-destructive' },
@@ -64,6 +69,7 @@ const QUICK_ACTION =
 
 export default function InquiryDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const classStyle = useClassDisplayStyle()
   const qc = useQueryClient()
   const [showFollowUp, setShowFollowUp] = useState(false)
   const [showStatusChange, setShowStatusChange] = useState(false)
@@ -74,7 +80,7 @@ export default function InquiryDetailPage() {
   })
 
   const statusMutation = useMutation({
-    mutationFn: (status: string) => admissionApi.inquiries.update(id, { status }),
+    mutationFn: (vars: { status: string; waitlist_rank?: number }) => admissionApi.inquiries.update(id, vars),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inquiry', id] })
       qc.invalidateQueries({ queryKey: ['inquiry-stats'] })
@@ -156,7 +162,7 @@ export default function InquiryDetailPage() {
         description={[
           inq.inquiry_number,
           `Added ${formatDate(inq.created_at)}`,
-          inq.classes?.name && `Applying for ${inq.classes.name}`,
+          inq.classes?.name && `Applying for ${classLabel(inq.classes.name, inq.classes.numeric_level, classStyle)}`,
         ].filter(Boolean).join(' · ')}
         icon={UserPlus}
         actions={
@@ -233,6 +239,26 @@ export default function InquiryDetailPage() {
         </Card>
       )}
 
+      {/* Waitlist offer state — visible clock since there's no send channel
+          yet to actually notify the family; staff follow up by hand and
+          either advance this inquiry (which clears it from the sweep) or
+          let the deadline pass (auto re-offered to the next rank). */}
+      {inq.status === 'waitlisted' && (
+        <Card className={cn('p-4 border-amber-500/30 bg-amber-500/5')}>
+          {inq.waitlist_offer_deadline ? (
+            <p className="text-sm text-foreground">
+              <span className="font-semibold text-amber-600 dark:text-amber-400">Offer pending</span> — a seat opened up and this candidate is next in line.
+              Respond by <span className="font-medium">{formatDate(inq.waitlist_offer_deadline)}</span>, or it auto-advances to the next rank.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              On the waitlist{inq.waitlist_rank != null ? <>, rank <span className="font-medium text-foreground">#{inq.waitlist_rank}</span></> : ' (no rank set — first to be offered a freed seat is by enquiry date until one is)'}.
+              No seat has freed up for this class yet.
+            </p>
+          )}
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {/* Left: inquiry details */}
         <div className="col-span-2 space-y-5">
@@ -272,7 +298,7 @@ export default function InquiryDetailPage() {
                 {inq.classes?.name && (
                   <div>
                     <p className="text-xs text-muted-foreground mb-0.5">Applying for Class</p>
-                    <p className="text-sm font-medium text-foreground">{inq.classes.name}</p>
+                    <p className="text-sm font-medium text-foreground">{classLabel(inq.classes.name, inq.classes.numeric_level, classStyle)}</p>
                   </div>
                 )}
                 {inq.previous_school && (
@@ -375,13 +401,13 @@ export default function InquiryDetailPage() {
                       Move Pipeline Stage <span className="text-muted-foreground">→</span>
                     </button>
                     {inq.status !== 'rejected' && inq.status !== 'lost' && (
-                      <button onClick={() => statusMutation.mutate('rejected')}
+                      <button onClick={() => statusMutation.mutate({ status: 'rejected' })}
                         className={cn(QUICK_ACTION, 'text-foreground hover:bg-destructive/10 hover:text-destructive')}>
                         Mark as Rejected <span className="text-muted-foreground">→</span>
                       </button>
                     )}
                     {inq.status !== 'lost' && (
-                      <button onClick={() => statusMutation.mutate('lost')}
+                      <button onClick={() => statusMutation.mutate({ status: 'lost' })}
                         className={cn(QUICK_ACTION, 'text-foreground hover:bg-muted')}>
                         Mark as Lost <span className="text-muted-foreground">→</span>
                       </button>
@@ -391,6 +417,8 @@ export default function InquiryDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          <SlotBookingCard inquiryId={id} classId={inq.applying_for_class_id} />
 
           <div className="bg-muted rounded-2xl p-4 space-y-2">
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Record Info</p>
@@ -414,7 +442,8 @@ export default function InquiryDetailPage() {
       {showStatusChange && (
         <StatusChangeModal
           currentStatus={inq.status}
-          onSelect={(status) => statusMutation.mutate(status)}
+          currentRank={inq.waitlist_rank}
+          onSelect={(status, waitlist_rank) => statusMutation.mutate({ status, waitlist_rank })}
           isPending={statusMutation.isPending}
           onClose={() => setShowStatusChange(false)}
         />
@@ -509,12 +538,16 @@ function FollowUpModal({ inquiryId, onClose }: { inquiryId: string, onClose: () 
   )
 }
 
-function StatusChangeModal({ currentStatus, onSelect, isPending, onClose }: {
+function StatusChangeModal({ currentStatus, currentRank, onSelect, isPending, onClose }: {
   currentStatus: string
-  onSelect: (s: string) => void
+  currentRank?: number | null
+  onSelect: (s: string, waitlistRank?: number) => void
   isPending: boolean
   onClose: () => void
 }) {
+  const [confirmingWaitlist, setConfirmingWaitlist] = useState(false)
+  const [rankInput, setRankInput] = useState(currentRank != null ? String(currentRank) : '')
+
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="max-w-sm">
@@ -524,26 +557,45 @@ function StatusChangeModal({ currentStatus, onSelect, isPending, onClose }: {
         </DialogHeader>
         <div className="space-y-2 max-h-80 overflow-y-auto -mx-1 px-1">
           {ALL_STATUSES.map(s => (
-            <button key={s.key}
-              onClick={() => !s.locked && onSelect(s.key)}
-              disabled={s.key === currentStatus || isPending || s.locked}
-              title={s.locked ? "Admitted can only be set automatically when the linked application's workflow completes" : undefined}
-              className={cn(
-                'w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 text-sm font-medium transition-all',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                s.key === currentStatus
-                  ? 'border-primary bg-primary/10 text-primary cursor-default'
-                  : s.locked
-                  ? 'border-border text-muted-foreground cursor-not-allowed opacity-60'
-                  : 'border-border hover:border-primary/40 hover:bg-primary/5 text-foreground disabled:opacity-50'
-              )}>
-              <span className={cn('px-2.5 py-0.5 rounded-full text-xs font-semibold', s.color)}>
-                {s.label}
-              </span>
-              {s.key === currentStatus && <span className="text-xs text-primary">Current</span>}
-              {s.locked && s.key !== currentStatus && <span className="text-xs text-muted-foreground">Auto only</span>}
-              {isPending && s.key !== currentStatus && !s.locked && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
-            </button>
+            <div key={s.key}>
+              <button
+                onClick={() => {
+                  if (s.locked) return
+                  if (s.key === 'waitlisted') { setConfirmingWaitlist(v => !v); return }
+                  onSelect(s.key)
+                }}
+                disabled={s.key === currentStatus || isPending || s.locked}
+                title={s.locked ? "Admitted can only be set automatically when the linked application's workflow completes" : undefined}
+                className={cn(
+                  'w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 text-sm font-medium transition-all',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                  s.key === currentStatus
+                    ? 'border-primary bg-primary/10 text-primary cursor-default'
+                    : s.locked
+                    ? 'border-border text-muted-foreground cursor-not-allowed opacity-60'
+                    : 'border-border hover:border-primary/40 hover:bg-primary/5 text-foreground disabled:opacity-50'
+                )}>
+                <span className={cn('px-2.5 py-0.5 rounded-full text-xs font-semibold', s.color)}>
+                  {s.label}
+                </span>
+                {s.key === currentStatus && <span className="text-xs text-primary">Current</span>}
+                {s.locked && s.key !== currentStatus && <span className="text-xs text-muted-foreground">Auto only</span>}
+                {isPending && s.key !== currentStatus && !s.locked && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+              </button>
+              {s.key === 'waitlisted' && confirmingWaitlist && (
+                <div className="mt-1.5 mb-1 p-3 rounded-xl bg-muted/40 flex items-end gap-2">
+                  <div className="flex-1 space-y-1">
+                    <Label htmlFor="waitlist-rank" className="text-xs">Rank (optional — lower goes first)</Label>
+                    <Input id="waitlist-rank" type="number" min={1} value={rankInput}
+                      onChange={e => setRankInput(e.target.value)} placeholder="e.g. 1" />
+                  </div>
+                  <Button size="sm" disabled={isPending}
+                    onClick={() => onSelect('waitlisted', rankInput ? Number(rankInput) : undefined)}>
+                    {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirm'}
+                  </Button>
+                </div>
+              )}
+            </div>
           ))}
         </div>
         <DialogFooter>

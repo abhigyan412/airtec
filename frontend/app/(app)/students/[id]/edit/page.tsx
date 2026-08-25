@@ -77,7 +77,7 @@ export default function EditStudentPage() {
   })
 
   const [form, setForm] = useState({
-    first_name: '', last_name: '', date_of_birth: '', gender: '',
+    first_name: '', last_name: '', date_of_birth: '', admission_date: '', gender: '',
     blood_group: '', aadhaar_number: '', permanent_address: '',
     city: '', state: '', pincode: '', phone: '', email: '',
     class_id: '', section_id: '', roll_number: '', stream: '',
@@ -96,7 +96,7 @@ export default function EditStudentPage() {
     const parent = student.parents?.[0]
     setForm({
       first_name: student.first_name ?? '', last_name: student.last_name ?? '',
-      date_of_birth: student.date_of_birth ?? '', gender: student.gender ?? '',
+      date_of_birth: student.date_of_birth ?? '', admission_date: student.admission_date ?? '', gender: student.gender ?? '',
       blood_group: student.blood_group ?? '', aadhaar_number: student.aadhaar_number ?? '',
       permanent_address: student.permanent_address ?? '', city: student.city ?? '',
       state: student.state ?? '', pincode: student.pincode ?? '', phone: student.phone ?? '',
@@ -181,6 +181,7 @@ export default function EditStudentPage() {
               <Input form={form} set={set} label="First Name" field="first_name" required placeholder="Rahul" />
               <Input form={form} set={set} label="Last Name" field="last_name" required placeholder="Sharma" />
               <Input form={form} set={set} label="Date of Birth" field="date_of_birth" type="date" />
+              <Input form={form} set={set} label="Admission Date" field="admission_date" type="date" />
               <Select form={form} set={set} label="Gender" field="gender" options={['male', 'female', 'other']} />
               <Select form={form} set={set} label="Blood Group" field="blood_group" options={['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']} />
               <Input form={form} set={set} label="Aadhaar Number" field="aadhaar_number" placeholder="xxxx xxxx xxxx" />

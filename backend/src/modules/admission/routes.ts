@@ -7,7 +7,11 @@ import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, getPagination, NON_STAFF_ROLES } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
-import { ensureAdmissionApprovalWorkflowDefinition } from '../rbac/seed'
+import { ensureAdmissionApprovalWorkflowDefinition, ensureEntranceResultWorkflowDefinition } from '../rbac/seed'
+import {
+  getClassSeatAvailability, applyLedgerTransition, checkClassLockOpen,
+  releaseExpiredSeatHolds, processExpiredWaitlistOffers,
+} from '../../shared/utils/admissionSeatLedger'
 
 const router = Router()
 router.use(authenticate)
@@ -68,6 +72,12 @@ async function createStudentForApplication(app: any, schoolId: string, sectionId
     stream: app.stream,
     admission_number: admissionNumber,
     status: 'active',
+    // The moment the admission fee was collected is the real "admitted
+    // on" date — this call happens a beat later, in the same request,
+    // right after fee_paid_at was set. Falls back to today defensively;
+    // in practice app.fee_paid_at is always set by here (collect-fee is
+    // the only caller).
+    admission_date: (app.fee_paid_at ?? new Date().toISOString()).slice(0, 10),
   }).select().single()
 }
 
@@ -100,6 +110,174 @@ async function checkAdmissionSection(
   return null
 }
 
+/**
+ * Phase 5 of plan.md: mandatory document checklist, checked at the same
+ * final-approval-step point as checkAdmissionSection above and following
+ * its exact shape deliberately — this is an admission-module-level
+ * pre-check, not a change to shared/middleware/workflow-engine.ts, which
+ * TC approvals, HR exits, comp-off, and leave requests also depend on and
+ * have no business knowing about admission document types.
+ *
+ * No requirements configured for the applied-for class = no block, same
+ * "absence is permissive" convention used throughout this module.
+ */
+async function checkDocumentCompleteness(applicationId: string, schoolId: string): Promise<string | null> {
+  const { data: app } = await supabase
+    .from('admission_applications')
+    .select('applying_for_class_id')
+    .eq('id', applicationId).eq('school_id', schoolId).maybeSingle()
+  if (!app?.applying_for_class_id) return null
+
+  const { data: required } = await supabase
+    .from('admission_document_requirements' as any)
+    .select('document_type')
+    .eq('school_id', schoolId).eq('class_id', app.applying_for_class_id)
+  if (!required?.length) return null
+
+  const { data: docs } = await supabase
+    .from('application_documents')
+    .select('document_type, is_verified')
+    .eq('application_id', applicationId)
+  const verifiedTypes = new Set((docs ?? []).filter((d: any) => d.is_verified).map((d: any) => d.document_type))
+  const missing = (required as any[]).map(r => r.document_type).filter(t => !verifiedTypes.has(t))
+  if (!missing.length) return null
+  return `Missing verified document(s): ${missing.join(', ')}`
+}
+
+/**
+ * Runs checkDocumentCompleteness and, if it blocks, checks for a valid
+ * Principal override (decisions.md Phase 5: Principal-only, reason
+ * required, logged) before deciding whether the caller is actually
+ * stopped. Body fields: override_document_gap: true, override_reason.
+ */
+async function enforceDocumentCompleteness(applicationId: string, schoolId: string, req: AuthRequest): Promise<string | null> {
+  const docProblem = await checkDocumentCompleteness(applicationId, schoolId)
+  if (!docProblem) return null
+
+  const canOverride = req.user!.role === 'principal' && req.body.override_document_gap === true
+  if (!canOverride) return docProblem
+  if (!req.body.override_reason?.trim()) return 'A reason is required to override missing documents.'
+
+  await supabase.from('admission_applications').update({
+    document_gap_override_at: new Date().toISOString(),
+    document_gap_override_by: req.user!.id,
+    document_gap_override_reason: req.body.override_reason.trim(),
+  }).eq('id', applicationId).eq('school_id', schoolId)
+  return null
+}
+
+/**
+ * Re-checks the class still has room, right where checkAdmissionSection
+ * and enforceDocumentCompleteness already run — before actOnWorkflow, not
+ * after, same reasoning as isFinalApprovalStep's own doc comment. No seat
+ * is reserved for an application until this exact moment (see
+ * completeAdmissionWorkflow below), so a class that filled up while this
+ * one was going through documents/entrance-test/approval must be caught
+ * here, not discovered as a negative-availability surprise afterward.
+ */
+async function checkSeatStillAvailable(applicationId: string, schoolId: string): Promise<string | null> {
+  const { data: app } = await supabase
+    .from('admission_applications')
+    .select('applying_for_class_id')
+    .eq('id', applicationId).eq('school_id', schoolId).maybeSingle()
+  if (!app?.applying_for_class_id) return null
+
+  const seats = await getClassSeatAvailability(schoolId, app.applying_for_class_id)
+  if (seats.capacity > 0 && seats.available <= 0) {
+    return 'No seats remain available for this class. Consider waitlisting the inquiry instead of admitting.'
+  }
+  return null
+}
+
+/**
+ * Runs once the admission-approval workflow instance completes (its
+ * final step is acted on). Approval no longer means admitted directly:
+ * it means the seat is reserved for the first time, the fee-hold clock
+ * starts, and the application moves to Fee Pending — POST
+ * .../collect-fee is what actually admits, confirms the seat, and
+ * creates the student (see that endpoint). A rejection at any step
+ * releases nothing, because nothing was ever reserved before this point.
+ */
+async function completeAdmissionWorkflow(
+  id: string, schoolId: string, sectionId: unknown, approved: boolean, userId: string,
+): Promise<'fee_pending' | 'rejected'> {
+  if (!approved) {
+    const { data: app } = await supabase
+      .from('admission_applications')
+      .update({ status: 'rejected', updated_at: new Date().toISOString() })
+      .eq('id', id).eq('school_id', schoolId)
+      .select('inquiry_id')
+      .single()
+    if (app?.inquiry_id) {
+      await supabase.from('admission_inquiries').update({ status: 'rejected' }).eq('id', app.inquiry_id)
+    }
+    return 'rejected'
+  }
+
+  const { data: app } = await supabase
+    .from('admission_applications')
+    .select('applying_for_class_id, inquiry_id')
+    .eq('id', id).eq('school_id', schoolId).maybeSingle()
+
+  if (app?.applying_for_class_id) {
+    await applyLedgerTransition(schoolId, app.applying_for_class_id, 'reserve', userId)
+  }
+
+  const { data: schoolRow } = await supabase.from('schools').select('admission_fee_hold_days').eq('id', schoolId).maybeSingle()
+  const holdDays = (schoolRow as any)?.admission_fee_hold_days ?? 7
+  const deadline = new Date(Date.now() + holdDays * 24 * 60 * 60 * 1000).toISOString()
+
+  await supabase.from('admission_applications').update({
+    status: 'fee_pending',
+    admitted_section_id: typeof sectionId === 'string' ? sectionId : null,
+    fee_hold_deadline: deadline,
+    updated_at: new Date().toISOString(),
+  }).eq('id', id).eq('school_id', schoolId)
+
+  // Keep the source inquiry's own pipeline stage in step with its
+  // application — rejected and admitted already mirror back (see the
+  // early-return above and POST .../collect-fee); this was the missing
+  // middle transition, leaving a converted inquiry stuck showing "Docs
+  // Submitted" even once its application had actually moved to Fee Pending.
+  if (app?.inquiry_id) {
+    await supabase.from('admission_inquiries').update({ status: 'fee_pending' }).eq('id', app.inquiry_id)
+  }
+
+  return 'fee_pending'
+}
+
+/**
+ * Rejects a new inquiry/application for an academic year whose admission
+ * cycle is explicitly closed. A school that never configures a cycle for
+ * a year gets no admission_cycles row at all, which is treated as always
+ * open — same NULL-means-unrestricted convention as schools.enabled_modules.
+ */
+async function checkAdmissionCycleOpen(schoolId: string, academicYearId: unknown): Promise<string | null> {
+  if (!academicYearId || typeof academicYearId !== 'string') return null
+
+  const { data: cycle } = await supabase
+    .from('admission_cycles' as any)
+    .select('opens_at, closes_at')
+    .eq('school_id', schoolId)
+    .eq('academic_year_id', academicYearId)
+    .maybeSingle()
+  if (!cycle) return null
+
+  const now = new Date()
+  if (cycle.opens_at && now < new Date(cycle.opens_at)) {
+    return `Admission for this academic year has not opened yet (opens ${new Date(cycle.opens_at).toLocaleDateString()}).`
+  }
+  if (cycle.closes_at && now > new Date(cycle.closes_at)) {
+    return `Admission for this academic year closed on ${new Date(cycle.closes_at).toLocaleDateString()}.`
+  }
+  return null
+}
+
+// checkClassLockOpen, getClassSeatAvailability, and applyLedgerTransition
+// now live in shared/utils/admissionSeatLedger.ts (imported above) — moved
+// there in Phase 3 so the fee-hold expiry cron sweep can reuse them
+// without a routes-file-to-routes-file import.
+
 // ── Schemas ─────────────────────────────────────────────────
 const CreateInquirySchema = z.object({
   student_name: z.string().min(1),
@@ -120,7 +298,8 @@ const CreateInquirySchema = z.object({
   budget_range: z.string().optional(),
 })
 const UpdateInquirySchema = CreateInquirySchema.partial().extend({
-  status: z.enum(['new','follow_up','interested','documents_submitted','entrance_exam','approved','fee_pending','admitted','rejected','lost']).optional(),
+  status: z.enum(['new','follow_up','interested','documents_submitted','entrance_exam','approved','waitlisted','fee_pending','admitted','rejected','lost']).optional(),
+  waitlist_rank: z.number().int().optional(),
 })
 
 const CreateFollowUpSchema = z.object({
@@ -147,6 +326,53 @@ const CreateApplicationSchema = z.object({
   previous_school: z.string().optional(),
 })
 
+const CollectFeeSchema = z.object({
+  // Optional: falls back to the applying-for class's configured
+  // admission_fee_amount (class-settings) when omitted — see
+  // POST /applications/:id/collect-fee.
+  amount: z.number().positive().optional(),
+  method: z.enum(['cash', 'cheque', 'neft', 'card', 'upi', 'online', 'dd', 'wallet']),
+  reference: z.string().optional(),
+})
+
+const AdmissionCycleSchema = z.object({
+  academic_year_id: z.string().uuid(),
+  opens_at: z.string().optional(),
+  closes_at: z.string().optional(),
+  notes: z.string().optional(),
+})
+
+// slot_type is deliberately generic — entrance_exam and interview now,
+// campus_tour later — so all three share one scheduling entity instead
+// of three near-identical ones.
+const CreateSlotSchema = z.object({
+  slot_type: z.enum(['entrance_exam', 'interview', 'campus_tour']),
+  academic_year_id: z.string().uuid().optional(),
+  class_id: z.string().uuid().optional(),
+  title: z.string().min(1),
+  location: z.string().optional(),
+  starts_at: z.string(),
+  ends_at: z.string().optional(),
+  capacity: z.number().int().positive().optional(),
+  assigned_staff_id: z.string().uuid().optional(),
+  notes: z.string().optional(),
+})
+const UpdateSlotSchema = CreateSlotSchema.partial()
+
+const BookSlotSchema = z.object({
+  inquiry_id: z.string().uuid().optional(),
+  application_id: z.string().uuid().optional(),
+}).refine(v => v.inquiry_id || v.application_id, { message: 'Either inquiry_id or application_id is required' })
+
+const UpdateBookingSchema = z.object({
+  status: z.enum(['booked', 'attended', 'no_show', 'cancelled']).optional(),
+  result: z.string().optional(),
+  // Phase 6b-i: manual marks entry (not auto-evaluation — a human types
+  // these in, same as the exam module's student_marks.marks_obtained).
+  marks_obtained: z.number().min(0).optional(),
+  max_marks: z.number().positive().optional(),
+})
+
 // ── INQUIRIES ───────────────────────────────────────────────
 
 router.get('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -158,7 +384,7 @@ router.get('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) =>
     .from('admission_inquiries')
     .select(`
       *,
-      classes:applying_for_class_id(id, name),
+      classes:applying_for_class_id(id, name, numeric_level),
       academic_years(id, name),
       users:counselor_id(id, full_name),
       inquiry_sources:source_id(id, name)
@@ -181,7 +407,7 @@ router.get('/inquiries', asyncHandler(async (req: AuthRequest, res: Response) =>
 router.get('/inquiries/stats', asyncHandler(async (req: AuthRequest, res: Response) => {
   const school_id = req.user!.school_id
 
-  const statuses = ['new', 'follow_up', 'interested', 'documents_submitted', 'approved', 'admitted', 'rejected', 'lost']
+  const statuses = ['new', 'follow_up', 'interested', 'documents_submitted', 'entrance_exam', 'approved', 'waitlisted', 'admitted', 'rejected', 'lost']
   const [counts, { data: sourceRows }] = await Promise.all([
     Promise.all(
       statuses.map(s =>
@@ -222,6 +448,93 @@ router.get('/inquiries/stats', asyncHandler(async (req: AuthRequest, res: Respon
   })
 }))
 
+// GET /admission-alerts — Phase 9: stage-aging (inquiries stuck at the
+// same status past the school's threshold) and occupancy risk (a class
+// running low on confirmed seats as its admission cycle nears close).
+//
+// Occupancy risk is checked against the SOONEST upcoming cycle close
+// date, not per-class — admission_cycles is per (school, academic_year),
+// not per class (Phase 1 deliberately kept the seat ledger un-year-scoped
+// since classes/sections aren't year-scoped anywhere in this schema), so
+// there's no clean class-to-cycle link to check individually. A school
+// with one active cycle (the common case) gets exactly the intended
+// behavior; multiple simultaneous cycles use whichever closes first.
+router.get('/admission-alerts', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const now = new Date()
+
+    const { data: school } = await supabase
+      .from('schools')
+      .select('admission_stage_aging_days, admission_occupancy_warning_percent, admission_occupancy_warning_days')
+      .eq('id', school_id).maybeSingle()
+    const agingDays = (school as any)?.admission_stage_aging_days ?? 10
+    const occPercent = (school as any)?.admission_occupancy_warning_percent ?? 70
+    const occDays = (school as any)?.admission_occupancy_warning_days ?? 60
+
+    const ACTIVE_STATUSES = ['new', 'follow_up', 'interested', 'documents_submitted', 'entrance_exam', 'approved', 'waitlisted', 'fee_pending']
+    const agingCutoff = new Date(now.getTime() - agingDays * 24 * 60 * 60 * 1000).toISOString()
+
+    const { data: staleInquiries } = await supabase
+      .from('admission_inquiries')
+      .select('id, student_name, status, status_changed_at')
+      .eq('school_id', school_id)
+      .in('status', ACTIVE_STATUSES)
+      .lt('status_changed_at', agingCutoff)
+      .order('status_changed_at', { ascending: true })
+      .limit(50)
+
+    const stageAgingCounts = new Map<string, number>()
+    for (const inq of (staleInquiries ?? []) as any[]) {
+      stageAgingCounts.set(inq.status, (stageAgingCounts.get(inq.status) ?? 0) + 1)
+    }
+
+    const occCutoff = new Date(now.getTime() + occDays * 24 * 60 * 60 * 1000)
+    const { data: soonestCycle } = await supabase
+      .from('admission_cycles' as any)
+      .select('closes_at')
+      .eq('school_id', school_id)
+      .not('closes_at', 'is', null)
+      .gte('closes_at', now.toISOString())
+      .order('closes_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    let occupancyWarnings: any[] = []
+    const cycleClosesAt = (soonestCycle as any)?.closes_at ?? null
+    if (cycleClosesAt && new Date(cycleClosesAt) <= occCutoff) {
+      const [{ data: classes }, { data: ledgers }] = await Promise.all([
+        supabase.from('classes').select('id, name').eq('school_id', school_id),
+        supabase.from('admission_seat_ledger' as any).select('class_id, capacity, confirmed').eq('school_id', school_id),
+      ])
+      const ledgerByClass = new Map((ledgers ?? []).map((l: any) => [l.class_id, l]))
+      occupancyWarnings = (classes ?? [])
+        .map((c) => {
+          const l = ledgerByClass.get(c.id) as any
+          if (!l || !l.capacity) return null
+          const occupancy_percent = Math.round((l.confirmed / l.capacity) * 100)
+          if (occupancy_percent >= occPercent) return null
+          return { class_id: c.id, class_name: c.name, occupancy_percent, capacity: l.capacity, confirmed: l.confirmed }
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null)
+        .sort((a, b) => a.occupancy_percent - b.occupancy_percent)
+    }
+
+    res.json({
+      success: true,
+      data: {
+        stage_aging_days_threshold: agingDays,
+        stage_aging_by_status: [...stageAgingCounts.entries()].map(([status, count]) => ({ status, count })),
+        stage_aging_examples: staleInquiries ?? [],
+        occupancy_warning_percent_threshold: occPercent,
+        occupancy_warning_days_threshold: occDays,
+        cycle_closes_at: cycleClosesAt,
+        occupancy_warnings: occupancyWarnings,
+      },
+    })
+  })
+)
+
 // GET /inquiry-sources — the list the "New Inquiry" form's Source
 // dropdown needs. Nothing fetched this before — the form field existed
 // in state but had no dropdown wired to it, so source_id was always
@@ -251,7 +564,7 @@ router.get('/inquiries/:id', asyncHandler(async (req: AuthRequest, res: Response
     .from('admission_inquiries')
     .select(`
       *,
-      classes:applying_for_class_id(id, name),
+      classes:applying_for_class_id(id, name, numeric_level),
       users:counselor_id(id, full_name, phone),
       inquiry_follow_ups(*, users:counselor_id(full_name))
     `)
@@ -274,7 +587,10 @@ router.get('/inquiries/:id', asyncHandler(async (req: AuthRequest, res: Response
 router.post('/inquiries', requirePermissionV2('admission.create'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const body = CreateInquirySchema.parse(req.body)
   const school_id = req.user!.school_id
- 
+
+  const cycleProblem = await checkAdmissionCycleOpen(school_id, body.academic_year_id)
+  if (cycleProblem) return res.status(400).json({ success: false, error: cycleProblem })
+
   const counselor_id = body.counselor_id ?? (req.user!.role === 'counselor' ? req.user!.id : undefined)
  
   const inquiryNumber = await nextDocumentNumber(school_id, 'INQ')
@@ -391,29 +707,33 @@ router.patch('/inquiries/:id', requirePermissionV2('admission.edit'), asyncHandl
   const body = UpdateInquirySchema.parse(req.body)
   const school_id = req.user!.school_id
  
-  // 'admitted' can ONLY be set automatically when the linked
-  // admission_application's workflow completes with final approval
-  // (see POST /applications/:id/approve and /workflow-action) —
-  // never via direct manual status change. This prevents the CRM
-  // showing "Admitted" for someone who was never actually enrolled
-  // as a student.
-  if (body.status === 'admitted') {
+  // 'admitted' and 'fee_pending' can ONLY be set automatically when the
+  // linked admission_application's workflow completes with final approval
+  // (see completeAdmissionWorkflow, called from POST /applications/:id/approve
+  // and /workflow-action) or its fee is collected — never via direct manual
+  // status change. Without this, a manual pick here could drift from what
+  // the linked application is actually doing, which is exactly the kind of
+  // cross-page desync this status is meant to prevent, not cause.
+  if (body.status === 'admitted' || body.status === 'fee_pending') {
     return res.status(400).json({
       success: false,
-      error: "Inquiries can't be marked 'admitted' directly. Convert this inquiry to a formal application and complete the Admission Approval Workflow — the inquiry will update automatically once the student is enrolled.",
+      error: `Inquiries can't be marked '${body.status}' directly. Convert this inquiry to a formal application and progress it through the Admission Approval Workflow — this status updates automatically from there.`,
     })
   }
  
   const { data, error } = await supabase
     .from('admission_inquiries')
-    .update(body)
+    // Phase 7: every other write path in this module tracks who acted —
+    // this was the one gap, since a direct PATCH can change anything
+    // (status included) with no actor otherwise recorded.
+    .update({ ...body, updated_by: req.user!.id })
     .eq('id', id)
     .eq('school_id', school_id)
     .select()
     .single()
- 
+
   if (error) return res.status(400).json({ success: false, error: error.message })
- 
+
   res.json({ success: true, data })
 }))
 
@@ -458,7 +778,7 @@ router.get('/applications', asyncHandler(async (req: AuthRequest, res: Response)
     .from('admission_applications')
     .select(`
       *,
-      classes:applying_for_class_id(id, name),
+      classes:applying_for_class_id(id, name, numeric_level),
       users:counselor_id(id, full_name)
     `, { count: 'exact' })
     .eq('school_id', school_id)
@@ -522,7 +842,7 @@ router.get('/applications/:id', asyncHandler(async (req: AuthRequest, res: Respo
     .from('admission_applications')
     .select(`
       *,
-      classes ( id, name ),
+      classes ( id, name, numeric_level ),
       users:counselor_id ( id, full_name )
     `)
     .eq('id', id)
@@ -560,6 +880,19 @@ router.post('/applications', requirePermissionV2('admission.create'), asyncHandl
   const body = CreateApplicationSchema.parse(req.body)
   const school_id = req.user!.school_id
 
+  const cycleProblem = await checkAdmissionCycleOpen(school_id, body.academic_year_id)
+  if (cycleProblem) return res.status(400).json({ success: false, error: cycleProblem })
+
+  if (body.applying_for_class_id) {
+    const lockProblem = await checkClassLockOpen(school_id, body.applying_for_class_id)
+    if (lockProblem) return res.status(400).json({ success: false, error: lockProblem })
+
+    const seats = await getClassSeatAvailability(school_id, body.applying_for_class_id)
+    if (seats.capacity > 0 && seats.available <= 0) {
+      return res.status(400).json({ success: false, error: 'No seats available for this class. Consider waitlisting the inquiry instead.' })
+    }
+  }
+
   const appNumber = await nextDocumentNumber(school_id, 'APP')
 
   const { data, error } = await supabase
@@ -569,6 +902,14 @@ router.post('/applications', requirePermissionV2('admission.create'), asyncHandl
     .single()
 
   if (error) return res.status(400).json({ success: false, error: error.message })
+
+  // No seat is reserved here — only checked for availability above. A
+  // seat is held (and the fee-hold clock started) only once the
+  // Counselor -> Principal -> Admin approval chain actually completes and
+  // the application moves to Fee Pending (see the workflow-completion
+  // handlers below). Reserving this early would tie up a seat for the
+  // entire vetting process — documents, entrance test, multi-step
+  // approval — before the school has actually decided to admit anyone.
 
   // If linked to inquiry, update inquiry status
   if (body.inquiry_id) {
@@ -660,6 +1001,8 @@ router.post(
     // Before acting, not after — see isFinalApprovalStep.
     if (rawStatus === 'approved' && await isFinalApprovalStep(instance.id, school_id)) {
       const problem = await checkAdmissionSection(id, school_id, req.body.section_id)
+        ?? await enforceDocumentCompleteness(id, school_id, req)
+        ?? await checkSeatStillAvailable(id, school_id)
       if (problem) return res.status(400).json({ success: false, error: problem })
     }
 
@@ -675,44 +1018,11 @@ router.post(
       return res.status(400).json({ success: false, error: result.error })
     }
 
-    let createdStudent = null
-
+    let newAppStatus: 'fee_pending' | 'rejected' | null = null
     if (result.completed) {
-      const newAppStatus = result.instance.status === 'approved' ? 'admitted' : 'rejected'
-
-      const { data: app } = await supabase
-        .from('admission_applications')
-        .update({ status: newAppStatus, updated_at: new Date().toISOString() })
-        .eq('id', id)
-        .eq('school_id', school_id)
-        .select()
-        .single()
-
-      // On final approval, create the student + parent records
-      // (mirrors the old endpoint's behaviour on principal final approval)
-      if (newAppStatus === 'admitted' && app && !app.student_id) {
-        const { data: student } = await createStudentForApplication(app, school_id, req.body.section_id)
-
-        if (student) {
-          createdStudent = student
-          await supabase.from('admission_applications').update({ student_id: student.id }).eq('id', id)
-
-          await supabase.from('parents').insert({
-            school_id, student_id: student.id,
-            father_name: app.father_name, father_phone: app.father_phone,
-            mother_name: app.mother_name, mother_phone: app.mother_phone,
-          })
-        }
-
-        // If linked to an inquiry, mark it admitted too
-        if (app.inquiry_id) {
-          await supabase.from('admission_inquiries').update({ status: 'admitted' }).eq('id', app.inquiry_id)
-        }
-      }
-
-      if (newAppStatus === 'rejected' && app?.inquiry_id) {
-        await supabase.from('admission_inquiries').update({ status: 'rejected' }).eq('id', app.inquiry_id)
-      }
+      newAppStatus = await completeAdmissionWorkflow(
+        id, school_id, req.body.section_id, result.instance.status === 'approved', req.user!.id,
+      )
     }
 
     res.json({
@@ -721,7 +1031,7 @@ router.post(
         instance: result.instance,
         completed: result.completed,
         next_step: result.nextStep ?? null,
-        student: createdStudent,
+        application_status: newAppStatus,
       },
       message: 'Note: prefer POST /applications/:id/workflow-action for full control (approve/reject/comment/escalate).',
     })
@@ -761,6 +1071,8 @@ router.post('/applications/:id/workflow-action', asyncHandler(async (req: AuthRe
   // Before acting, not after — see isFinalApprovalStep.
   if (status === 'approved' && await isFinalApprovalStep(instance.id, school_id)) {
     const problem = await checkAdmissionSection(id, school_id, section_id)
+      ?? await enforceDocumentCompleteness(id, school_id, req)
+      ?? await checkSeatStillAvailable(id, school_id)
     if (problem) return res.status(400).json({ success: false, error: problem })
   }
 
@@ -776,41 +1088,11 @@ router.post('/applications/:id/workflow-action', asyncHandler(async (req: AuthRe
     return res.status(400).json({ success: false, error: result.error })
   }
 
-  let createdStudent = null
-
+  let newAppStatus: 'fee_pending' | 'rejected' | null = null
   if (result.completed) {
-    const newAppStatus = result.instance.status === 'approved' ? 'admitted' : 'rejected'
-
-    const { data: app } = await supabase
-      .from('admission_applications')
-      .update({ status: newAppStatus, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .eq('school_id', school_id)
-      .select()
-      .single()
-
-    if (newAppStatus === 'admitted' && app && !app.student_id) {
-      const { data: student } = await createStudentForApplication(app, school_id, section_id)
-
-      if (student) {
-        createdStudent = student
-        await supabase.from('admission_applications').update({ student_id: student.id }).eq('id', id)
-
-        await supabase.from('parents').insert({
-          school_id, student_id: student.id,
-          father_name: app.father_name, father_phone: app.father_phone,
-          mother_name: app.mother_name, mother_phone: app.mother_phone,
-        })
-      }
-
-      if (app.inquiry_id) {
-        await supabase.from('admission_inquiries').update({ status: 'admitted' }).eq('id', app.inquiry_id)
-      }
-    }
-
-    if (newAppStatus === 'rejected' && app?.inquiry_id) {
-      await supabase.from('admission_inquiries').update({ status: 'rejected' }).eq('id', app.inquiry_id)
-    }
+    newAppStatus = await completeAdmissionWorkflow(
+      id, school_id, section_id, result.instance.status === 'approved', req.user!.id,
+    )
   }
 
   res.json({
@@ -819,7 +1101,7 @@ router.post('/applications/:id/workflow-action', asyncHandler(async (req: AuthRe
       instance: result.instance,
       completed: result.completed,
       next_step: result.nextStep ?? null,
-      student: createdStudent,
+      application_status: newAppStatus,
     },
   })
 }))
@@ -871,6 +1153,878 @@ router.post('/applications/:id/start-workflow', requirePermissionV2('admission.a
     res.json({ success: true, data: result.instance })
   })
 )
+
+// ── APPLICATION DOCUMENTS ─────────────────────────────────────
+// Uses the same base64-in-JSON upload pattern as student-documents /
+// staff-documents (no multer) — a public 'admission-documents' bucket,
+// path scoped ${school_id}/${application_id}/${timestamp}_${file_name}.
+router.get('/applications/:id/documents', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+
+    const { data: app } = await supabase
+      .from('admission_applications').select('id').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!app) return res.status(404).json({ success: false, error: 'Application not found' })
+
+    const { data, error } = await supabase
+      .from('application_documents')
+      .select('*, users:uploaded_by(full_name), verifier:verified_by(full_name)')
+      .eq('application_id', id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.post('/applications/:id/documents', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+    const { file_base64, file_name, mime_type, document_type, document_name, notes } = req.body
+
+    if (!file_base64 || !file_name) {
+      return res.status(400).json({ success: false, error: 'file_base64 and file_name are required' })
+    }
+
+    const { data: app } = await supabase
+      .from('admission_applications').select('id').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!app) return res.status(404).json({ success: false, error: 'Application not found' })
+
+    const base64Data = file_base64.replace(/^data:[\w/+.-]+;base64,/, '')
+    const buffer = Buffer.from(base64Data, 'base64')
+    const filePath = `${school_id}/${id}/${Date.now()}_${file_name}`
+
+    const { error: uploadErr } = await supabase.storage
+      .from('admission-documents')
+      .upload(filePath, buffer, { contentType: mime_type ?? 'application/octet-stream', upsert: false })
+    if (uploadErr) return res.status(400).json({ success: false, error: uploadErr.message })
+
+    const { data: urlData } = supabase.storage.from('admission-documents').getPublicUrl(filePath)
+    const fileSize = buffer.length > 1024 * 1024
+      ? `${(buffer.length / (1024 * 1024)).toFixed(1)} MB`
+      : `${(buffer.length / 1024).toFixed(0)} KB`
+
+    const { data, error } = await supabase
+      .from('application_documents')
+      .insert({
+        application_id: id,
+        school_id,
+        document_type: document_type ?? 'other',
+        document_name: document_name ?? file_name,
+        file_url: urlData.publicUrl,
+        mime_type,
+        file_size: fileSize,
+        uploaded_by: req.user!.id,
+        notes,
+      })
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.patch('/applications/:id/documents/:docId', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id, docId } = req.params
+    const school_id = req.user!.school_id
+    const { is_verified } = req.body
+
+    if (typeof is_verified !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'is_verified (boolean) is required' })
+    }
+
+    const { data, error } = await supabase
+      .from('application_documents')
+      .update({
+        is_verified,
+        verified_by: is_verified ? req.user!.id : null,
+        verified_at: is_verified ? new Date().toISOString() : null,
+      })
+      .eq('id', docId)
+      .eq('application_id', id)
+      .eq('school_id', school_id)
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// Phase 7: soft delete — a hard delete erased a verified document's
+// entire trail (who uploaded it, who verified it) with no trace at all.
+// GET .../documents already filters deleted_at IS NULL.
+router.delete('/applications/:id/documents/:docId', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id, docId } = req.params
+    const school_id = req.user!.school_id
+
+    const { error } = await supabase
+      .from('application_documents')
+      .update({ deleted_at: new Date().toISOString(), deleted_by: req.user!.id })
+      .eq('id', docId)
+      .eq('application_id', id)
+      .eq('school_id', school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
+// ── ADMISSION FEE ────────────────────────────────────────────
+// Deliberately admission-internal: an application has no student_id
+// until it's admitted, and fee_invoices.student_id is NOT NULL, so this
+// does not create a Fee-module invoice. It's a lightweight paid/unpaid
+// record with an audit trail, not an accounting entry.
+//
+// Only usable once the admission-approval chain has completed and the
+// application is Fee Pending — paying is what actually admits: confirms
+// the seat (reserved -> confirmed) and creates the student + parent
+// records, using the section chosen at approval time
+// (admitted_section_id). Before Fee Pending there's nothing to pay for
+// yet (no seat is even reserved); after Admitted there's nothing left to
+// pay again.
+router.post('/applications/:id/collect-fee', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+    const body = CollectFeeSchema.parse(req.body)
+
+    const { data: existing } = await supabase
+      .from('admission_applications')
+      .select('*')
+      .eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!existing) return res.status(404).json({ success: false, error: 'Application not found' })
+    if (existing.status !== 'fee_pending') {
+      return res.status(400).json({
+        success: false,
+        error: existing.status === 'admitted'
+          ? 'This application has already been admitted and its fee collected.'
+          : 'The admission fee can only be collected once the application has cleared Counselor → Principal → Admin approval and is Fee Pending.',
+      })
+    }
+
+    // amount is optional on the request — falls back to the class's own
+    // configured admission_fee_amount (Settings → Slots → Entrance Mode
+    // & Admission Fee) so a school that's set one doesn't have to type it
+    // in by hand every time. Still overridable per-application (a
+    // scholarship, a sibling discount) by just sending an amount.
+    let amount = body.amount
+    if (amount === undefined && existing.applying_for_class_id) {
+      const { data: classSetting } = await supabase
+        .from('admission_class_settings' as any)
+        .select('admission_fee_amount')
+        .eq('school_id', school_id).eq('class_id', existing.applying_for_class_id).maybeSingle()
+      amount = (classSetting as any)?.admission_fee_amount ?? undefined
+    }
+    if (amount === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'No admission fee is configured for this class, and no amount was given. Enter an amount, or set one for this class first.',
+      })
+    }
+
+    const { data: app, error } = await supabase
+      .from('admission_applications')
+      .update({
+        application_fee_paid: true,
+        application_fee_amount: amount,
+        fee_paid_at: new Date().toISOString(),
+        fee_payment_method: body.method,
+        fee_payment_reference: body.reference ?? null,
+        fee_collected_by: req.user!.id,
+        fee_hold_deadline: null,
+        status: 'admitted',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('school_id', school_id)
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+
+    await applyLedgerTransition(school_id, app.applying_for_class_id, 'confirm', req.user!.id)
+
+    let createdStudent = null
+    if (!app.student_id) {
+      const { data: student } = await createStudentForApplication(app, school_id, app.admitted_section_id)
+      if (student) {
+        createdStudent = student
+        await supabase.from('admission_applications').update({ student_id: student.id }).eq('id', id)
+        await supabase.from('parents').insert({
+          school_id, student_id: student.id,
+          father_name: app.father_name, father_phone: app.father_phone,
+          mother_name: app.mother_name, mother_phone: app.mother_phone,
+        })
+      }
+      if (app.inquiry_id) {
+        await supabase.from('admission_inquiries').update({ status: 'admitted' }).eq('id', app.inquiry_id)
+      }
+    }
+
+    res.json({ success: true, data: { ...app, status: 'admitted', student: createdStudent } })
+  })
+)
+
+// POST /applications/:id/extend-fee-hold — Principal/School Admin manual
+// override, decisions.md Phase 3: allowed, logged. "Admission Officer"
+// isn't a real base role yet (see decisions.md's blocking decision on
+// role-mapping), so this stays school_admin/principal until Phase 10.
+router.post('/applications/:id/extend-fee-hold', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+    const days = Number(req.body.days)
+    const reason = req.body.reason
+
+    if (!Number.isInteger(days) || days <= 0) {
+      return res.status(400).json({ success: false, error: 'days must be a positive integer' })
+    }
+
+    const { data: app } = await supabase
+      .from('admission_applications').select('status, fee_hold_deadline, application_fee_paid')
+      .eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!app) return res.status(404).json({ success: false, error: 'Application not found' })
+    if (app.application_fee_paid) return res.status(400).json({ success: false, error: 'Fee already paid — there is no hold to extend.' })
+    // No hold exists to extend before Fee Pending — a seat isn't reserved
+    // (and no deadline set) until the admission-approval chain completes.
+    if (app.status !== 'fee_pending') {
+      return res.status(400).json({ success: false, error: 'There is no active fee hold to extend — this application has not reached Fee Pending yet.' })
+    }
+
+    // Extend from the later of "now" or the existing deadline — extending
+    // an already-expired hold restarts the clock from today, not from a
+    // date that's already passed.
+    const base = app.fee_hold_deadline && new Date(app.fee_hold_deadline) > new Date() ? new Date(app.fee_hold_deadline) : new Date()
+    const newDeadline = new Date(base.getTime() + days * 24 * 60 * 60 * 1000).toISOString()
+
+    const { data, error } = await supabase
+      .from('admission_applications')
+      .update({
+        fee_hold_deadline: newDeadline,
+        fee_hold_extended_at: new Date().toISOString(),
+        fee_hold_extended_by: req.user!.id,
+        fee_hold_extension_reason: reason ?? null,
+      })
+      .eq('id', id).eq('school_id', school_id)
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// POST /applications/expire-fee-holds — manual trigger for the same sweep
+// the hourly cron runs, scoped to the caller's own school. Same pattern
+// as notifications' POST /run-fee-reminders.
+router.post('/applications/expire-fee-holds', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const result = await releaseExpiredSeatHolds(req.user!.school_id)
+    res.json({ success: true, data: result })
+  })
+)
+
+// POST /inquiries/process-waitlist-offers — manual trigger for the same
+// sweep the hourly cron runs, scoped to the caller's own school. Same
+// pattern as the fee-hold trigger above and notifications' own
+// POST /run-fee-reminders.
+router.post('/inquiries/process-waitlist-offers', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const result = await processExpiredWaitlistOffers(req.user!.school_id)
+    res.json({ success: true, data: result })
+  })
+)
+
+// ── OFFER LETTER ────────────────────────────────────────────────
+// Issuing just stamps a number + audit trail here — the actual printable
+// HTML lives in the documents module (every other printable document in
+// this app follows that split: TC/certificate issuance vs. rendering).
+// Gated on 'admitted' — same "gate on real state" reasoning already used
+// for the HR offer letter and relieving letter in documents/routes.ts.
+router.post('/applications/:id/issue-offer-letter', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+
+    const { data: app } = await supabase
+      .from('admission_applications').select('status, offer_letter_number').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!app) return res.status(404).json({ success: false, error: 'Application not found' })
+    if (app.status !== 'admitted') {
+      return res.status(400).json({ success: false, error: 'Offer letter can only be issued once the application has been admitted.' })
+    }
+    if (app.offer_letter_number) {
+      return res.status(400).json({ success: false, error: `Offer letter already issued: ${app.offer_letter_number}` })
+    }
+
+    const offerLetterNumber = await nextDocumentNumber(school_id, 'OFR')
+    const { data, error } = await supabase
+      .from('admission_applications')
+      .update({
+        offer_letter_number: offerLetterNumber,
+        offer_letter_issued_at: new Date().toISOString(),
+        offer_letter_issued_by: req.user!.id,
+      })
+      .eq('id', id)
+      .eq('school_id', school_id)
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+// ── SEAT AVAILABILITY ──────────────────────────────────────────
+// Per-class breakdown for the "how many seats are left" widget on the
+// application form. capacity 0 (no sections configured) is surfaced as
+// unlimited=true rather than available:0, matching getClassSeatAvailability.
+router.get('/admission-seats', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const { data: classes, error } = await supabase
+      .from('classes').select('id, name, numeric_level').eq('school_id', school_id).order('numeric_level')
+    if (error) return res.status(500).json({ success: false, error: error.message })
+
+    const data = await Promise.all((classes ?? []).map(async (c) => {
+      const seats = await getClassSeatAvailability(school_id, c.id)
+      return {
+        class_id: c.id,
+        class_name: c.name,
+        numeric_level: c.numeric_level,
+        unlimited: seats.capacity === 0,
+        ...seats,
+      }
+    }))
+    res.json({ success: true, data })
+  })
+)
+
+// PATCH /admission-seats/:classId — School Admin / Principal adjust
+// capacity or the frozen buffer directly. decisions.md, Phase 1: both
+// roles may act independently (no dual-approval), a reason is recorded
+// when given but not required, and "last changed by X at Y" is exactly
+// updated_by/updated_at on the ledger row — no separate audit trail.
+router.patch('/admission-seats/:classId', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { classId } = req.params
+    const school_id = req.user!.school_id
+    const { capacity, frozen, locked, reason } = req.body
+
+    if (capacity === undefined && frozen === undefined && locked === undefined) {
+      return res.status(400).json({ success: false, error: 'Provide capacity, frozen, and/or locked' })
+    }
+    if (capacity !== undefined && (!Number.isInteger(capacity) || capacity < 0)) {
+      return res.status(400).json({ success: false, error: 'capacity must be a non-negative integer' })
+    }
+    if (frozen !== undefined && (!Number.isInteger(frozen) || frozen < 0)) {
+      return res.status(400).json({ success: false, error: 'frozen must be a non-negative integer' })
+    }
+    // Locking (and unlocking) is School Admin only — Principal keeps
+    // capacity/frozen access but not this. decisions.md: "Director-only
+    // unlock" mapped onto the existing role set as School Admin, the
+    // closest existing base value with that authority, and lock/unlock
+    // treated the same way rather than splitting them further.
+    if (locked !== undefined) {
+      if (typeof locked !== 'boolean') return res.status(400).json({ success: false, error: 'locked must be a boolean' })
+      if (req.user!.role !== 'school_admin') {
+        return res.status(403).json({ success: false, error: 'Only School Admin can lock or unlock a class.' })
+      }
+    }
+
+    // Ensure a row exists (a class touched before its first application
+    // or backfill may not have one yet) before updating it.
+    await getClassSeatAvailability(school_id, classId)
+
+    const update: Record<string, unknown> = { updated_by: req.user!.id, updated_reason: reason ?? null }
+    if (capacity !== undefined) update.capacity = capacity
+    if (frozen !== undefined) update.frozen = frozen
+    if (locked !== undefined) {
+      update.is_locked = locked
+      update.locked_at = locked ? new Date().toISOString() : null
+      update.locked_by = locked ? req.user!.id : null
+      update.lock_reason = locked ? (reason ?? null) : null
+    }
+
+    const { data, error } = await supabase
+      .from('admission_seat_ledger' as any)
+      .update(update)
+      .eq('school_id', school_id).eq('class_id', classId)
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// ── CLASS DISPLAY STYLE ───────────────────────────────────────────
+// User request: numeric ("Class 11") vs Roman ("Class XI") numbering,
+// single source of truth for the school. Lives on `schools` like every
+// other school-level setting. Any authenticated staff member can read it
+// (needed everywhere a class name renders); only School Admin can change
+// it, matching the other display-affecting settings in this file.
+router.get('/class-display-style', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { data } = await supabase.from('schools').select('class_display_style').eq('id', req.user!.school_id).maybeSingle()
+  res.json({ success: true, data: { style: (data as any)?.class_display_style ?? 'numeric' } })
+}))
+
+router.patch('/class-display-style', requireRole('school_admin'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { style } = req.body
+    if (!['numeric', 'roman'].includes(style)) {
+      return res.status(400).json({ success: false, error: "style must be 'numeric' or 'roman'" })
+    }
+    const { error } = await supabase.from('schools').update({ class_display_style: style }).eq('id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data: { style } })
+  })
+)
+
+// ── CLASS SETTINGS (Phase 6a) ────────────────────────────────────
+// Entrance mode + admission fee, per class — School Admin/Principal
+// owned. No row for a class = 'interview' / 40% pass mark (the schema
+// defaults), same "absence has a sane default" convention as everything
+// else in this module — except admission_fee_amount, which stays null
+// (not configured) rather than defaulting to a number nobody chose;
+// POST /applications/:id/collect-fee falls back to a typed-in amount
+// when it's null.
+router.get('/class-settings', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const { data: classes, error } = await supabase
+      .from('classes').select('id, name, numeric_level').eq('school_id', school_id).order('numeric_level')
+    if (error) return res.status(500).json({ success: false, error: error.message })
+
+    const { data: settings } = await supabase
+      .from('admission_class_settings' as any)
+      .select('class_id, entrance_mode, pass_marks_percent, admission_fee_amount')
+      .eq('school_id', school_id)
+    const settingByClass = new Map((settings ?? []).map((s: any) => [s.class_id, s]))
+
+    const data = (classes ?? []).map(c => {
+      const s = settingByClass.get(c.id) as any
+      return {
+        class_id: c.id,
+        class_name: c.name,
+        numeric_level: c.numeric_level,
+        entrance_mode: s?.entrance_mode ?? 'interview',
+        pass_marks_percent: s?.pass_marks_percent ?? 40,
+        admission_fee_amount: s?.admission_fee_amount ?? null,
+      }
+    })
+    res.json({ success: true, data })
+  })
+)
+
+router.patch('/class-settings/:classId', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { classId } = req.params
+    const school_id = req.user!.school_id
+    const { entrance_mode, pass_marks_percent, admission_fee_amount } = req.body
+
+    if (entrance_mode !== undefined && !['interview', 'written_mcq', 'written_subjective', 'observation', 'previous_academic_percentage'].includes(entrance_mode)) {
+      return res.status(400).json({ success: false, error: 'entrance_mode must be one of: interview, written_mcq, written_subjective, observation, previous_academic_percentage' })
+    }
+    if (pass_marks_percent !== undefined && (!Number.isInteger(pass_marks_percent) || pass_marks_percent < 0 || pass_marks_percent > 100)) {
+      return res.status(400).json({ success: false, error: 'pass_marks_percent must be an integer between 0 and 100' })
+    }
+    if (admission_fee_amount !== undefined && admission_fee_amount !== null && (typeof admission_fee_amount !== 'number' || !Number.isFinite(admission_fee_amount) || admission_fee_amount < 0)) {
+      return res.status(400).json({ success: false, error: 'admission_fee_amount must be a non-negative number, or null to clear it' })
+    }
+    if (entrance_mode === undefined && pass_marks_percent === undefined && admission_fee_amount === undefined) {
+      return res.status(400).json({ success: false, error: 'Provide entrance_mode, pass_marks_percent, and/or admission_fee_amount' })
+    }
+
+    const { data: existing } = await supabase
+      .from('admission_class_settings' as any)
+      .select('entrance_mode, pass_marks_percent, admission_fee_amount')
+      .eq('school_id', school_id).eq('class_id', classId).maybeSingle()
+
+    const { data, error } = await supabase
+      .from('admission_class_settings' as any)
+      .upsert({
+        school_id, class_id: classId,
+        entrance_mode: entrance_mode ?? (existing as any)?.entrance_mode ?? 'interview',
+        pass_marks_percent: pass_marks_percent ?? (existing as any)?.pass_marks_percent ?? 40,
+        admission_fee_amount: admission_fee_amount !== undefined ? admission_fee_amount : (existing as any)?.admission_fee_amount ?? null,
+      }, { onConflict: 'school_id,class_id' })
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// ── DOCUMENT REQUIREMENTS ───────────────────────────────────────
+// Mandatory document checklist per class, School Admin owned. No rows for
+// a class = no checklist = never blocks (checkDocumentCompleteness).
+router.get('/document-requirements', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { class_id } = req.query
+    let query = supabase
+      .from('admission_document_requirements' as any)
+      .select('*, classes:class_id(name)')
+      .eq('school_id', req.user!.school_id)
+      .order('document_type')
+    if (class_id) query = query.eq('class_id', class_id as string)
+
+    const { data, error } = await query
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.post('/document-requirements', requireRole('school_admin'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { class_id, document_type } = req.body
+    if (!class_id || !document_type) {
+      return res.status(400).json({ success: false, error: 'class_id and document_type are required' })
+    }
+    const { data, error } = await supabase
+      .from('admission_document_requirements' as any)
+      .insert({ school_id: req.user!.school_id, class_id, document_type })
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.delete('/document-requirements/:id', requireRole('school_admin'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { error } = await supabase
+      .from('admission_document_requirements' as any)
+      .delete()
+      .eq('id', req.params.id)
+      .eq('school_id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
+// ── ADMISSION CYCLES ───────────────────────────────────────────
+// Per-school, per-academic-year open/close window. No row for a year =
+// always open (checkAdmissionCycleOpen treats absence as unrestricted).
+router.get('/admission-cycles', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { data, error } = await supabase
+      .from('admission_cycles' as any)
+      .select('*, academic_years(id, name)')
+      .eq('school_id', req.user!.school_id)
+      .order('created_at', { ascending: false })
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.post('/admission-cycles', requirePermissionV2('settings.manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const body = AdmissionCycleSchema.parse(req.body)
+
+    const { data, error } = await supabase
+      .from('admission_cycles' as any)
+      .upsert(
+        { school_id, ...body },
+        { onConflict: 'school_id,academic_year_id' },
+      )
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.delete('/admission-cycles/:id', requirePermissionV2('settings.manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { error } = await supabase
+      .from('admission_cycles' as any)
+      .delete()
+      .eq('id', req.params.id)
+      .eq('school_id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
+// ── ENTRANCE TEST / INTERVIEW SCHEDULING ────────────────────────
+// admission_slots + admission_slot_bookings. Deliberately generic
+// (slot_type) rather than exam-specific, so campus-tour booking reuses
+// this instead of a second scheduling system.
+router.get('/admission-slots', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { slot_type, from, to, class_id } = req.query
+    const school_id = req.user!.school_id
+
+    let query = supabase
+      .from('admission_slots' as any)
+      .select('*, classes:class_id(name, numeric_level), academic_years(name), users:assigned_staff_id(full_name)')
+      .eq('school_id', school_id)
+      .order('starts_at')
+
+    if (slot_type) query = query.eq('slot_type', slot_type as string)
+    if (from) query = query.gte('starts_at', from as string)
+    if (to) query = query.lte('starts_at', to as string)
+    // User request: strictly filter slot options by the candidate's own
+    // class when booking — a class-agnostic slot (no class_id set) is
+    // NOT shown here, "strictly filtered" means exactly that class only.
+    if (class_id) query = query.eq('class_id', class_id as string)
+
+    const { data, error } = await query
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.post('/admission-slots', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const body = CreateSlotSchema.parse(req.body)
+
+    const { data, error } = await supabase
+      .from('admission_slots' as any)
+      .insert({ ...body, school_id })
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.patch('/admission-slots/:id', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const body = UpdateSlotSchema.parse(req.body)
+    const { data, error } = await supabase
+      .from('admission_slots' as any)
+      .update(body)
+      .eq('id', req.params.id)
+      .eq('school_id', req.user!.school_id)
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.delete('/admission-slots/:id', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { error } = await supabase
+      .from('admission_slots' as any)
+      .delete()
+      .eq('id', req.params.id)
+      .eq('school_id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
+// POST /admission-slots/:id/book — capacity is enforced here (not just
+// displayed): a full slot rejects new bookings rather than silently
+// overbooking. capacity null/undefined means unlimited.
+router.post('/admission-slots/:id/book', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+    const body = BookSlotSchema.parse(req.body)
+
+    const { data: slot } = await supabase
+      .from('admission_slots' as any).select('slot_type, capacity').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!slot) return res.status(404).json({ success: false, error: 'Slot not found' })
+
+    if ((slot as any).capacity != null) {
+      const { data: existing } = await supabase
+        .from('admission_slot_bookings' as any).select('id, status').eq('slot_id', id)
+      const activeCount = ((existing ?? []) as any[]).filter(b => b.status !== 'cancelled').length
+      if (activeCount >= (slot as any).capacity) {
+        return res.status(400).json({ success: false, error: 'This slot is fully booked.' })
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('admission_slot_bookings' as any)
+      .insert({ slot_id: id, school_id, ...body, booked_by: req.user!.id })
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+
+    // Entering the entrance-exam stage advances an inquiry that's still
+    // early in the funnel — never overrides a status already further
+    // along (e.g. an inquiry already 'approved' shouldn't regress).
+    if (body.inquiry_id && (slot as any).slot_type === 'entrance_exam') {
+      const { data: inquiry } = await supabase.from('admission_inquiries').select('status').eq('id', body.inquiry_id).maybeSingle()
+      if (inquiry && ['new', 'follow_up', 'interested'].includes(inquiry.status)) {
+        await supabase.from('admission_inquiries').update({ status: 'entrance_exam' }).eq('id', body.inquiry_id)
+      }
+    }
+
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.get('/admission-slot-bookings', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { inquiry_id, application_id, slot_id } = req.query
+    if (!inquiry_id && !application_id && !slot_id) {
+      return res.status(400).json({ success: false, error: 'inquiry_id, application_id, or slot_id query param is required' })
+    }
+    let query = supabase
+      .from('admission_slot_bookings' as any)
+      .select('*, admission_slots(*), admission_inquiries(student_name), admission_applications(student_first_name, student_last_name)')
+      .eq('school_id', req.user!.school_id)
+      .order('booked_at', { ascending: false })
+    // An application converted from an inquiry inherits that inquiry's
+    // booking history — a booking row only ever has one of the two FKs
+    // set, made at whichever stage the candidate was in when it was
+    // booked, but the application detail page needs to show bookings made
+    // either before or after conversion, not just the ones with
+    // application_id set (convert-to-application doesn't relink existing
+    // bookings, so pre-conversion ones would otherwise vanish from view).
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const validInquiryId = typeof inquiry_id === 'string' && uuidRe.test(inquiry_id) ? inquiry_id : null
+    const validApplicationId = typeof application_id === 'string' && uuidRe.test(application_id) ? application_id : null
+    if (validInquiryId && validApplicationId) {
+      query = query.or(`inquiry_id.eq.${validInquiryId},application_id.eq.${validApplicationId}`)
+    } else if (validInquiryId) {
+      query = query.eq('inquiry_id', validInquiryId)
+    } else if (validApplicationId) {
+      query = query.eq('application_id', validApplicationId)
+    }
+    if (slot_id) query = query.eq('slot_id', slot_id as string)
+
+    const { data, error } = await query
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.patch('/admission-slot-bookings/:id', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const body = UpdateBookingSchema.parse(req.body)
+    const school_id = req.user!.school_id
+    const update: Record<string, unknown> = { ...body }
+
+    // Phase 6b-i: pass/fail is a plain percentage-vs-threshold computation
+    // (same spirit as the exam module's computeGrade() percentage bucket)
+    // — not evaluation of an answer, so it stays inside "marks entry"
+    // rather than crossing into the still-blocked 6b-ii auto-evaluation.
+    // Merges with whichever of marks_obtained/max_marks isn't part of
+    // this particular update, so setting just one field still recomputes
+    // correctly against the other's stored value.
+    if (body.marks_obtained !== undefined || body.max_marks !== undefined) {
+      const { data: existing } = await supabase
+        .from('admission_slot_bookings' as any)
+        .select('marks_obtained, max_marks, slot_id')
+        .eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+
+      const marksObtained = body.marks_obtained ?? (existing as any)?.marks_obtained
+      const maxMarks = body.max_marks ?? (existing as any)?.max_marks
+
+      if (marksObtained != null && maxMarks != null && maxMarks > 0) {
+        let passPercent = 40
+        const { data: slot } = await supabase.from('admission_slots' as any).select('class_id').eq('id', (existing as any)?.slot_id).maybeSingle()
+        if ((slot as any)?.class_id) {
+          const { data: setting } = await supabase
+            .from('admission_class_settings' as any)
+            .select('pass_marks_percent')
+            .eq('school_id', school_id).eq('class_id', (slot as any).class_id).maybeSingle()
+          passPercent = (setting as any)?.pass_marks_percent ?? 40
+        }
+        update.is_pass = (marksObtained / maxMarks) * 100 >= passPercent
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('admission_slot_bookings' as any)
+      .update(update)
+      .eq('id', req.params.id)
+      .eq('school_id', school_id)
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+
+    // Phase 6c: marks entry completing (both fields present) is what
+    // triggers result publishing — auto-starts the workflow the same way
+    // converting an inquiry auto-starts the Admission Approval Workflow.
+    // Guarded so re-editing already-scored marks doesn't restart it.
+    const row = data as any
+    if (row.marks_obtained != null && row.max_marks != null) {
+      const { data: existingInstance } = await supabase
+        .from('workflow_instances')
+        .select('id')
+        .eq('entity_type', 'admission_slot_booking')
+        .eq('entity_id', row.id)
+        .eq('school_id', school_id)
+        .maybeSingle()
+
+      if (!existingInstance) {
+        await ensureEntranceResultWorkflowDefinition(school_id)
+        const wfResult = await startWorkflow({
+          schoolId: school_id,
+          workflowName: 'Entrance Result Publishing',
+          entityType: 'admission_slot_booking',
+          entityId: row.id,
+          initiatedBy: req.user!.id,
+        })
+        if (!wfResult.success) {
+          console.error(`Failed to start result-publishing workflow for booking ${row.id}:`, wfResult.error)
+        }
+      }
+    }
+
+    res.json({ success: true, data })
+  })
+)
+
+// GET/POST workflow endpoints for the result-publishing workflow started
+// above — thin wrappers around the same shared engine, no section or
+// document-completeness logic (those are specific to admitting a
+// student, not publishing a test score).
+router.get('/admission-slot-bookings/:id/workflow-status', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const status = await getWorkflowStatus('admission_slot_booking', req.params.id, req.user!.school_id)
+    res.json({ success: true, data: status })
+  })
+)
+
+router.post('/admission-slot-bookings/:id/workflow-action', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { id } = req.params
+  const { status, notes } = req.body
+  const school_id = req.user!.school_id
+
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    return res.status(403).json({ success: false, error: 'Not authorized to act on entrance results' })
+  }
+  if (!['approved', 'rejected', 'escalated', 'commented'].includes(status)) {
+    return res.status(400).json({ success: false, error: 'Invalid status. Must be approved, rejected, escalated, or commented.' })
+  }
+
+  const { data: instance, error: instErr } = await supabase
+    .from('workflow_instances')
+    .select('id, status')
+    .eq('entity_type', 'admission_slot_booking')
+    .eq('entity_id', id)
+    .eq('school_id', school_id)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (instErr || !instance) {
+    return res.status(404).json({ success: false, error: 'No result-publishing workflow found for this booking. Marks must be entered first — it starts automatically.' })
+  }
+  if (instance.status !== 'in_progress') {
+    return res.status(400).json({ success: false, error: `Workflow already ${instance.status}` })
+  }
+
+  const result = await actOnWorkflow({ instanceId: instance.id, userId: req.user!.id, schoolId: school_id, status, notes })
+  if (!result.success) return res.status(400).json({ success: false, error: result.error })
+
+  if (result.completed && result.instance.status === 'approved') {
+    await supabase.from('admission_slot_bookings' as any)
+      .update({ result_published: true, result_published_at: new Date().toISOString() })
+      .eq('id', id).eq('school_id', school_id)
+  }
+
+  res.json({ success: true, data: { instance: result.instance, completed: result.completed, next_step: result.nextStep ?? null } })
+}))
 
 // ── CLASSES & SECTIONS helpers ───────────────────────────────
 router.get('/classes', asyncHandler(async (req: AuthRequest, res: Response) => {

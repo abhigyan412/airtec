@@ -418,6 +418,29 @@ export async function ensureAdmissionApprovalWorkflowDefinition(schoolId: string
   })
 }
 
+// Phase 6c of admission/plan.md — entrance-test result publishing.
+// plan.md's own settings default names this chain "Examiner -> Review ->
+// Principal Approval -> Publish", but ensureMultiStepWorkflow silently
+// no-ops if ANY named role isn't seeded for the school (see its own
+// comment above — this is exactly the class of bug already found and
+// fixed once for the Transfer Certificate workflow). "Examiner" and
+// "Exam Coordinator" aren't seeded roles anywhere yet — inventing and
+// seeding them is Phase 10 (RBAC Finalization) work, not 6c's. Using
+// Counselor/Principal instead — both guaranteed seeded, and Counselor is
+// already this app's primary admission-process actor — keeps this
+// workflow actually functional today. Once Phase 10 seeds real Examiner/
+// Exam Coordinator roles, these steps' role_id can be repointed without
+// a schema change; nothing here needs to be rebuilt for that to happen.
+export async function ensureEntranceResultWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Entrance Result Publishing', module: 'admission', entityType: 'admission_slot_booking',
+    steps: [
+      { roleName: 'Counselor', actionName: 'Confirm Result' },
+      { roleName: 'Principal', actionName: 'Approve & Publish' },
+    ],
+  })
+}
+
 // Same gap as every workflow above — 'Transfer Certificate Workflow' is
 // referenced by name in POST /students/:id/tc but was never wired to
 // call this before startWorkflow(), so every TC request ever created had

@@ -72,8 +72,14 @@ const NAV: NavItem[] = [
     module: 'admissions',
     icon: UserPlus,
     children: [
+      // Kept in step with the tab bar in app/(app)/admission/layout.tsx —
+      // same reason the Fees nav and its layout.tsx are kept in sync.
       { label: 'Pipeline', href: '/admission', icon: UserPlus, permission: 'admission.view' },
       { label: 'Applications', href: '/admission/applications', icon: ClipboardList, permission: 'admission.view' },
+      { label: 'Seats', href: '/admission/seats', icon: LayoutGrid, permission: 'admission.view' },
+      { label: 'Cycles', href: '/admission/cycles', icon: CalendarClock, permission: 'admission.view' },
+      { label: 'Test / Interview Slots', href: '/admission/slots', icon: ClipboardList, permission: 'admission.view' },
+      { label: 'Document Requirements', href: '/admission/document-requirements', icon: FileText, permission: 'admission.view' },
     ],
   },
   {

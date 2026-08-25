@@ -55,6 +55,30 @@ export function formatDate(date: string | Date) {
   }).format(new Date(date))
 }
 
+// Class-numbering display style — school-wide single source of truth
+// (schools.class_display_style, GET/PATCH /admission/class-display-style).
+// Only converts 1-12 (AIRTEC's class range); anything else, or a missing
+// numeric_level, falls back to the class's stored name unchanged rather
+// than guessing.
+const ROMAN_NUMERALS: Record<number, string> = {
+  1: 'I', 2: 'II', 3: 'III', 4: 'IV', 5: 'V', 6: 'VI',
+  7: 'VII', 8: 'VIII', 9: 'IX', 10: 'X', 11: 'XI', 12: 'XII',
+}
+
+/**
+ * Renders a class's display label given the school's chosen style.
+ * Pass the class's `name` (used as the fallback and for anything outside
+ * 1-12) and its `numeric_level`. Style is whatever
+ * GET /admission/class-display-style last returned — components read it
+ * via the `useClassDisplayStyle` hook in lib/useClassDisplayStyle.ts.
+ */
+export function classLabel(name: string | null | undefined, numericLevel: number | null | undefined, style: 'numeric' | 'roman'): string {
+  if (style === 'roman' && numericLevel != null && ROMAN_NUMERALS[numericLevel]) {
+    return `Class ${ROMAN_NUMERALS[numericLevel]}`
+  }
+  return name ?? (numericLevel != null ? `Class ${numericLevel}` : '')
+}
+
 /** Today's date as YYYY-MM-DD in the LOCAL timezone (toISOString is UTC and
  * lands a day behind for IST mornings — a bad default for date inputs). */
 export function todayLocalISO(): string {
@@ -73,6 +97,7 @@ export const STATUS_COLORS: Record<string, string> = {
   follow_up: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/20',
   interested: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 ring-1 ring-inset ring-purple-500/20',
   admitted: 'bg-success/10 text-success ring-1 ring-inset ring-success/20',
+  fee_pending: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-1 ring-inset ring-amber-500/20',
   rejected: 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/20',
   paid: 'bg-success/10 text-success ring-1 ring-inset ring-success/20',
   unpaid: 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/20',
@@ -81,26 +106,35 @@ export const STATUS_COLORS: Record<string, string> = {
 }
 
 /**
- * admission_applications.status only ever moves pending -> admitted/rejected
- * in the live app now (the approval workflow, not this column, tracks
- * everything in between) — the four granular values below are read-only
- * leftovers a couple of old seed rows still carry. Given a row's status
- * plus the live workflow fields GET /admission/applications now returns
- * (workflow_status, current_step_name), this resolves what a status badge
- * should actually show: the live stage while in progress, not a status
- * that never changes until the very end.
+ * Workflow approval completing no longer means admitted — it means the
+ * application moves to Fee Pending; only paying the admission fee (POST
+ * .../collect-fee) actually admits, so `status` itself is now the
+ * authoritative signal for the fee_pending/admitted/rejected outcomes,
+ * not the workflow instance. The workflow (`workflow_status`,
+ * `current_step_name`) is only consulted for what WorkflowPipeline itself
+ * shows while the Counselor → Principal → Admin chain is still in
+ * progress — the two must never disagree on what's currently happening.
  */
-export function admissionApplicationStatusBadge(app: { status: string; current_step_name?: string | null }): {
+export function admissionApplicationStatusBadge(app: {
+  status: string
+  current_step_name?: string | null
+  workflow_status?: string | null
+}): {
   label: string
-  variant: 'success' | 'destructive' | 'info' | 'secondary'
+  variant: 'success' | 'destructive' | 'info' | 'secondary' | 'warning'
 } {
   if (app.status === 'admitted') return { label: 'Admitted', variant: 'success' }
-  if (app.status === 'rejected') return { label: 'Rejected', variant: 'destructive' }
-  if (app.status === 'pending') {
+  if (app.status === 'fee_pending') return { label: 'Fee Pending', variant: 'warning' }
+  if (app.status === 'rejected' || app.workflow_status === 'rejected') return { label: 'Rejected', variant: 'destructive' }
+  if (app.workflow_status === 'cancelled') return { label: 'Cancelled', variant: 'secondary' }
+  if (app.workflow_status === 'in_progress') {
     return app.current_step_name
       ? { label: app.current_step_name, variant: 'info' }
-      : { label: 'Not Started', variant: 'secondary' }
+      : { label: 'In Progress', variant: 'info' }
   }
+
+  // No workflow instance — fall back to the plain column.
+  if (app.status === 'pending') return { label: 'Not Started', variant: 'secondary' }
   // Legacy values (counselor_approved, documents_verified, fee_paid,
   // principal_approved) — no live code writes these anymore, just a
   // cosmetic fallback so old seed rows still render legibly.

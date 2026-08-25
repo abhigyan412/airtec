@@ -182,7 +182,7 @@ async function uploadSvg(bucket: string, path: string, svg: string): Promise<str
 }
 
 async function ensureBuckets() {
-  for (const id of ['resources', 'student-photos', 'student-documents']) {
+  for (const id of ['resources', 'student-photos', 'student-documents', 'admission-documents']) {
     const { error } = await supabase.storage.createBucket(id, { public: true })
     if (error && !/already exists/i.test(error.message)) console.error(`   ⚠️  bucket ${id}: ${error.message}`)
   }
@@ -795,6 +795,21 @@ async function seed() {
     next_follow_up_date: isoT(dMinus(-(i % 7) - 2)),
   }))))
   const appStatuses = ['pending', 'counselor_approved', 'documents_verified', 'fee_paid', 'principal_approved', 'admitted', 'rejected']
+  // Only the first 18 applications get a workflow_instances row below —
+  // for those, admission_applications.status must agree with whatever
+  // that instance resolves to, or the UI shows two different statuses on
+  // the same application (the top badge reading the plain column, the
+  // workflow pipeline reading the instance) for demo data alone, nothing
+  // a real admin ever did. The two used to be picked independently here
+  // and could land on opposite outcomes. Applications past index 18 have
+  // no workflow instance at all, so they keep the legacy-status rotation.
+  const demoWorkflowStatus = (i: number) =>
+    i % 6 === 0 ? 'approved' : i % 7 === 0 ? 'rejected' : i % 11 === 0 ? 'cancelled' : 'in_progress'
+  const appStatusForIndex = (i: number) => {
+    if (i >= 18) return pick(appStatuses, i)
+    const wf = demoWorkflowStatus(i)
+    return wf === 'approved' ? 'admitted' : wf === 'rejected' ? 'rejected' : 'pending'
+  }
   const applications = await ins('admission_applications', Array.from({ length: 35 }, (_, i) => ({
     school_id: schoolId, application_number: `APP${ayStartYear}${String(i + 1).padStart(3, '0')}`,
     student_first_name: i % 2 === 0 ? pick(MALE_NAMES, i * 7) : pick(FEMALE_NAMES, i * 7),
@@ -805,7 +820,7 @@ async function seed() {
     mother_name: `${pick(MOTHER_NAMES, i)} ${pick(LAST_NAMES, i * 3)}`, mother_phone: `+91 ${9100000000 + i}`,
     applying_for_class_id: pick(classes, i).id, academic_year_id: ay.id,
     previous_school: pick(['St. Francis School', 'City Montessori', 'Kendriya Vidyalaya'], i),
-    status: pick(appStatuses, i), application_fee_paid: i % 3 !== 0, application_fee_amount: 1000,
+    status: appStatusForIndex(i), application_fee_paid: i % 3 !== 0, application_fee_amount: 1000,
   })))
   await insQuiet('application_documents', applications.flatMap((app, i) =>
     ['birth_certificate', 'aadhaar', 'marksheet', 'address_proof'].map((dt, k) => ({
@@ -829,7 +844,7 @@ async function seed() {
   if (wfDef && wfSteps.length) {
     const instances = await ins('workflow_instances', applications.slice(0, 18).map((app, i) => ({
       school_id: schoolId, workflow_id: wfDef.id, entity_type: 'admission_application', entity_id: app.id,
-      status: i % 6 === 0 ? 'approved' : i % 7 === 0 ? 'rejected' : i % 11 === 0 ? 'cancelled' : 'in_progress',
+      status: demoWorkflowStatus(i),
       current_step_id: wfSteps[i % wfSteps.length].id, initiated_by: counselorId,
       completed_at: i % 6 === 0 ? isoT(dMinus(10 - (i % 8))) : null,
     })))

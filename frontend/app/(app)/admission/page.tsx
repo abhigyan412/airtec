@@ -3,10 +3,12 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Phone, Search, ChevronRight, FileCheck, UserPlus } from 'lucide-react'
 import { admissionApi } from '@/lib/api'
-import { cn, STATUS_COLORS, formatDate, admissionApplicationStatusBadge } from '@/lib/utils'
+import { cn, STATUS_COLORS, formatDate, admissionApplicationStatusBadge, classLabel } from '@/lib/utils'
+import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { PipelineCharts } from '@/components/admission/PipelineCharts'
+import { AdmissionAlerts } from '@/components/admission/AdmissionAlerts'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,6 +32,7 @@ const PIPELINE_STAGES = [
   { key: 'interested',           label: 'Interested',    color: 'bg-purple-500/10 text-purple-600 dark:text-purple-400' },
   { key: 'documents_submitted',  label: 'Docs',          color: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
   { key: 'approved',             label: 'Approved',      color: 'bg-teal-500/10 text-teal-600 dark:text-teal-400' },
+  { key: 'fee_pending',          label: 'Fee Pending',   color: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
   { key: 'admitted',             label: 'Admitted',      color: 'bg-success/10 text-success' },
   { key: 'rejected',             label: 'Rejected',      color: 'bg-destructive/10 text-destructive' },
 ]
@@ -43,6 +46,7 @@ const INQUIRY_STATUSES = ['new','follow_up','interested','documents_submitted','
 const APPLICATION_STATUSES = ['pending', 'counselor_approved', 'documents_verified', 'fee_paid', 'principal_approved', 'admitted', 'rejected']
 
 export default function AdmissionPage() {
+  const classStyle = useClassDisplayStyle()
   const [tab, setTab] = useState<'inquiries' | 'applications'>('inquiries')
   const [search, setSearch]         = useState('')
   const [statusFilter, setStatus]   = useState('')
@@ -122,11 +126,14 @@ export default function AdmissionPage() {
       </TabsList>
 
       <TabsContent value="inquiries" className="space-y-6 mt-0">
+        {/* Phase 9: only renders when something actually needs attention */}
+        <AdmissionAlerts />
+
         {/* Visual pipeline + source breakdown */}
         <PipelineCharts stats={stats} />
 
         {/* Pipeline stats */}
-        <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+        <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
           {PIPELINE_STAGES.map(stage => {
             const count = stats?.by_status?.find((s: any) => s.status === stage.key)?.count ?? 0
             return (
@@ -235,7 +242,7 @@ export default function AdmissionPage() {
                           <span className="text-xs text-muted-foreground">{inq.parent_phone}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{inq.classes?.name ?? '—'}</TableCell>
+                      <TableCell className="text-muted-foreground">{inq.classes ? classLabel(inq.classes.name, inq.classes.numeric_level, classStyle) : '—'}</TableCell>
                       <TableCell className="text-muted-foreground text-xs">{inq.inquiry_sources?.name ?? '—'}</TableCell>
                       <TableCell className="text-muted-foreground text-sm">{inq.users?.full_name ?? 'Unassigned'}</TableCell>
                       <TableCell>
@@ -349,7 +356,7 @@ export default function AdmissionPage() {
                       onClick={() => window.location.href = `/admission/applications/${app.id}`}>
                       <TableCell className="font-mono text-xs text-muted-foreground">{app.application_number}</TableCell>
                       <TableCell className="font-semibold text-foreground">{app.student_first_name} {app.student_last_name}</TableCell>
-                      <TableCell className="text-muted-foreground">{app.classes?.name ?? '—'}</TableCell>
+                      <TableCell className="text-muted-foreground">{app.classes ? classLabel(app.classes.name, app.classes.numeric_level, classStyle) : '—'}</TableCell>
                       <TableCell className="text-muted-foreground">{app.father_phone}</TableCell>
                       <TableCell>
                         <Badge variant={badge.variant}>{badge.label}</Badge>

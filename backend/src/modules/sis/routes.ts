@@ -20,6 +20,7 @@ const CreateStudentSchema = z.object({
   first_name: z.string().min(1),
   last_name: z.string().min(1),
   date_of_birth: z.string().optional(),
+  admission_date: z.string().optional(),
   gender: z.string().optional(),
   blood_group: z.string().optional(),
   aadhaar_number: z.string().optional(),
@@ -1573,6 +1574,10 @@ router.post('/', requirePermissionV2('student.create'),
     const admissionNumber = await nextDocumentNumber(school_id, 'ADM')
     const { father_name, father_phone, father_email, mother_name, mother_phone, mother_email, ...studentData } = body
     const cleanData = Object.fromEntries(Object.entries(studentData).map(([k, v]) => [k, v === '' ? null : v]))
+    // Defaults to today rather than staying blank — a student added here
+    // is, by default, being added because they're joining now; anyone
+    // backdating (bulk-importing existing students) can still set it.
+    if (!cleanData.admission_date) cleanData.admission_date = new Date().toISOString().slice(0, 10)
     const { data: student, error } = await supabase.from('students').insert({ ...cleanData, school_id, admission_number: admissionNumber }).select().single()
     if (error) return res.status(400).json({ success: false, error: error.message })
     if (father_name || mother_name) {

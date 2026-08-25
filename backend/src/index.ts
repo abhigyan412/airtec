@@ -16,6 +16,7 @@ import { runDeliveries } from './shared/utils/delivery'
 import { runLeaveAccrual, runLeaveYearEnd } from './shared/utils/leavePolicy'
 import { runHrAlerts } from './shared/utils/hrAlerts'
 import { runAbscondedSweep } from './shared/utils/absconded'
+import { releaseExpiredSeatHolds, processExpiredWaitlistOffers } from './shared/utils/admissionSeatLedger'
 
 import authRoutes from './modules/auth/routes'
 import sisRoutes from './modules/sis/routes'
@@ -152,6 +153,29 @@ cron.schedule('30 * * * *', () => {
   reapStaleOrders()
     .then(r => { if (r.expired) console.log(`[gateway] reaper expired ${r.expired} order(s)`) })
     .catch(err => console.error('[gateway] reaper failed:', err))
+})
+
+// Reserved admission seats whose fee-hold deadline has passed (plus the
+// school's own grace period), across every school. Hourly: a hold is
+// measured in days, so hourly is frequent enough that "expired" and
+// "released" are never more than an hour apart, without being noisy.
+// POST /admission/applications/expire-fee-holds is the per-school
+// manual equivalent (same unattended-sweep caveat as the jobs below).
+cron.schedule('0 * * * *', () => {
+  releaseExpiredSeatHolds()
+    .then(r => { if (r.released) console.log(`[admission-fee-hold] auto-released ${r.released} expired seat hold(s)`) })
+    .catch(err => console.error('[admission-fee-hold] sweep failed:', err))
+})
+
+// Waitlist offers whose response deadline passed unanswered, across every
+// school — clears the stale offer and re-offers the freed slot to the
+// next rank. Same hourly cadence and manual-trigger caveat as the
+// fee-hold sweep above; POST /admission/inquiries/process-waitlist-offers
+// is the per-school equivalent.
+cron.schedule('15 * * * *', () => {
+  processExpiredWaitlistOffers()
+    .then(r => { if (r.expired) console.log(`[admission-waitlist] ${r.expired} offer(s) expired, ${r.rePromoted} re-offered`) })
+    .catch(err => console.error('[admission-waitlist] sweep failed:', err))
 })
 
 // Daily fee due/overdue reminder sweep, 7:00 AM server time, across

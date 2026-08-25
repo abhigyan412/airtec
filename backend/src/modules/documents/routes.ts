@@ -334,6 +334,30 @@ router.get('/offer-letter/:application_id', requirePermissionV2('staff.recruitme
   res.send(generateOfferLetter(application, application.schools))
 }))
 
+// GET /admission-offer-letter/:application_id — distinct path from the HR
+// offer letter above (same "offer letter" concept, different table —
+// application_id here means admission_applications, not job_applications).
+// Only renders once POST /api/admission/applications/:id/issue-offer-letter
+// has actually stamped a number.
+router.get('/admission-offer-letter/:application_id', requirePermissionV2('admission.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { application_id } = req.params
+  const school_id = req.user!.school_id
+
+  const { data: application } = await supabase
+    .from('admission_applications')
+    .select('*, classes:applying_for_class_id(name), schools:school_id(name, city, affiliation_board, phone)')
+    .eq('id', application_id)
+    .eq('school_id', school_id)
+    .single()
+
+  if (!application || !application.offer_letter_number) {
+    return res.status(404).send('<h2>Offer letter not available — it must be issued first.</h2>')
+  }
+
+  res.setHeader('Content-Type', 'text/html')
+  res.send(generateAdmissionOfferLetter(application, application.schools, application.classes))
+}))
+
 // GET /payslip/:id — printable payslip. Self-or-staff.payroll_view, same
 // pattern as GET /hrms/payslips/:id itself (a staff member can always
 // print their own; anyone else needs the payroll-view permission).
@@ -581,6 +605,36 @@ function generateOfferLetter(application: any, school: any): string {
       : 'Compensation details will be shared separately as part of your employment contract.'}</p>
     <p>Please confirm your acceptance of this offer at the earliest so we can proceed with your onboarding${application.notice_period ? `, keeping in mind your notice period of ${application.notice_period}` : ''}.</p>
     <p>We look forward to welcoming you to our team.</p>
+    <div class="footer"><div class="sig">Principal</div></div>
+  </div></body></html>`
+}
+
+function generateAdmissionOfferLetter(application: any, school: any, cls: any): string {
+  const fmt = (d: string) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
+  const studentName = `${application.student_first_name} ${application.student_last_name}`
+  const guardianName = application.father_name || application.mother_name || 'Parent/Guardian'
+  return `<!DOCTYPE html><html><head><title>Offer of Admission - ${application.offer_letter_number}</title>
+  <style>@media print{.no-print{display:none}}body{font-family:'Times New Roman',serif;margin:0;background:#fff;color:#000}
+  .container{max-width:750px;margin:0 auto;padding:40px;border:3px double #000;min-height:70vh;position:relative}
+  h1{text-align:center;font-size:26px;margin:0 0 4px;letter-spacing:2px}
+  .subtitle{text-align:center;font-size:13px;margin-bottom:20px}
+  .letter-title{text-align:center;font-size:18px;font-weight:bold;margin:20px 0;text-decoration:underline}
+  p{font-size:14px;line-height:1.9;text-align:justify}
+  .footer{margin-top:60px}
+  .sig{border-top:1px solid #000;width:180px;text-align:center;padding-top:6px;font-size:12px}</style></head><body>
+  <button class="no-print" onclick="window.print()" style="position:fixed;top:20px;right:20px;padding:10px 20px;background:#4F46E5;color:white;border:none;border-radius:8px;cursor:pointer;">Print</button>
+  <div class="container">
+    <div style="position:absolute;top:16px;right:20px;font-size:11px;color:#555">No: ${application.offer_letter_number}</div>
+    <h1>${school?.name ?? 'School'}</h1>
+    <div class="subtitle">${school?.city ?? ''} · ${school?.affiliation_board ?? 'CBSE'}</div>
+    <div class="letter-title">OFFER OF ADMISSION</div>
+    <p>Date: ${fmt(application.offer_letter_issued_at)}</p>
+    <p>Dear <b>${guardianName}</b>,</p>
+    <p>We are pleased to offer admission to <b>${studentName}</b> into <b>${cls?.name ?? 'the applied-for class'}</b> at ${school?.name ?? 'our school'}, on the basis of the application and admission process completed.</p>
+    <p>${application.application_fee_paid
+      ? 'The application fee has been received; further fee details for the academic session will be shared separately.'
+      : 'Please complete any pending admission formalities, including fee payment, to confirm this seat.'}</p>
+    <p>We warmly welcome ${studentName} to our school community and look forward to a rewarding academic journey together.</p>
     <div class="footer"><div class="sig">Principal</div></div>
   </div></body></html>`
 }

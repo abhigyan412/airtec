@@ -153,6 +153,12 @@ export const documentsApi = {
     const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
     return `${API_BASE}/documents/offer-letter/${applicationId}?token=${token}`
   },
+  // Distinct from offerLetter above — that one is the HR recruitment offer
+  // (job_applications). This renders an admission_applications offer letter.
+  admissionOfferLetter: (applicationId: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
+    return `${API_BASE}/documents/admission-offer-letter/${applicationId}?token=${token}`
+  },
   payslip: (payslipId: string) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
     return `${API_BASE}/documents/payslip/${payslipId}?token=${token}`
@@ -250,10 +256,77 @@ export const admissionApi = {
     approve: (id: string, data: any) =>
       api.post(`/admission/applications/${id}/approve`, data).then(r => r.data),
     get: (id: string) => api.get(`/admission/applications/${id}`).then(r => r.data),
+    documents: {
+      list: (id: string) => api.get(`/admission/applications/${id}/documents`).then(r => r.data),
+      upload: (id: string, data: any) => api.post(`/admission/applications/${id}/documents`, data).then(r => r.data),
+      verify: (id: string, docId: string, is_verified: boolean) =>
+        api.patch(`/admission/applications/${id}/documents/${docId}`, { is_verified }).then(r => r.data),
+      delete: (id: string, docId: string) => api.delete(`/admission/applications/${id}/documents/${docId}`).then(r => r.data),
+    },
+    collectFee: (id: string, data: { amount: number; method: string; reference?: string }) =>
+      api.post(`/admission/applications/${id}/collect-fee`, data).then(r => r.data),
+    issueOfferLetter: (id: string) =>
+      api.post(`/admission/applications/${id}/issue-offer-letter`).then(r => r.data),
   },
-  
+
   classes: () =>
     api.get('/admission/classes').then(r => r.data),
+
+  seats: {
+    list: () => api.get('/admission/admission-seats').then(r => r.data),
+    update: (classId: string, data: { capacity?: number; frozen?: number; locked?: boolean; reason?: string }) =>
+      api.patch(`/admission/admission-seats/${classId}`, data).then(r => r.data),
+  },
+
+  alerts: () => api.get('/admission/admission-alerts').then(r => r.data),
+
+  classDisplayStyle: {
+    get: () => api.get('/admission/class-display-style').then(r => r.data),
+    update: (style: 'numeric' | 'roman') => api.patch('/admission/class-display-style', { style }).then(r => r.data),
+  },
+
+  cycles: {
+    list: () => api.get('/admission/admission-cycles').then(r => r.data),
+    create: (data: { academic_year_id: string; opens_at?: string; closes_at?: string; notes?: string }) =>
+      api.post('/admission/admission-cycles', data).then(r => r.data),
+    delete: (id: string) => api.delete(`/admission/admission-cycles/${id}`).then(r => r.data),
+  },
+
+  classSettings: {
+    list: () => api.get('/admission/class-settings').then(r => r.data),
+    update: (classId: string, data: { entrance_mode?: string; pass_marks_percent?: number; admission_fee_amount?: number | null }) =>
+      api.patch(`/admission/class-settings/${classId}`, data).then(r => r.data),
+  },
+
+  documentRequirements: {
+    list: (classId?: string) => api.get('/admission/document-requirements', { params: { class_id: classId } }).then(r => r.data),
+    create: (data: { class_id: string; document_type: string }) =>
+      api.post('/admission/document-requirements', data).then(r => r.data),
+    delete: (id: string) => api.delete(`/admission/document-requirements/${id}`).then(r => r.data),
+  },
+
+  slots: {
+    list: (params?: { slot_type?: string; from?: string; to?: string; class_id?: string }) =>
+      api.get('/admission/admission-slots', { params }).then(r => r.data),
+    create: (data: any) => api.post('/admission/admission-slots', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/admission/admission-slots/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/admission/admission-slots/${id}`).then(r => r.data),
+    book: (id: string, data: { inquiry_id?: string; application_id?: string }) =>
+      api.post(`/admission/admission-slots/${id}/book`, data).then(r => r.data),
+  },
+
+  slotBookings: {
+    list: (params: { inquiry_id?: string; application_id?: string; slot_id?: string }) =>
+      api.get('/admission/admission-slot-bookings', { params }).then(r => r.data),
+    update: (id: string, data: { status?: string; result?: string; marks_obtained?: number; max_marks?: number }) =>
+      api.patch(`/admission/admission-slot-bookings/${id}`, data).then(r => r.data),
+    // Phase 6c: result-publishing workflow, auto-started when marks are
+    // entered — same shared engine as workflowApi below, pointed at a
+    // booking instead of an admission_application.
+    workflowStatus: (id: string) => api.get(`/admission/admission-slot-bookings/${id}/workflow-status`).then(r => r.data),
+    workflowAct: (id: string, status: 'approved' | 'rejected' | 'commented', notes?: string) =>
+      api.post(`/admission/admission-slot-bookings/${id}/workflow-action`, { status, notes }).then(r => r.data),
+  },
 }
 
 export const classesApi = {
@@ -847,9 +920,14 @@ export const workflowApi = {
 
   // section_id is required on the approval that completes the workflow — that
   // action creates the student, and a student without a section is invisible to
-  // every section-scoped screen.
-  act: (applicationId: string, status: 'approved' | 'rejected' | 'escalated' | 'commented', notes?: string, section_id?: string) =>
-    api.post(`/admission/applications/${applicationId}/workflow-action`, { status, notes, section_id }).then(r => r.data),
+  // every section-scoped screen. override_document_gap/override_reason are
+  // Phase 5's Principal-only override of the document-completeness gate —
+  // ignored server-side (and harmless to send) when there's no gap to override.
+  act: (
+    applicationId: string, status: 'approved' | 'rejected' | 'escalated' | 'commented', notes?: string, section_id?: string,
+    override?: { override_document_gap: boolean; override_reason?: string },
+  ) =>
+    api.post(`/admission/applications/${applicationId}/workflow-action`, { status, notes, section_id, ...override }).then(r => r.data),
 
   start: (applicationId: string) =>
     api.post(`/admission/applications/${applicationId}/start-workflow`).then(r => r.data),

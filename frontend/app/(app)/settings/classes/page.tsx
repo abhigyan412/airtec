@@ -1,10 +1,11 @@
 'use client'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { classesApi } from '@/lib/api'
+import { classesApi, admissionApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn } from '@/lib/utils'
-import { Plus, X, Pencil, Trash2, Loader2, ShieldOff, GraduationCap, School } from 'lucide-react'
+import { cn, classLabel } from '@/lib/utils'
+import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
+import { Plus, X, Pencil, Trash2, Loader2, ShieldOff, GraduationCap, School, Hash } from 'lucide-react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { Button } from '@/components/ui/button'
@@ -25,8 +26,16 @@ import {
 export default function ClassesSettingsPage() {
   const { user } = useAuth()
   const canManage = user?.role === 'school_admin' || user?.role === 'principal'
+  const canToggleStyle = user?.role === 'school_admin'
   const qc = useQueryClient()
   const [showAddClass, setShowAddClass] = useState(false)
+  const displayStyle = useClassDisplayStyle()
+
+  const styleMutation = useMutation({
+    mutationFn: (style: 'numeric' | 'roman') => admissionApi.classDisplayStyle.update(style),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['class-display-style'] }); toast.success('Class numbering style updated') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update numbering style'),
+  })
 
   const { data: classes, isLoading } = useQuery({
     queryKey: ['classes'],
@@ -68,6 +77,37 @@ export default function ClassesSettingsPage() {
         }
       />
 
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <div className="flex items-center gap-2.5">
+            <Hash className="h-4 w-4 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium text-foreground">Class Numbering Style</p>
+              <p className="text-xs text-muted-foreground">
+                Show classes as numbers (Class 11) or Roman numerals (Class XI) — applies school-wide, wherever a class name is shown.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center rounded-lg border border-border p-0.5">
+            {(['numeric', 'roman'] as const).map(style => (
+              <button
+                key={style}
+                onClick={() => canToggleStyle && style !== displayStyle && styleMutation.mutate(style)}
+                disabled={!canToggleStyle || styleMutation.isPending}
+                aria-pressed={displayStyle === style}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  displayStyle === style ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+                  !canToggleStyle && 'cursor-not-allowed opacity-60'
+                )}
+              >
+                {style === 'numeric' ? 'Numeric (11)' : 'Roman (XI)'}
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
       {isLoading ? (
         <div className="grid gap-3">
           {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-32 w-full rounded-2xl" />)}
@@ -91,6 +131,7 @@ export default function ClassesSettingsPage() {
             <ClassCard
               key={c.id}
               cls={c}
+              displayStyle={displayStyle}
               onDeleteClass={() => {
                 if (confirm(`Delete ${c.name}? This can't be undone.`)) deleteClassMutation.mutate(c.id)
               }}
@@ -108,7 +149,7 @@ export default function ClassesSettingsPage() {
 }
 
 // ── CLASS CARD ────────────────────────────────────────────────
-function ClassCard({ cls, onDeleteClass, onChanged }: { cls: any; onDeleteClass: () => void; onChanged: () => void }) {
+function ClassCard({ cls, displayStyle, onDeleteClass, onChanged }: { cls: any; displayStyle: 'numeric' | 'roman'; onDeleteClass: () => void; onChanged: () => void }) {
   const [editingName, setEditingName] = useState(false)
   const [name, setName] = useState(cls.name)
   const [addingSection, setAddingSection] = useState(false)
@@ -172,7 +213,7 @@ function ClassCard({ cls, onDeleteClass, onChanged }: { cls: any; onDeleteClass:
                 onKeyDown={e => e.key === 'Enter' && renameClassMutation.mutate()}
                 className="h-8 w-40 font-semibold" />
             ) : (
-              <h3 className="font-semibold text-foreground">{cls.name}</h3>
+              <h3 className="font-semibold text-foreground">{classLabel(cls.name, cls.numeric_level, displayStyle)}</h3>
             )}
             {isSenior && (
               <Badge variant="secondary" className="bg-purple-500/10 text-purple-600 dark:text-purple-400">
