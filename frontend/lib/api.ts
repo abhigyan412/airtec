@@ -265,6 +265,8 @@ export const admissionApi = {
     },
     collectFee: (id: string, data: { amount: number; method: string; reference?: string }) =>
       api.post(`/admission/applications/${id}/collect-fee`, data).then(r => r.data),
+    extendFeeHold: (id: string, data: { days: number; reason?: string }) =>
+      api.post(`/admission/applications/${id}/extend-fee-hold`, data).then(r => r.data),
     issueOfferLetter: (id: string) =>
       api.post(`/admission/applications/${id}/issue-offer-letter`).then(r => r.data),
   },

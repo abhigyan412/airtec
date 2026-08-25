@@ -1789,3 +1789,97 @@ lists short enough to never trigger Radix's behavior in the first place.
 ✅ fixed 2026-08-25, verified live with the exact reproduction: selected
 Class 12, reopened, confirmed `scrollTop: 0` and Class 1 visible immediately
 with no scroll-up chevron shown.
+
+---
+
+## Parent status link surfaced for staff (2026-08-26)
+
+User asked how a parent is actually supposed to book their slot from the
+UI — a fair question the B1/B3 work never actually answered. Checked: the
+only place the status/slot-booking link (`/apply/:schoolId/status/:inquiryId`)
+was ever shown was the public form's own success screen, once, right after
+submission. If a parent closed that screen, never saw it (e.g. a counselor
+typed the inquiry in by hand instead of the parent using the QR form), or
+just lost it, there was no way back — not for the parent, and not for staff
+either, since nothing in the authenticated app ever surfaced that link for
+a counselor to retrieve and re-send. A real dead end, not just a
+discoverability nitpick.
+
+**Fixed with a new `ParentStatusLinkCard`** (`components/admission/ParentStatusLinkCard.tsx`)
+— shows the full link with a Copy button, added to both the inquiry detail
+page and the application detail page (the same inquiry_id-keyed link works
+from either, since an application's `inquiry_id` still points at the
+original inquiry). No SMS/WhatsApp automation exists yet, so this is
+explicitly a copy-and-hand-to-the-parent flow — the same manual-fallback
+pattern already used for Phase 4's waitlist-offer follow-up — not a
+substitute for real automated delivery once a provider is chosen.
+
+✅ shipped 2026-08-26, verified live end-to-end: opened a real inquiry's
+detail page, confirmed the card renders with the correct link, copied it,
+opened that exact link in a fresh unauthenticated context, and confirmed it
+lands on the real public status page showing genuine slot data (one full,
+one bookable) for that inquiry's class — the same page a parent would
+actually see. Also confirmed the card renders correctly from the
+application detail page for a converted inquiry.
+
+---
+
+## Audit for other "built but unreachable" gaps, and extend-fee-hold's own version of the same bug (2026-08-26)
+
+User asked directly whether anything else in the admission module was
+similarly hidden. Rather than guess, ran a systematic audit: every route in
+`admission/routes.ts` and `public/routes.ts` cross-referenced against
+`lib/api.ts`/`lib/publicApi.ts` wrapper functions, and every wrapper
+cross-referenced against actual call sites in `frontend/app` and
+`frontend/components`. Result: everything is fully wired except one real
+gap and two deliberately UI-less ops endpoints.
+
+**Real gap: `POST /applications/:id/extend-fee-hold`.** Existed since
+Phase 3 shipped (School Admin/Principal push out a specific application's
+seat-hold deadline before it auto-releases) — no `lib/api.ts` wrapper, no
+UI anywhere, same "built, permissioned, logged, but unreachable" shape as
+the status-link gap just fixed. Added the wrapper and a new "Extend Hold"
+control on the application detail page's Admission Fee card (shows the
+current hold deadline and any prior extension, with an Extend button
+opening a days + optional-reason modal) — deliberately not client-side
+role-gated, matching this file's own existing convention (Collect Fee and
+offer-letter issuance aren't gated client-side either; the backend's
+`requireRole('school_admin', 'principal')` is the real enforcement).
+
+**Correctly NOT built — flagged, not fixed:** `POST
+/applications/expire-fee-holds` and `POST /inquiries/process-waitlist-offers`
+are self-documented manual triggers for their own hourly cron sweeps
+(same pattern as `notifications/run-fee-reminders`) — intentionally
+ops-only, not a UI gap.
+
+**A second real bug found live while verifying the fix, unrelated to the
+gap itself.** Testing Extend Hold against a real `fee_pending` application
+(Raghav Sharma) showed the Fee card as "Paid" instead of "Fee Pending" —
+traced to the same class of stale-legacy-field bug already documented once
+for the status badge (`plan.md`'s "Fee sequencing rework" entry): the card's
+top-level branch checked `application_fee_paid` (a legacy boolean), and two
+real seeded applications had it set to `true` while `status` was still
+`fee_pending` and `fee_paid_at` was null — the fee was never actually
+collected through the real flow. The *same* stale field was also checked
+inside the `extend-fee-hold` backend endpoint itself, where it would have
+wrongly rejected a genuine extension with "Fee already paid" for exactly
+these two applications. Fixed in both places: the Fee card now branches on
+`fee_paid_at` (the precise, write-once-by-the-real-flow signal) instead of
+the boolean, and `extend-fee-hold` now relies solely on `status !==
+'fee_pending'` — already sufficient and already correct — dropping the
+redundant, stale boolean check entirely rather than trying to reconcile two
+signals that can legitimately disagree on old seed data. Also corrected the
+two real rows' `application_fee_paid` value directly (`false`, matching
+their real `fee_paid_at IS NULL` state) so the data itself isn't just
+worked around by the display logic but actually accurate.
+
+✅ shipped 2026-08-26, verified live end-to-end against Raghav Sharma's real
+application: confirmed the Fee card initially (wrongly) showed "Paid",
+applied both fixes, confirmed it then correctly showed "Fee Pending" with a
+working Collect Fee button, clicked Extend Hold, extended by 5 days with a
+reason, confirmed the toast, the new deadline (correctly computed from the
+existing one, not from today), and the extension note all rendered
+correctly. Reverted the real record's `fee_hold_deadline`/
+`fee_hold_extended_at`/`fee_hold_extension_reason` to their exact original
+values afterward — this touched a real application, not disposable test
+data.

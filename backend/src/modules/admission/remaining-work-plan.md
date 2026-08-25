@@ -167,6 +167,14 @@ rejected from a now-full slot), duplicate-booking rejection, and the
 status-advance side effect. See `plan.md`'s 2026-08-25 "Parent-facing slot
 self-booking" entry for the full account.
 
+**Follow-up, 2026-08-26:** the link to this whole parent-facing surface was
+only ever shown once, on the public form's own success screen — nothing let
+staff retrieve or re-send it, a real dead end for any parent who lost it.
+Fixed with a `ParentStatusLinkCard` on both the inquiry and application
+detail pages (copy-and-hand-to-parent, matching the existing
+no-automation-yet manual-fallback pattern). See `plan.md`'s 2026-08-26
+"Parent status link surfaced for staff" entry.
+
 ### B4. Lead-source / conversion funnel analytics — ✅ shipped 2026-08-25
 
 `GET /inquiries/stats` now accepts `academic_year_id` and returns, per source,

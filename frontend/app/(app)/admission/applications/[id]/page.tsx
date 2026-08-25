@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { SlotBookingCard } from '@/components/admission/SlotBookingCard'
+import { ParentStatusLinkCard } from '@/components/admission/ParentStatusLinkCard'
 
 
 const FEE_METHODS = [
@@ -141,6 +142,7 @@ export default function ApplicationDetailPage() {
       <DocumentsCard applicationId={app.id} />
       <FeeCard app={app} />
       <OfferLetterCard app={app} />
+      {app.inquiry_id && <ParentStatusLinkCard schoolId={app.school_id} inquiryId={app.inquiry_id} />}
       <SlotBookingCard applicationId={app.id} classId={app.applying_for_class_id} alsoInquiryId={app.inquiry_id ?? undefined} />
     </div>
   )
@@ -341,6 +343,7 @@ function DocumentUploadModal({ applicationId, onClose }: { applicationId: string
 function FeeCard({ app }: { app: any }) {
   const qc = useQueryClient()
   const [showCollect, setShowCollect] = useState(false)
+  const [showExtend, setShowExtend] = useState(false)
 
   return (
     <Card>
@@ -350,7 +353,17 @@ function FeeCard({ app }: { app: any }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {app.application_fee_paid ? (
+        {/* fee_paid_at, not the legacy application_fee_paid boolean — found
+            live 2026-08-26 while verifying the Extend Hold UI: two real
+            fee_pending seed applications had application_fee_paid=true with
+            status still 'fee_pending' and fee_paid_at null (fee never
+            actually collected through the real flow), so this card showed
+            "Paid" for an application that plainly wasn't. Same class of bug
+            already documented and fixed once for the status badge itself
+            (see plan.md's "Fee sequencing rework" follow-up) — status/
+            fee_paid_at are authoritative post-rework, the older boolean can
+            disagree on seed data created before or outside that flow. */}
+        {app.fee_paid_at ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
             <div>
               <p className="text-xs text-muted-foreground mb-0.5">Amount</p>
@@ -375,9 +388,26 @@ function FeeCard({ app }: { app: any }) {
             <Badge variant="success" className="w-fit">Paid</Badge>
           </div>
         ) : app.status === 'fee_pending' ? (
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Approved — the seat is reserved and awaiting fee payment.</p>
-            <Button size="sm" onClick={() => setShowCollect(true)}>Collect Fee</Button>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">Approved — the seat is reserved and awaiting fee payment.</p>
+              <Button size="sm" onClick={() => setShowCollect(true)}>Collect Fee</Button>
+            </div>
+            {app.fee_hold_deadline && (
+              <div className="flex items-center justify-between rounded-lg bg-muted/60 px-3 py-2">
+                <div>
+                  <p className="text-xs text-muted-foreground">
+                    Seat hold expires <span className="font-medium text-foreground">{formatDate(app.fee_hold_deadline)}</span> — the seat auto-releases if unpaid by then.
+                  </p>
+                  {app.fee_hold_extended_at && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Extended {formatDate(app.fee_hold_extended_at)}{app.fee_hold_extension_reason ? ` — ${app.fee_hold_extension_reason}` : ''}
+                    </p>
+                  )}
+                </div>
+                <Button size="sm" variant="outline" onClick={() => setShowExtend(true)}>Extend Hold</Button>
+              </div>
+            )}
           </div>
         ) : app.status === 'rejected' ? (
           <p className="text-sm text-muted-foreground">This application was rejected — no fee is due.</p>
@@ -393,7 +423,71 @@ function FeeCard({ app }: { app: any }) {
           qc.invalidateQueries({ queryKey: ['admission-application', app.id] })
         }} />
       )}
+      {showExtend && (
+        <ExtendFeeHoldModal applicationId={app.id} onClose={() => {
+          setShowExtend(false)
+          qc.invalidateQueries({ queryKey: ['admission-application', app.id] })
+        }} />
+      )}
     </Card>
+  )
+}
+
+// remaining-work-plan.md follow-up (2026-08-26): POST
+// /applications/:id/extend-fee-hold has existed since Phase 3 shipped —
+// School Admin/Principal manually push out a specific application's seat
+// hold before it auto-releases — but had no `lib/api.ts` wrapper and no UI
+// anywhere, the same class of "built but unreachable" gap the parent
+// status link had. Deliberately not client-side role-gated: this file
+// doesn't role-gate any of its other actions either (Collect Fee, offer
+// letter issuance) — the backend's own requireRole('school_admin',
+// 'principal') is the real enforcement; an unauthorized click just
+// surfaces a clean error toast, same as everywhere else here.
+function ExtendFeeHoldModal({ applicationId, onClose }: { applicationId: string; onClose: () => void }) {
+  const [days, setDays] = useState('3')
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = async () => {
+    const n = Number(days)
+    if (!Number.isInteger(n) || n <= 0) {
+      toast.error('Enter a positive whole number of days')
+      return
+    }
+    setSaving(true)
+    try {
+      await admissionApi.applications.extendFeeHold(applicationId, { days: n, reason: reason.trim() || undefined })
+      toast.success(`Fee hold extended by ${n} day${n === 1 ? '' : 's'}`)
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Failed to extend the fee hold')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle>Extend Fee Hold</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="extend-days">Extend by (days)</Label>
+            <Input id="extend-days" type="number" min={1} value={days} onChange={e => setDays(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="extend-reason">Reason (optional)</Label>
+            <Input id="extend-reason" value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Parent traveling, requested more time" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Extend'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

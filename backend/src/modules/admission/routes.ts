@@ -1417,12 +1417,20 @@ router.post('/applications/:id/extend-fee-hold', requireRole('school_admin', 'pr
     }
 
     const { data: app } = await supabase
-      .from('admission_applications').select('status, fee_hold_deadline, application_fee_paid')
+      .from('admission_applications').select('status, fee_hold_deadline')
       .eq('id', id).eq('school_id', school_id).maybeSingle()
     if (!app) return res.status(404).json({ success: false, error: 'Application not found' })
-    if (app.application_fee_paid) return res.status(400).json({ success: false, error: 'Fee already paid — there is no hold to extend.' })
-    // No hold exists to extend before Fee Pending — a seat isn't reserved
-    // (and no deadline set) until the admission-approval chain completes.
+    // status is the sole authoritative gate post-rework (see the Fee
+    // sequencing rework in plan.md) — covers both "fee already paid"
+    // (status moves straight to 'admitted', never stays 'fee_pending') and
+    // "no hold exists yet" (not reserved until the approval chain
+    // completes) in one check. Previously also checked the legacy
+    // application_fee_paid boolean directly; found live 2026-08-26 that
+    // two real seed applications had application_fee_paid=true while
+    // status was still 'fee_pending' (fee never actually collected through
+    // the real flow) — that redundant check would have wrongly blocked a
+    // genuine extension for them. Same class of stale-legacy-field bug
+    // already fixed once for the status badge itself.
     if (app.status !== 'fee_pending') {
       return res.status(400).json({ success: false, error: 'There is no active fee hold to extend — this application has not reached Fee Pending yet.' })
     }

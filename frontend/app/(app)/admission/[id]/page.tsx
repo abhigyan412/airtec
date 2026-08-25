@@ -20,6 +20,7 @@ import {
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { SlotBookingCard } from '@/components/admission/SlotBookingCard'
+import { ParentStatusLinkCard } from '@/components/admission/ParentStatusLinkCard'
 
 // 'fee_pending' and 'admitted' are deliberately absent — both are set
 // automatically from the linked application's own progress (see
@@ -417,6 +418,8 @@ export default function InquiryDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          <ParentStatusLinkCard schoolId={inq.school_id} inquiryId={id} />
 
           <SlotBookingCard inquiryId={id} classId={inq.applying_for_class_id} />
 
