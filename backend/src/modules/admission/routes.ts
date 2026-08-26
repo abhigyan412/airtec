@@ -138,10 +138,60 @@ async function checkDocumentCompleteness(applicationId: string, schoolId: string
     .from('application_documents')
     .select('document_type, is_verified')
     .eq('application_id', applicationId)
+    .is('deleted_at', null)
   const verifiedTypes = new Set((docs ?? []).filter((d: any) => d.is_verified).map((d: any) => d.document_type))
   const missing = (required as any[]).map(r => r.document_type).filter(t => !verifiedTypes.has(t))
   if (!missing.length) return null
   return `Missing verified document(s): ${missing.join(', ')}`
+}
+
+/**
+ * remaining-work-plan.md follow-up (2026-08-26): entrance-test completion
+ * and document submission as school-configurable hard prerequisites for
+ * converting an inquiry to a formal application (schools.admission_require_
+ * entrance_test_before_conversion / admission_require_documents_before_
+ * conversion — both off by default, "absence is permissive" as always).
+ * Documents half mirrors checkDocumentCompleteness's own bar (verified,
+ * not just uploaded) but reads by inquiry_id — application_documents can
+ * now attach to an inquiry directly (see the migration that made
+ * application_id nullable), specifically so this is satisfiable before an
+ * application exists at all.
+ */
+async function checkInquiryConversionPrerequisites(inquiryId: string, schoolId: string): Promise<string | null> {
+  const [{ data: inquiry }, { data: school }] = await Promise.all([
+    supabase.from('admission_inquiries').select('applying_for_class_id').eq('id', inquiryId).eq('school_id', schoolId).maybeSingle(),
+    supabase.from('schools').select('admission_require_entrance_test_before_conversion, admission_require_documents_before_conversion').eq('id', schoolId).maybeSingle(),
+  ])
+  const requireTest = (school as any)?.admission_require_entrance_test_before_conversion ?? false
+  const requireDocs = (school as any)?.admission_require_documents_before_conversion ?? false
+  if (!requireTest && !requireDocs) return null
+
+  if (requireTest) {
+    const { count } = await supabase
+      .from('admission_slot_bookings' as any)
+      .select('*', { count: 'exact', head: true })
+      .eq('school_id', schoolId).eq('inquiry_id', inquiryId).eq('status', 'attended')
+    if (!count) return 'This school requires the entrance test/interview to be completed (attended) before converting to a formal application.'
+  }
+
+  if (requireDocs && (inquiry as any)?.applying_for_class_id) {
+    const { data: required } = await supabase
+      .from('admission_document_requirements' as any)
+      .select('document_type')
+      .eq('school_id', schoolId).eq('class_id', (inquiry as any).applying_for_class_id)
+    if (required?.length) {
+      const { data: docs } = await supabase
+        .from('application_documents')
+        .select('document_type, is_verified')
+        .eq('inquiry_id', inquiryId)
+        .is('deleted_at', null)
+      const verifiedTypes = new Set((docs ?? []).filter((d: any) => d.is_verified).map((d: any) => d.document_type))
+      const missing = (required as any[]).map(r => r.document_type).filter(t => !verifiedTypes.has(t))
+      if (missing.length) return `This school requires all required documents to be verified before conversion — missing: ${missing.join(', ')}`
+    }
+  }
+
+  return null
 }
 
 /**
@@ -681,7 +731,10 @@ router.post('/inquiries/:id/convert-to-application', requirePermissionV2('admiss
       application_id: existingApp.id,
     })
   }
- 
+
+  const prereqProblem = await checkInquiryConversionPrerequisites(id, school_id)
+  if (prereqProblem) return res.status(400).json({ success: false, error: prereqProblem })
+
   // Split the inquiry's single student_name into first/last (best
   // effort — admission_applications has separate first/last name
   // columns while admission_inquiries has one combined field).
@@ -1188,25 +1241,47 @@ router.post('/applications/:id/start-workflow', requirePermissionV2('admission.a
   })
 )
 
-// ── APPLICATION DOCUMENTS ─────────────────────────────────────
+// ── APPLICATION / INQUIRY DOCUMENTS ───────────────────────────
 // Uses the same base64-in-JSON upload pattern as student-documents /
-// staff-documents (no multer) — a public 'admission-documents' bucket,
-// path scoped ${school_id}/${application_id}/${timestamp}_${file_name}.
+// staff-documents (no multer) — a public 'admission-documents' bucket.
+// remaining-work-plan.md follow-up (2026-08-26): application_documents
+// can now attach to an inquiry directly (inquiry_id, application_id
+// nullable — see the migration adding it), specifically so a document
+// requirement can be satisfied *before* an application exists, which
+// making document submission a hard prerequisite for conversion requires.
+// A document's own (inquiry_id, application_id) never changes after
+// upload — the application-side GET/PATCH/DELETE below OR-match against
+// the linked inquiry's pre-conversion uploads instead, same reasoning
+// already applied to admission_slot_bookings.
+function uploadAdmissionDocumentFile(schoolId: string, subjectId: string, file_base64: string, file_name: string, mime_type?: string) {
+  const base64Data = file_base64.replace(/^data:[\w/+.-]+;base64,/, '')
+  const buffer = Buffer.from(base64Data, 'base64')
+  const filePath = `${schoolId}/${subjectId}/${Date.now()}_${file_name}`
+  const fileSize = buffer.length > 1024 * 1024
+    ? `${(buffer.length / (1024 * 1024)).toFixed(1)} MB`
+    : `${(buffer.length / 1024).toFixed(0)} KB`
+  return { buffer, filePath, fileSize }
+}
+
 router.get('/applications/:id/documents', requirePermissionV2('admission.view'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const school_id = req.user!.school_id
 
     const { data: app } = await supabase
-      .from('admission_applications').select('id').eq('id', id).eq('school_id', school_id).maybeSingle()
+      .from('admission_applications').select('id, inquiry_id').eq('id', id).eq('school_id', school_id).maybeSingle()
     if (!app) return res.status(404).json({ success: false, error: 'Application not found' })
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('application_documents')
       .select('*, users:uploaded_by(full_name), verifier:verified_by(full_name)')
-      .eq('application_id', id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
+    query = (app as any).inquiry_id
+      ? query.or(`application_id.eq.${id},inquiry_id.eq.${(app as any).inquiry_id}`)
+      : query.eq('application_id', id)
+
+    const { data, error } = await query
     if (error) return res.status(500).json({ success: false, error: error.message })
     res.json({ success: true, data })
   })
@@ -1226,19 +1301,13 @@ router.post('/applications/:id/documents', requirePermissionV2('admission.edit')
       .from('admission_applications').select('id').eq('id', id).eq('school_id', school_id).maybeSingle()
     if (!app) return res.status(404).json({ success: false, error: 'Application not found' })
 
-    const base64Data = file_base64.replace(/^data:[\w/+.-]+;base64,/, '')
-    const buffer = Buffer.from(base64Data, 'base64')
-    const filePath = `${school_id}/${id}/${Date.now()}_${file_name}`
-
+    const { buffer, filePath, fileSize } = uploadAdmissionDocumentFile(school_id, id, file_base64, file_name, mime_type)
     const { error: uploadErr } = await supabase.storage
       .from('admission-documents')
       .upload(filePath, buffer, { contentType: mime_type ?? 'application/octet-stream', upsert: false })
     if (uploadErr) return res.status(400).json({ success: false, error: uploadErr.message })
 
     const { data: urlData } = supabase.storage.from('admission-documents').getPublicUrl(filePath)
-    const fileSize = buffer.length > 1024 * 1024
-      ? `${(buffer.length / (1024 * 1024)).toFixed(1)} MB`
-      : `${(buffer.length / 1024).toFixed(0)} KB`
 
     const { data, error } = await supabase
       .from('application_documents')
@@ -1270,18 +1339,22 @@ router.patch('/applications/:id/documents/:docId', requirePermissionV2('admissio
       return res.status(400).json({ success: false, error: 'is_verified (boolean) is required' })
     }
 
-    const { data, error } = await supabase
+    const { data: app } = await supabase
+      .from('admission_applications').select('inquiry_id').eq('id', id).eq('school_id', school_id).maybeSingle()
+
+    let query = supabase
       .from('application_documents')
       .update({
         is_verified,
         verified_by: is_verified ? req.user!.id : null,
         verified_at: is_verified ? new Date().toISOString() : null,
       })
-      .eq('id', docId)
-      .eq('application_id', id)
-      .eq('school_id', school_id)
-      .select()
-      .single()
+      .eq('id', docId).eq('school_id', school_id)
+    query = (app as any)?.inquiry_id
+      ? query.or(`application_id.eq.${id},inquiry_id.eq.${(app as any).inquiry_id}`)
+      : query.eq('application_id', id)
+
+    const { data, error } = await query.select().single()
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true, data })
   })
@@ -1295,12 +1368,137 @@ router.delete('/applications/:id/documents/:docId', requirePermissionV2('admissi
     const { id, docId } = req.params
     const school_id = req.user!.school_id
 
-    const { error } = await supabase
+    const { data: app } = await supabase
+      .from('admission_applications').select('inquiry_id').eq('id', id).eq('school_id', school_id).maybeSingle()
+
+    let query = supabase
       .from('application_documents')
       .update({ deleted_at: new Date().toISOString(), deleted_by: req.user!.id })
-      .eq('id', docId)
-      .eq('application_id', id)
-      .eq('school_id', school_id)
+      .eq('id', docId).eq('school_id', school_id)
+    query = (app as any)?.inquiry_id
+      ? query.or(`application_id.eq.${id},inquiry_id.eq.${(app as any).inquiry_id}`)
+      : query.eq('application_id', id)
+
+    const { error } = await query
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
+// Inquiry-scoped equivalents — a document uploaded here shows up in the
+// linked application's own documents list too (see the OR-match above)
+// once the inquiry converts, without ever being re-tagged.
+router.get('/inquiries/:id/documents', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+
+    const { data: inquiry } = await supabase
+      .from('admission_inquiries').select('id').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!inquiry) return res.status(404).json({ success: false, error: 'Inquiry not found' })
+
+    const { data: app } = await supabase
+      .from('admission_applications').select('id').eq('inquiry_id', id).eq('school_id', school_id).maybeSingle()
+
+    let query = supabase
+      .from('application_documents')
+      .select('*, users:uploaded_by(full_name), verifier:verified_by(full_name)')
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+    query = app ? query.or(`inquiry_id.eq.${id},application_id.eq.${app.id}`) : query.eq('inquiry_id', id)
+
+    const { data, error } = await query
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.post('/inquiries/:id/documents', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+    const { file_base64, file_name, mime_type, document_type, document_name, notes } = req.body
+
+    if (!file_base64 || !file_name) {
+      return res.status(400).json({ success: false, error: 'file_base64 and file_name are required' })
+    }
+
+    const { data: inquiry } = await supabase
+      .from('admission_inquiries').select('id').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!inquiry) return res.status(404).json({ success: false, error: 'Inquiry not found' })
+
+    const { buffer, filePath, fileSize } = uploadAdmissionDocumentFile(school_id, `inquiry-${id}`, file_base64, file_name, mime_type)
+    const { error: uploadErr } = await supabase.storage
+      .from('admission-documents')
+      .upload(filePath, buffer, { contentType: mime_type ?? 'application/octet-stream', upsert: false })
+    if (uploadErr) return res.status(400).json({ success: false, error: uploadErr.message })
+
+    const { data: urlData } = supabase.storage.from('admission-documents').getPublicUrl(filePath)
+
+    const { data, error } = await supabase
+      .from('application_documents')
+      .insert({
+        inquiry_id: id,
+        school_id,
+        document_type: document_type ?? 'other',
+        document_name: document_name ?? file_name,
+        file_url: urlData.publicUrl,
+        mime_type,
+        file_size: fileSize,
+        uploaded_by: req.user!.id,
+        notes,
+      })
+      .select()
+      .single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.patch('/inquiries/:id/documents/:docId', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id, docId } = req.params
+    const school_id = req.user!.school_id
+    const { is_verified } = req.body
+
+    if (typeof is_verified !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'is_verified (boolean) is required' })
+    }
+
+    const { data: app } = await supabase
+      .from('admission_applications').select('id').eq('inquiry_id', id).eq('school_id', school_id).maybeSingle()
+
+    let query = supabase
+      .from('application_documents')
+      .update({
+        is_verified,
+        verified_by: is_verified ? req.user!.id : null,
+        verified_at: is_verified ? new Date().toISOString() : null,
+      })
+      .eq('id', docId).eq('school_id', school_id)
+    query = app ? query.or(`inquiry_id.eq.${id},application_id.eq.${app.id}`) : query.eq('inquiry_id', id)
+
+    const { data, error } = await query.select().single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.delete('/inquiries/:id/documents/:docId', requirePermissionV2('admission.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id, docId } = req.params
+    const school_id = req.user!.school_id
+
+    const { data: app } = await supabase
+      .from('admission_applications').select('id').eq('inquiry_id', id).eq('school_id', school_id).maybeSingle()
+
+    let query = supabase
+      .from('application_documents')
+      .update({ deleted_at: new Date().toISOString(), deleted_by: req.user!.id })
+      .eq('id', docId).eq('school_id', school_id)
+    query = app ? query.or(`inquiry_id.eq.${id},application_id.eq.${app.id}`) : query.eq('inquiry_id', id)
+
+    const { error } = await query
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true })
   })
@@ -1640,11 +1838,23 @@ const ADMISSION_SETTINGS_COLUMNS = [
   'admission_occupancy_warning_days',
 ] as const
 
+// remaining-work-plan.md follow-up (2026-08-26): user asked to make
+// entrance-test completion and document submission hard prerequisites
+// for converting an inquiry to a formal application — as toggles, not a
+// hardcoded rule, same "settings not hardcoded rules" principle this
+// whole module follows. Kept as a separate boolean list rather than
+// folded into ADMISSION_SETTINGS_COLUMNS above, since that list's PATCH
+// validation is integer-specific.
+const ADMISSION_TOGGLE_COLUMNS = [
+  'admission_require_entrance_test_before_conversion',
+  'admission_require_documents_before_conversion',
+] as const
+
 router.get('/admission-settings', requirePermissionV2('admission.view'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { data } = await supabase
       .from('schools')
-      .select(ADMISSION_SETTINGS_COLUMNS.join(', '))
+      .select([...ADMISSION_SETTINGS_COLUMNS, ...ADMISSION_TOGGLE_COLUMNS].join(', '))
       .eq('id', req.user!.school_id)
       .maybeSingle()
     const row = (data as any) ?? {}
@@ -1657,6 +1867,8 @@ router.get('/admission-settings', requirePermissionV2('admission.view'),
         admission_stage_aging_days: row.admission_stage_aging_days ?? 10,
         admission_occupancy_warning_percent: row.admission_occupancy_warning_percent ?? 70,
         admission_occupancy_warning_days: row.admission_occupancy_warning_days ?? 60,
+        admission_require_entrance_test_before_conversion: row.admission_require_entrance_test_before_conversion ?? false,
+        admission_require_documents_before_conversion: row.admission_require_documents_before_conversion ?? false,
       },
     })
   })
@@ -1664,7 +1876,7 @@ router.get('/admission-settings', requirePermissionV2('admission.view'),
 
 router.patch('/admission-settings', requireRole('school_admin'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
-    const update: Record<string, number> = {}
+    const update: Record<string, number | boolean> = {}
     for (const key of ADMISSION_SETTINGS_COLUMNS) {
       const value = req.body[key]
       if (value === undefined) continue
@@ -1676,8 +1888,16 @@ router.patch('/admission-settings', requireRole('school_admin'),
       }
       update[key] = value
     }
+    for (const key of ADMISSION_TOGGLE_COLUMNS) {
+      const value = req.body[key]
+      if (value === undefined) continue
+      if (typeof value !== 'boolean') {
+        return res.status(400).json({ success: false, error: `${key} must be a boolean` })
+      }
+      update[key] = value
+    }
     if (Object.keys(update).length === 0) {
-      return res.status(400).json({ success: false, error: `Provide at least one of: ${ADMISSION_SETTINGS_COLUMNS.join(', ')}` })
+      return res.status(400).json({ success: false, error: `Provide at least one of: ${[...ADMISSION_SETTINGS_COLUMNS, ...ADMISSION_TOGGLE_COLUMNS].join(', ')}` })
     }
     const { error } = await supabase.from('schools').update(update).eq('id', req.user!.school_id)
     if (error) return res.status(400).json({ success: false, error: error.message })

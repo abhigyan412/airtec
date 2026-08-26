@@ -83,7 +83,6 @@ const NAV: NavItem[] = [
       { label: 'Seats', href: '/admission/seats', icon: LayoutGrid, permission: 'admission.view' },
       { label: 'Cycles', href: '/admission/cycles', icon: CalendarClock, permission: 'admission.view', badge: 'QR' },
       { label: 'Test / Interview Slots', href: '/admission/slots', icon: ClipboardList, permission: 'admission.view' },
-      { label: 'Document Requirements', href: '/admission/document-requirements', icon: FileText, permission: 'admission.view' },
       { label: 'Settings', href: '/admission/settings', icon: SettingsIcon, permission: 'admission.view' },
     ],
   },

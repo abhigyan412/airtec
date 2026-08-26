@@ -1883,3 +1883,117 @@ correctly. Reverted the real record's `fee_hold_deadline`/
 `fee_hold_extended_at`/`fee_hold_extension_reason` to their exact original
 values afterward — this touched a real application, not disposable test
 data.
+
+---
+
+## Moved class-level config into Settings, off Slots and off its own page (2026-08-26)
+
+User asked to move two things into the Settings tab: the "Entrance Mode &
+Admission Fee by Class" card (previously sitting above the actual bookable
+slots list on the Slots page) and the whole standalone Document
+Requirements page. Both are per-class *configuration*, not a scheduling or
+pipeline concern, so they belong with the rest of Admission Settings —
+matching the same reasoning already applied when the six timing/alert
+settings got their own page.
+
+**Slots page** now shows only what its name says — the bookable
+entrance-test/interview/campus-tour slots list and New/Edit Slot. The
+New/Edit Slot form still shows a class's configured entrance mode as an
+informational hint (it never owned the editor, just read from it), now via
+a new shared `lib/admissionEntranceModes.ts` instead of a local copy —
+extracted since both this file and the relocated editor needed the same
+`ENTRANCE_MODES` vocabulary.
+
+**Settings page** gained two new collapsible sections below the existing
+Timing & alert thresholds one, in the same expand/collapse card pattern
+Entrance Mode already used: **Entrance Mode & Admission Fee by Class**
+(moved as-is) and **Document Requirements by Class** (moved from its own
+`/admission/document-requirements` route, now deleted along with its tab
+in `admission/layout.tsx` and its sidebar entry). One deliberate behavior
+change while merging Document Requirements in: it used to fully block
+anyone but School Admin from even *viewing* the page (a hard "Access
+Denied" empty state) — relaxed to match every other section on this page,
+where everyone with `admission.view` can see the configured checklist and
+only School Admin can change it. Nothing in the backend changed — same
+endpoints, same permissions, just a different page and a softer read-only
+fallback instead of an outright block.
+
+✅ shipped 2026-08-26, verified live: confirmed the Entrance Mode card no
+longer renders on the Slots page (that page now shows only its slot list);
+confirmed both new sections render on Settings, the tab bar and sidebar no
+longer list a separate "Documents" entry, and the moved Document
+Requirements section's class picker and checklist toggles work identically
+to before (selected a real class, confirmed its real configured checklist —
+Birth Certificate, Transfer Certificate, Migration Certificate — rendered
+correctly).
+
+## Entrance test + documents as toggleable conversion prerequisites (2026-08-26)
+
+Earlier audit ("is the flow gated well one by one?") found the one real gap
+in the approval pipeline: Convert to Application had almost no gate — an
+inquiry could become a formal application with no entrance test attended
+and no document ever uploaded. User first asked to make both a hard
+prerequisite, then — since that would have hardcoded a rule some schools
+don't want — asked for it as a school-configurable toggle instead, matching
+the module's existing "settings, not hardcoded rules" convention.
+
+**The blocker this ran into**: `application_documents.application_id` was
+`NOT NULL`, so a document could only ever attach to a formal application —
+making "documents submitted" structurally impossible to check *before*
+conversion, since no application exists yet at that point. Fixed by
+extending `application_documents` with the exact dual-FK pattern
+`admission_slot_bookings` already uses for the same "can happen before or
+after conversion" reason: `application_id` is now nullable, a new
+`inquiry_id` column was added, and a CHECK constraint
+(`application_documents_has_subject`) requires at least one of the two.
+Migration: `20260830230000_admission_conversion_prerequisites.sql`.
+
+**Two new `schools` columns**, both boolean, both default `false` (same
+"absence is permissive" convention as every other admission setting):
+`admission_require_entrance_test_before_conversion` and
+`admission_require_documents_before_conversion`. Surfaced as two toggles in
+a new "Conversion Requirements" card on the Settings page, above Entrance
+Mode — off by default, School Admin only.
+
+**Backend**: `checkInquiryConversionPrerequisites()` in `admission/routes.ts`
+runs inside `POST /inquiries/:id/convert-to-application`, right after the
+existing "already converted" check. When the entrance-test toggle is on, it
+requires at least one `admission_slot_bookings` row for that inquiry with
+`status = 'attended'` — booked-but-not-attended does not satisfy it. When
+the documents toggle is on, it looks up the inquiry's
+`admission_document_requirements` checklist for its class and requires
+every listed type to have a verified (`is_verified = true`) document
+against that inquiry, reporting exactly which types are still missing in
+the error message. Along the way, fixed a real latent bug in the existing
+`checkDocumentCompleteness()` (used elsewhere for the final-approval gate):
+it was missing `.is('deleted_at', null)`, so a soft-deleted-but-still-
+verified document could incorrectly count toward completeness.
+
+**New inquiry-scoped document endpoints** (`GET/POST/PATCH/DELETE
+/inquiries/:id/documents[/:docId]`), sharing the same upload helper
+(`uploadAdmissionDocumentFile`) and OR-match convention the application
+side already uses — a document uploaded against an inquiry shows up under
+the application's own documents list automatically once it converts,
+without ever being re-tagged. `public/routes.ts`'s parent-facing status
+page and upload endpoint were extended the same way, so a parent can
+satisfy the documents gate themselves before a counselor ever converts
+them.
+
+**New "Documents" card on the Inquiry detail page** (previously this only
+existed on the Application detail page) — upload, view, verify/unverify,
+delete, mirroring the Application page's card exactly. Hidden once the
+inquiry has converted (the Application page's own card takes over at that
+point, showing the same underlying rows via the OR-match).
+
+✅ shipped 2026-08-26, verified live end-to-end against real data (cleaned
+up after): with only the documents toggle on, converting an inquiry whose
+class had a configured checklist was blocked with "...missing:
+birth_certificate"; uploaded and verified that document via the new
+Inquiry Documents card, then conversion succeeded and created a real
+application. With only the entrance-test toggle on, converting an inquiry
+with a `booked`-but-not-`attended` slot booking was blocked; marking that
+booking `attended` then let conversion succeed. Confirmed both toggles
+default off and restoring them to off returns conversion to its original
+permissive behavior. All test applications, workflow instances, documents
+(including the uploaded storage file), and inquiry/booking statuses were
+deleted/reset afterward — no live data left behind.

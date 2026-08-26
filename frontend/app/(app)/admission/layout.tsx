@@ -1,7 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { UserPlus, ClipboardList, LayoutGrid, CalendarClock, FileText, Settings } from 'lucide-react'
+import { UserPlus, ClipboardList, LayoutGrid, CalendarClock, Settings } from 'lucide-react'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
 
@@ -16,7 +16,6 @@ const TABS = [
   { href: '/admission/seats', label: 'Seats', icon: LayoutGrid, anyOf: ['admission.view'] },
   { href: '/admission/cycles', label: 'Cycles', icon: CalendarClock, anyOf: ['admission.view'] },
   { href: '/admission/slots', label: 'Slots', icon: ClipboardList, anyOf: ['admission.view'] },
-  { href: '/admission/document-requirements', label: 'Documents', icon: FileText, anyOf: ['admission.view'] },
   { href: '/admission/settings', label: 'Settings', icon: Settings, anyOf: ['admission.view'] },
 ]
 

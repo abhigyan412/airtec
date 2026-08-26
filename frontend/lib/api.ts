@@ -246,6 +246,13 @@ export const admissionApi = {
       list: () => api.get('/admission/inquiry-sources').then(r => r.data),
       create: (name: string) => api.post('/admission/inquiry-sources', { name }).then(r => r.data),
     },
+    documents: {
+      list: (id: string) => api.get(`/admission/inquiries/${id}/documents`).then(r => r.data),
+      upload: (id: string, data: any) => api.post(`/admission/inquiries/${id}/documents`, data).then(r => r.data),
+      verify: (id: string, docId: string, is_verified: boolean) =>
+        api.patch(`/admission/inquiries/${id}/documents/${docId}`, { is_verified }).then(r => r.data),
+      delete: (id: string, docId: string) => api.delete(`/admission/inquiries/${id}/documents/${docId}`).then(r => r.data),
+    },
 
   },
   applications: {

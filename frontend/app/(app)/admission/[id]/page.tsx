@@ -1,19 +1,22 @@
 'use client'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { admissionApi } from '@/lib/api'
 import { cn, formatDate, classLabel } from '@/lib/utils'
 import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
-import { ArrowLeft, Phone, Mail, MessageSquare, Calendar, CheckCircle, Loader2, Plus, User, FileCheck, UserPlus } from 'lucide-react'
+import { ADMISSION_DOC_TYPES as DOC_TYPES } from '@/lib/admissionDocumentTypes'
+import { ArrowLeft, Phone, Mail, MessageSquare, Calendar, CheckCircle, XCircle, Loader2, Plus, User, FileCheck, FileText, Upload, Eye, Trash2, UserPlus } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
@@ -375,6 +378,11 @@ export default function InquiryDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Documents can be uploaded/verified against this inquiry even
+              before conversion — required when the school's "documents
+              before conversion" toggle is on (see admission/settings). */}
+          {!inq.linked_application && <InquiryDocumentsCard inquiryId={id} />}
         </div>
 
         {/* Right: quick actions */}
@@ -603,6 +611,198 @@ function StatusChangeModal({ currentStatus, currentRank, onSelect, isPending, on
         </div>
         <DialogFooter>
           <Button variant="outline" className="w-full" onClick={onClose}>Cancel</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function InquiryDocumentsCard({ inquiryId }: { inquiryId: string }) {
+  const qc = useQueryClient()
+  const [showUpload, setShowUpload] = useState(false)
+
+  const { data: docs, isLoading } = useQuery({
+    queryKey: ['admission-inquiry-documents', inquiryId],
+    queryFn: () => admissionApi.inquiries.documents.list(inquiryId).then(r => r.data),
+  })
+
+  const verifyMutation = useMutation({
+    mutationFn: ({ docId, is_verified }: { docId: string; is_verified: boolean }) =>
+      admissionApi.inquiries.documents.verify(inquiryId, docId, is_verified),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admission-inquiry-documents', inquiryId] })
+      toast.success('Document updated')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update document'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (docId: string) => admissionApi.inquiries.documents.delete(inquiryId, docId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admission-inquiry-documents', inquiryId] })
+      toast.success('Document removed')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to remove document'),
+  })
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+        <h3 className="font-semibold text-foreground flex items-center gap-2">
+          <FileText className="w-4 h-4 text-muted-foreground" /> Documents ({(docs ?? []).length})
+        </h3>
+        <Button variant="ghost" size="sm" onClick={() => setShowUpload(true)} className="text-primary hover:text-primary">
+          <Upload className="w-4 h-4" /> Upload
+        </Button>
+      </div>
+      {isLoading ? (
+        <div className="space-y-3 p-6">{Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-xl" />)}</div>
+      ) : !(docs ?? []).length ? (
+        <EmptyState icon={FileText} title="No documents uploaded yet" description="Upload birth certificate, marksheets, and more — before conversion if needed" className="py-8" />
+      ) : (
+        <div className="divide-y divide-border">
+          {(docs ?? []).map((doc: any) => (
+            <div key={doc.id} className="flex items-center gap-4 px-6 py-3.5">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-medium text-foreground truncate">{doc.document_name}</p>
+                  <Badge className="border-transparent bg-primary/10 text-primary whitespace-nowrap">
+                    {DOC_TYPES.find(t => t.value === doc.document_type)?.label ?? doc.document_type}
+                  </Badge>
+                  {doc.is_verified ? (
+                    <Badge variant="success">Verified</Badge>
+                  ) : (
+                    <Badge variant="warning">Pending Review</Badge>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {formatDate(doc.created_at)}{doc.users?.full_name && <> · uploaded by {doc.users.full_name}</>}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" title="View">
+                  <a href={doc.file_url} target="_blank" rel="noreferrer" aria-label="View document"><Eye className="h-4 w-4" /></a>
+                </Button>
+                {!doc.is_verified ? (
+                  <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-success" title="Verify"
+                    onClick={() => verifyMutation.mutate({ docId: doc.id, is_verified: true })}>
+                    <CheckCircle className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-warning" title="Unverify"
+                    onClick={() => verifyMutation.mutate({ docId: doc.id, is_verified: false })}>
+                    <XCircle className="h-4 w-4" />
+                  </Button>
+                )}
+                <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" title="Delete"
+                  onClick={() => { if (confirm('Delete this document?')) deleteMutation.mutate(doc.id) }}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {showUpload && (
+        <InquiryDocumentUploadModal inquiryId={inquiryId} onClose={() => {
+          setShowUpload(false)
+          qc.invalidateQueries({ queryKey: ['admission-inquiry-documents', inquiryId] })
+        }} />
+      )}
+    </Card>
+  )
+}
+
+function InquiryDocumentUploadModal({ inquiryId, onClose }: { inquiryId: string; onClose: () => void }) {
+  const [form, setForm] = useState({ document_type: 'birth_certificate', document_name: '', notes: '' })
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const handleUpload = async () => {
+    if (!file) return toast.error('Please select a file')
+    if (!form.document_name) return toast.error('Please enter a document name')
+    setUploading(true)
+    try {
+      const reader = new FileReader()
+      reader.onload = async () => {
+        try {
+          await admissionApi.inquiries.documents.upload(inquiryId, {
+            file_base64: reader.result,
+            file_name: file.name,
+            mime_type: file.type,
+            ...form,
+          })
+          toast.success('Document uploaded!')
+          onClose()
+        } catch (e: any) {
+          toast.error(e?.response?.data?.error ?? 'Upload failed')
+        } finally {
+          setUploading(false)
+        }
+      }
+      reader.readAsDataURL(file)
+    } catch {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Upload Document</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Document Type</Label>
+            <Select value={form.document_type} onValueChange={v => setForm(f => ({ ...f, document_type: v }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {DOC_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="inq-doc-name">Document Name *</Label>
+            <Input id="inq-doc-name" value={form.document_name}
+              onChange={e => setForm(f => ({ ...f, document_name: e.target.value }))}
+              placeholder="e.g. Birth Certificate" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>File *</Label>
+            <div
+              onClick={() => fileRef.current?.click()}
+              className={cn(
+                'border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors',
+                file ? 'border-primary bg-primary/10' : 'border-input hover:border-primary hover:bg-muted/50'
+              )}>
+              {file ? (
+                <div>
+                  <p className="text-sm font-medium text-primary">{file.name}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{(file.size / 1024).toFixed(0)} KB</p>
+                </div>
+              ) : (
+                <div>
+                  <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">Click to select file</p>
+                  <p className="text-xs text-muted-foreground/70 mt-1">PDF, JPG, PNG up to 10MB</p>
+                </div>
+              )}
+            </div>
+            <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" className="hidden"
+              onChange={e => setFile(e.target.files?.[0] ?? null)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="inq-doc-notes">Notes (optional)</Label>
+            <Input id="inq-doc-notes" value={form.notes}
+              onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+              placeholder="Any additional notes..." />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleUpload} disabled={uploading || !file}>
+            {uploading ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading...</> : 'Upload'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -5,13 +5,14 @@ import { admissionApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { formatDate, classLabel } from '@/lib/utils'
 import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
-import { Plus, Trash2, Loader2, ClipboardList, Users2, MapPin, ChevronDown, ChevronRight, Pencil } from 'lucide-react'
+import { admissionEntranceModeLabel as entranceModeLabel } from '@/lib/admissionEntranceModes'
+import { Plus, Trash2, Loader2, ClipboardList, Users2, MapPin, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
@@ -26,18 +27,6 @@ const SLOT_TYPES = [
   { value: 'interview', label: 'Interview' },
   { value: 'campus_tour', label: 'Campus Tour' },
 ]
-
-const ENTRANCE_MODES = [
-  { value: 'interview', label: 'Interview' },
-  { value: 'written_mcq', label: 'Written — MCQ' },
-  { value: 'written_subjective', label: 'Written — Subjective' },
-  { value: 'observation', label: 'Observation' },
-  { value: 'previous_academic_percentage', label: 'Previous Academic Percentage' },
-]
-
-function entranceModeLabel(v: string) {
-  return ENTRANCE_MODES.find(m => m.value === v)?.label ?? v
-}
 
 const SLOT_TYPE_BADGE: Record<string, 'info' | 'warning' | 'secondary'> = {
   entrance_exam: 'info',
@@ -92,8 +81,6 @@ export default function AdmissionSlotsPage() {
         className="mb-0"
         actions={<Button onClick={() => setShowNew(true)}><Plus className="h-4 w-4" /> New Slot</Button>}
       />
-
-      <EntranceModeCard />
 
       {isLoading ? (
         <div className="space-y-3">
@@ -169,106 +156,6 @@ export default function AdmissionSlotsPage() {
       )}
       {bookingsFor && <BookingsModal slotId={bookingsFor.id} slotTitle={bookingsFor.title} onClose={() => setBookingsFor(null)} />}
     </div>
-  )
-}
-
-function EntranceModeCard() {
-  const { user } = useAuth()
-  const canManage = user?.role === 'school_admin' || user?.role === 'principal'
-  const classStyle = useClassDisplayStyle()
-  const [expanded, setExpanded] = useState(false)
-  const qc = useQueryClient()
-
-  const { data: settings, isLoading } = useQuery({
-    queryKey: ['admission-class-settings'],
-    queryFn: () => admissionApi.classSettings.list().then(r => r.data),
-    enabled: expanded,
-  })
-
-  const updateMutation = useMutation({
-    mutationFn: ({ classId, data }: { classId: string; data: { entrance_mode?: string; pass_marks_percent?: number; admission_fee_amount?: number | null } }) =>
-      admissionApi.classSettings.update(classId, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['admission-class-settings'] })
-      toast.success('Updated')
-    },
-    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
-  })
-
-  return (
-    <Card>
-      <button
-        onClick={() => setExpanded(v => !v)}
-        className="w-full flex items-center justify-between px-6 py-4 text-left"
-      >
-        <div>
-          <CardTitle className="text-sm">Entrance Mode &amp; Admission Fee by Class</CardTitle>
-          <CardDescription className="text-xs mt-0.5">How each class's entrance assessment is conducted, its pass mark, and the admission fee due once admitted.</CardDescription>
-        </div>
-        {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
-      </button>
-      {expanded && (
-        <CardContent className="pt-0">
-          {isLoading ? (
-            <Skeleton className="h-24 w-full rounded-xl" />
-          ) : (
-            <div className="divide-y divide-border">
-              {(settings ?? []).map((s: any) => (
-                <div key={s.class_id} className="flex items-center justify-between py-2.5 gap-3 flex-wrap">
-                  <span className="text-sm font-medium text-foreground">{classLabel(s.class_name, s.numeric_level, classStyle)}</span>
-                  {canManage ? (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Select value={s.entrance_mode} onValueChange={(v) => updateMutation.mutate({ classId: s.class_id, data: { entrance_mode: v } })}>
-                        <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {ENTRANCE_MODES.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                      {(s.entrance_mode === 'written_mcq' || s.entrance_mode === 'written_subjective' || s.entrance_mode === 'previous_academic_percentage') && (
-                        <div className="flex items-center gap-1">
-                          <Input
-                            type="number" min={0} max={100} defaultValue={s.pass_marks_percent}
-                            className="w-16 h-9"
-                            onBlur={(e) => {
-                              const v = Number(e.target.value)
-                              if (v !== s.pass_marks_percent) updateMutation.mutate({ classId: s.class_id, data: { pass_marks_percent: v } })
-                            }}
-                          />
-                          <span className="text-xs text-muted-foreground">% required</span>
-                        </div>
-                      )}
-                      <div className="flex items-center gap-1 border-l border-border pl-2">
-                        <span className="text-xs text-muted-foreground">₹</span>
-                        <Input
-                          type="number" min={0} step="1" defaultValue={s.admission_fee_amount ?? ''}
-                          placeholder="Not set" className="w-24 h-9"
-                          onBlur={(e) => {
-                            const raw = e.target.value.trim()
-                            const v = raw === '' ? null : Number(raw)
-                            if (v !== (s.admission_fee_amount ?? null)) updateMutation.mutate({ classId: s.class_id, data: { admission_fee_amount: v } })
-                          }}
-                        />
-                        <span className="text-xs text-muted-foreground">admission fee</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="secondary">{entranceModeLabel(s.entrance_mode)}</Badge>
-                      {(s.entrance_mode === 'written_mcq' || s.entrance_mode === 'written_subjective' || s.entrance_mode === 'previous_academic_percentage') && (
-                        <span className="text-xs text-muted-foreground">{s.pass_marks_percent}% required</span>
-                      )}
-                      <span className="text-xs text-muted-foreground">
-                        {s.admission_fee_amount != null ? `₹${Number(s.admission_fee_amount).toLocaleString('en-IN')} admission fee` : 'Admission fee not set'}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      )}
-    </Card>
   )
 }
 

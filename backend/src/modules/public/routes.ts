@@ -202,11 +202,20 @@ router.get('/schools/:schoolId/inquiries/:inquiryId/status', asyncHandler(async 
 
   const classId = (application as any)?.applying_for_class_id ?? inquiry.applying_for_class_id
 
+  // remaining-work-plan.md follow-up (2026-08-26): documents can now
+  // attach to the inquiry directly (application_documents.inquiry_id),
+  // so this no longer waits on an application existing — a parent can see
+  // and start satisfying the checklist right after their first inquiry,
+  // not only after staff (or the school's own conversion prerequisites)
+  // move them into a formal application.
   let documents: { document_type: string; uploaded: boolean; verified: boolean }[] = []
-  if (application && classId) {
+  if (classId) {
+    const uploadedFilter = application
+      ? `inquiry_id.eq.${inquiryId},application_id.eq.${(application as any).id}`
+      : `inquiry_id.eq.${inquiryId}`
     const [{ data: required }, { data: uploaded }] = await Promise.all([
       supabase.from('admission_document_requirements' as any).select('document_type').eq('school_id', schoolId).eq('class_id', classId),
-      supabase.from('application_documents').select('document_type, is_verified').eq('application_id', (application as any).id).is('deleted_at', null),
+      supabase.from('application_documents').select('document_type, is_verified').or(uploadedFilter).is('deleted_at', null),
     ])
     const uploadedByType = new Map((uploaded ?? []).map((d: any) => [d.document_type, d.is_verified]))
     documents = (required ?? []).map((r: any) => ({
@@ -227,7 +236,7 @@ router.get('/schools/:schoolId/inquiries/:inquiryId/status', asyncHandler(async 
       status: inquiry.status,
       status_label: copy.label,
       status_description: copy.description,
-      can_upload_documents: !!application,
+      can_upload_documents: true,
       documents,
     },
   })
@@ -247,6 +256,14 @@ const PublicDocumentSchema = z.object({
 // NOT a second upload mechanism. Always lands unverified: a parent
 // uploading their own document is exactly the case document verification
 // exists to check, same as any staff-side upload.
+//
+// remaining-work-plan.md follow-up (2026-08-26): previously required an
+// application to already exist — now uploads against the application if
+// one exists (unchanged, tested behavior), or directly against the
+// inquiry if not (application_documents.inquiry_id, added specifically
+// so a parent can start satisfying the checklist right after submitting
+// their inquiry, before staff or the school's own conversion
+// prerequisites move them into a formal application).
 router.post('/schools/:schoolId/inquiries/:inquiryId/documents', asyncHandler(async (req: Request, res: Response) => {
   const { schoolId, inquiryId } = req.params
   if (!UUID_RE.test(schoolId) || !UUID_RE.test(inquiryId)) {
@@ -259,7 +276,6 @@ router.post('/schools/:schoolId/inquiries/:inquiryId/documents', asyncHandler(as
 
   const { data: application } = await supabase
     .from('admission_applications').select('id').eq('inquiry_id', inquiryId).eq('school_id', schoolId).maybeSingle()
-  if (!application) return res.status(400).json({ success: false, error: 'Document upload is not available yet — please check back after your inquiry has progressed to an application.' })
 
   const body = PublicDocumentSchema.parse(req.body)
   const base64Data = body.file_base64.replace(/^data:[\w/+.-]+;base64,/, '')
@@ -267,7 +283,8 @@ router.post('/schools/:schoolId/inquiries/:inquiryId/documents', asyncHandler(as
   if (buffer.length > 10 * 1024 * 1024) {
     return res.status(400).json({ success: false, error: 'File is too large (10 MB limit).' })
   }
-  const filePath = `${schoolId}/${application.id}/${Date.now()}_${body.file_name}`
+  const subjectPath = application ? application.id : `inquiry-${inquiryId}`
+  const filePath = `${schoolId}/${subjectPath}/${Date.now()}_${body.file_name}`
 
   const { error: uploadErr } = await supabase.storage
     .from('admission-documents')
@@ -277,7 +294,8 @@ router.post('/schools/:schoolId/inquiries/:inquiryId/documents', asyncHandler(as
   const { data: urlData } = supabase.storage.from('admission-documents').getPublicUrl(filePath)
 
   const { error } = await supabase.from('application_documents').insert({
-    application_id: application.id,
+    application_id: application?.id ?? null,
+    inquiry_id: application ? null : inquiryId,
     school_id: schoolId,
     document_type: body.document_type,
     document_name: body.file_name,
