@@ -924,6 +924,90 @@ router.delete('/syllabus/:id', requirePermissionV2('syllabus.plan'),
 )
 
 // ═══════════════════════════════════════════════════════════════
+// SYLLABUS DOCUMENTS — Organizational Settings -> Syllabus Setup's
+// "upload a reference document" option. A raw file (a CBSE-issued
+// syllabus PDF, last year's plan, whatever the school already has) kept
+// as-is against a class/section/subject — distinct from
+// syllabus_chapters, which is the structured chapter list the Import
+// and Type-it-in options both write into. syllabus.plan-gated, same
+// permission as defining chapters: this is a setup action, not a
+// day-to-day one.
+// ═══════════════════════════════════════════════════════════════
+
+const UploadSyllabusDocSchema = z.object({
+  class_id: z.string(),
+  section_id: z.string().optional(),
+  subject_name: z.string().min(1),
+  document_name: z.string().min(1),
+  file_base64: z.string().min(1),
+  file_name: z.string().min(1),
+  mime_type: z.string().optional(),
+})
+
+router.get('/syllabus/documents', requirePermissionV2('syllabus.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { class_id, section_id, subject_name } = req.query
+    const school_id = req.user!.school_id
+    let query = supabase
+      .from('syllabus_documents')
+      .select('*, classes(name), sections(name), users:uploaded_by(full_name)')
+      .eq('school_id', school_id)
+      .order('created_at', { ascending: false })
+    if (class_id) query = query.eq('class_id', class_id as string)
+    // A whole-class document (section_id null) applies to every section —
+    // same "section is null OR matches" convention used throughout this
+    // module (GET /syllabus, /syllabus/stats, and — after the earlier fix
+    // — GET /homework).
+    if (section_id) query = query.or(`section_id.eq.${section_id},section_id.is.null`)
+    if (subject_name) query = query.eq('subject_name', subject_name as string)
+    const { data, error } = await query
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.post('/syllabus/documents', requirePermissionV2('syllabus.plan'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const body = UploadSyllabusDocSchema.parse(req.body)
+    const school_id = req.user!.school_id
+
+    const base64Data = body.file_base64.replace(/^data:[\w/+.-]+;base64,/, '')
+    const buffer = Buffer.from(base64Data, 'base64')
+    if (buffer.length > 15 * 1024 * 1024) {
+      return res.status(400).json({ success: false, error: 'That file is over 15MB.' })
+    }
+    const filePath = `${school_id}/${body.class_id}/${Date.now()}_${body.file_name}`
+    const { error: uploadErr } = await supabase.storage
+      .from('syllabus-documents')
+      .upload(filePath, buffer, { contentType: body.mime_type ?? 'application/octet-stream', upsert: false })
+    if (uploadErr) return res.status(400).json({ success: false, error: uploadErr.message })
+    const { data: urlData } = supabase.storage.from('syllabus-documents').getPublicUrl(filePath)
+
+    const { data, error } = await supabase.from('syllabus_documents').insert({
+      school_id,
+      class_id: body.class_id,
+      section_id: body.section_id || null,
+      subject_name: body.subject_name,
+      document_name: body.document_name,
+      file_url: urlData.publicUrl,
+      file_size: buffer.length > 1024 * 1024 ? `${(buffer.length / (1024 * 1024)).toFixed(1)} MB` : `${(buffer.length / 1024).toFixed(0)} KB`,
+      mime_type: body.mime_type,
+      uploaded_by: req.user!.id,
+    }).select('*, classes(name), sections(name), users:uploaded_by(full_name)').single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+  })
+)
+
+router.delete('/syllabus/documents/:id', requirePermissionV2('syllabus.plan'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { error } = await supabase.from('syllabus_documents').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
 // DAILY PROGRESS LOGS — a teacher's day-by-day entry against a specific
 // chapter. This IS the source of truth for "covered vs left": logging
 // progress as 'completed' against a chapter flips that chapter's status

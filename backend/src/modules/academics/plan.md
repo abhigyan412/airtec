@@ -1032,3 +1032,46 @@ the Excel import above, "No due date") to a custom date of 2026-09-10,
 saved, then confirmed via a direct API read — `planned_date` and the
 computed `due_date` both correctly show `2026-09-10`, `exam_id` stayed
 `null`.
+
+## Organizational Settings: Syllabus Setup — import, type, or upload, per class/section/subject (2026-08-28)
+
+Every existing entry point into the syllabus (Due Dates, Progress, Log
+Progress) assumes a chapter list already exists for the class/section/subject
+being looked at. There was no dedicated place for a school to define that
+list in the first place, class by class, at the start of a term — only the
+Due Dates page's "Add chapters" panel, buried behind Syllabus's own
+navigation rather than Organizational Settings where the rest of the
+school's structural setup (Classes & Sections, Class Teachers, Academic
+Calendar) lives.
+
+**New page**: `frontend/app/(app)/settings/syllabus/page.tsx` ("Syllabus
+Setup"), gated to School Admin/Principal, added to the sidebar's
+Organizational Settings group (`frontend/components/layout/Sidebar.tsx`).
+Same Class → Section → Subject sourcing as every other syllabus screen —
+`useClassPicker(true)` for class/section (school's real Class & Section
+settings), `classesApi.subjects.list(class_id)` for subject (school's master
+subject list) — never free text.
+
+All three requested input methods, two of them by extracting rather than
+duplicating:
+
+- **Extracted `AddChaptersForm`** out of `due-dates/page.tsx` into
+  `frontend/components/academics/AddChaptersForm.tsx` — a genuine 2nd
+  consumer (Due Dates' day-to-day planning vs. Settings' initial bulk setup),
+  same reasoning as `AddHomeworkModal`/`useClassPicker` earlier this session.
+  It already covers **import** (Excel, via the existing `POST
+  /academics/syllabus/import-chapters`) and **type it in** (per-row manual
+  entry) — no new backend needed for either.
+- **New third method, upload**: a raw reference document (a CBSE-issued PDF,
+  a scan of last year's plan) kept as-is against the class/section/subject,
+  not parsed into chapters — distinct from the Excel import. New table
+  `syllabus_documents` (migration `20260830300000_syllabus_documents.sql`,
+  same shape as `student_documents`: school/class/section/subject, document
+  name, file_url/file_size/mime_type, uploaded_by) plus a public
+  `syllabus-documents` storage bucket. New routes in
+  `backend/src/modules/academics/routes.ts`: `GET/POST
+  /academics/syllabus/documents`, `DELETE /academics/syllabus/documents/:id`,
+  using the same "section is null OR matches" scoping as `GET /syllabus`.
+  New `SyllabusDocumentsPanel` component (inline in the new page) handles the
+  upload UI and the list of already-uploaded documents with view/download/
+  delete, mirroring `students/[id]/documents/page.tsx`'s upload pattern.

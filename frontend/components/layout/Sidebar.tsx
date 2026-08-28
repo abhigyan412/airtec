@@ -9,7 +9,7 @@ import {
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
   Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
-  SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2,
+  SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2, BookMarked,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -240,6 +240,10 @@ const SETTINGS: NavItem[] = [
       { label: 'Class Teachers', href: '/settings/teaching-assignments', icon: GraduationCap, roles: ['principal'] },
       // Holidays and the weekly-off pattern, which the timetable reads.
       { label: 'Academic Calendar', href: '/settings/calendar', icon: CalendarDays, roles: ['principal', 'teacher'] },
+      // Initial class/section/subject-wise syllabus definition — import,
+      // type in, or upload a reference document. Distinct from Syllabus ->
+      // Due Dates, which is day-to-day chapter planning, not setup.
+      { label: 'Syllabus Setup', href: '/settings/syllabus', icon: BookMarked, roles: ['principal'] },
     ],
   },
 ]

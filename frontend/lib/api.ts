@@ -1010,6 +1010,13 @@ export const syllabusApi = {
     create: (data: any) => api.post('/academics/progress-notes', data).then(r => r.data),
     delete: (id: string) => api.delete(`/academics/progress-notes/${id}`).then(r => r.data),
   },
+  documents: {
+    list: (params?: { class_id?: string; section_id?: string; subject_name?: string }) =>
+      api.get('/academics/syllabus/documents', { params }).then(r => r.data),
+    upload: (data: { class_id: string; section_id?: string; subject_name: string; document_name: string; file_base64: string; file_name: string; mime_type?: string }) =>
+      api.post('/academics/syllabus/documents', data).then(r => r.data),
+    delete: (id: string) => api.delete(`/academics/syllabus/documents/${id}`).then(r => r.data),
+  },
 }
 
 export const academicsApi = {
