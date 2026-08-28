@@ -1,7 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ClipboardList, NotebookPen, CalendarClock } from 'lucide-react'
+import { ClipboardList, NotebookPen, CalendarClock, BookMarked } from 'lucide-react'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
 
@@ -11,8 +11,15 @@ import { cn } from '@/lib/utils'
 // combined the overview grid, a free-text subject filter, a due-dates
 // calendar and a logging modal — viewing progress, logging it day-to-day,
 // and planning due dates are three different jobs.
+//
+// "View Syllabus" added 2026-08-28: a read-only mirror of Organizational
+// Settings' Syllabus Setup (chapter list + uploaded reference documents),
+// gated the same as Progress (syllabus.view) rather than admin-only, so a
+// teacher (or anyone else who can see Progress) can browse what's actually
+// been configured for a class without pacing/status noise.
 const TABS = [
   { href: '/syllabus', label: 'Progress', icon: ClipboardList, exact: true, anyOf: ['syllabus.view'] },
+  { href: '/syllabus/view', label: 'View Syllabus', icon: BookMarked, anyOf: ['syllabus.view'] },
   { href: '/syllabus/log', label: 'Log Progress', icon: NotebookPen, anyOf: ['syllabus.log_progress'] },
   { href: '/syllabus/due-dates', label: 'Due Dates', icon: CalendarClock, anyOf: ['syllabus.plan'] },
 ]

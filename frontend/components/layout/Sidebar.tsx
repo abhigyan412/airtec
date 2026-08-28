@@ -188,6 +188,7 @@ const NAV: NavItem[] = [
         children: [
           // Kept in step with the tab bar in app/(app)/syllabus/layout.tsx.
           { label: 'Progress', href: '/syllabus', icon: ClipboardList, permission: 'syllabus.view' },
+          { label: 'View Syllabus', href: '/syllabus/view', icon: BookMarked, permission: 'syllabus.view' },
           { label: 'Log Progress', href: '/syllabus/log', icon: NotebookPen, permission: 'syllabus.log_progress' },
           { label: 'Due Dates', href: '/syllabus/due-dates', icon: CalendarClock, permission: 'syllabus.plan' },
         ],

@@ -1075,3 +1075,43 @@ duplicating:
   New `SyllabusDocumentsPanel` component (inline in the new page) handles the
   upload UI and the list of already-uploaded documents with view/download/
   delete, mirroring `students/[id]/documents/page.tsx`'s upload pattern.
+
+## Section picker hidden below class 11/12 in Syllabus Setup (2026-08-28)
+
+Follow-up: every section of a class shares one syllabus except 11th/12th,
+where sections are really streams (Science/Commerce/Arts) with genuinely
+different subjects. `frontend/app/(app)/settings/syllabus/page.tsx` now
+computes `isStreamWise = numeric_level === 11 || 12` (same check
+`settings/classes/page.tsx` already uses for its "Stream-wise" badge) and
+only shows the Section select — and only requires one before "ready" —
+when it's true. Below that, `AddChaptersForm`/`SyllabusDocumentsPanel` are
+always called with an empty `sectionId`, so chapters/documents save with
+`section_id: null` (applies to every section), matching what a shared
+syllabus actually means instead of accidentally scoping setup to whichever
+section happened to be selected first.
+
+## Syllabus module: "View Syllabus" tab, a read-only mirror of Settings' Syllabus Setup (2026-08-28)
+
+Organizational Settings' Syllabus Setup (chapters + reference documents)
+was only ever visible to whoever configured it — School Admin/Principal.
+There was no way for a teacher, or anyone else who can already see the
+Progress tab, to just browse what the syllabus actually consists of
+without wading through Progress's status colors, overdue badges and
+"assign homework" action, which answer a different question ("how far
+along are we") than this one ("what is the syllabus").
+
+**New tab**, added to both `frontend/app/(app)/syllabus/layout.tsx`'s tab
+bar and the Sidebar's `Syllabus` children (kept in step, per that file's
+own convention) — `View Syllabus` at `/syllabus/view`, gated on
+`syllabus.view` (the same broad permission Progress uses), not
+`syllabus.plan`. New page `frontend/app/(app)/syllabus/view/page.tsx`:
+same Class → Section → Subject picker as Progress/Settings (senior
+management sees every class via `syllabus.plan`; a Teacher sees only their
+timetabled classes, subjects narrowed to `myAllowedSubjects` the same way
+Progress already does), same `isStreamWise` section-picker gate as the
+Settings page immediately above. Two read-only panels: `ChapterListPanel`
+(chapter number/name/due date, no status or homework actions — plain
+`syllabusApi.list()`) and `DocumentsListPanel` (view/download only, no
+upload/delete — plain `syllabusApi.documents.list()`, the same
+`GET /academics/syllabus/documents` endpoint already gated on
+`syllabus.view` server-side, so no backend change was needed here).
