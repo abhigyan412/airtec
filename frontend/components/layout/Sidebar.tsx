@@ -160,19 +160,38 @@ const NAV: NavItem[] = [
           { label: 'Examination Settings', href: '/exams/templates', icon: SettingsIcon, permission: 'exam.view', lockUnless: 'exam.schedule', indent: true },
         ],
       },
-      // Attendance, Homework and Syllabus collapse to one link each,
-      // unlike Timetable/Examinations above — all three already grew
-      // their own Mark/Report, Assign/Grading/Settings and Progress/Log/
-      // Due-Dates tab bars on the page itself this session (see each
-      // module's own layout.tsx), so repeating that same choice a second
-      // time in the sidebar was pure duplication, not a real sub-nav.
-      // Gated on each module's broadest permission — every real role
-      // holding a narrower one (log_progress, plan, create) already holds
-      // this one too, so nothing becomes invisible to anyone who could
-      // already reach some part of the module.
-      { label: 'Student Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true, module: 'attendance' },
-      { label: 'Homework', href: '/homework', icon: NotebookPen, permission: 'homework.view', module: 'homework' },
-      { label: 'Syllabus', href: '/syllabus', icon: ClipboardList, permission: 'syllabus.view', module: 'syllabus' },
+      {
+        label: 'Student Attendance',
+        module: 'attendance',
+        icon: CalendarDays,
+        children: [
+          // Kept in step with the tab bar in app/(app)/attendance/layout.tsx.
+          { label: 'Mark Attendance', href: '/attendance', icon: ClipboardList, permission: 'attendance.view', teacherRequiresClassTeacher: true },
+          { label: 'Attendance Report', href: '/attendance/report', icon: BarChart3, permission: 'attendance.view', teacherRequiresClassTeacher: true },
+        ],
+      },
+      {
+        label: 'Homework',
+        module: 'homework',
+        icon: NotebookPen,
+        children: [
+          // Kept in step with the tab bar in app/(app)/homework/layout.tsx.
+          { label: 'Assign', href: '/homework', icon: BookOpen, permission: 'homework.view' },
+          { label: 'Grading', href: '/homework/assigned', icon: GraduationCap, permission: 'homework.create' },
+          { label: 'Settings', href: '/homework/settings', icon: SettingsIcon, permission: 'homework.create' },
+        ],
+      },
+      {
+        label: 'Syllabus',
+        module: 'syllabus',
+        icon: ClipboardList,
+        children: [
+          // Kept in step with the tab bar in app/(app)/syllabus/layout.tsx.
+          { label: 'Progress', href: '/syllabus', icon: ClipboardList, permission: 'syllabus.view' },
+          { label: 'Log Progress', href: '/syllabus/log', icon: NotebookPen, permission: 'syllabus.log_progress' },
+          { label: 'Due Dates', href: '/syllabus/due-dates', icon: CalendarClock, permission: 'syllabus.plan' },
+        ],
+      },
     ],
   },
   { label: 'Complaints', href: '/complaints', icon: MessageSquare, permission: 'complaint.view', module: 'complaints' },
