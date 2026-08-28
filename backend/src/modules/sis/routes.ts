@@ -10,7 +10,7 @@ import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr, countWorkingDays }
 import { createNotification, createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 import { buildStudentSearchFilter } from '../../shared/utils/studentSearch'
 import { getTeacherContext } from '../../shared/utils/teacherContext'
-import { ensureTransferCertificateWorkflowDefinition } from '../rbac/seed'
+import { ensureTransferCertificateWorkflowDefinition, assignDefaultUserRole } from '../rbac/seed'
 
 const router = Router()
 
@@ -45,7 +45,15 @@ const CreateStudentSchema = z.object({
   mother_email: z.string().optional(),
 })
 
-const UpdateStudentSchema = CreateStudentSchema.partial()
+// status was never part of CreateStudentSchema (a new student is always
+// active), so UpdateStudentSchema.partial() alone silently dropped it —
+// same "accepted and silently dropped" bug this file's PATCH /:id
+// comment already documents for the parent fields. Bulk Edit's own
+// "Status" field (students/bulk-edit/page.tsx) sends exactly this and
+// has been a no-op ever since it shipped.
+const UpdateStudentSchema = CreateStudentSchema.partial().extend({
+  status: z.enum(['active', 'inactive', 'transferred', 'passed_out', 'suspended']).optional(),
+})
 
 const BulkPromoteSchema = z.object({
   student_ids: z.array(z.string().uuid()),
@@ -945,9 +953,19 @@ router.post('/bulk/promote', requirePermissionV2('student.promote'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = BulkPromoteSchema.parse(req.body)
     const school_id = req.user!.school_id
-    const { data: students, error: fetchErr } = await supabase.from('students')
-      .select('id, class_id, section_id, academic_year_id').in('id', body.student_ids).eq('school_id', school_id)
-    if (fetchErr || !students?.length) return res.status(400).json({ success: false, error: 'No valid students found' })
+    const { data: fetched, error: fetchErr } = await supabase.from('students')
+      .select('id, class_id, section_id, academic_year_id, status').in('id', body.student_ids).eq('school_id', school_id)
+    if (fetchErr || !fetched?.length) return res.status(400).json({ success: false, error: 'No valid students found' })
+
+    // A suspended student is frozen the same as any other edit to their
+    // record — skipped here rather than failing the whole request, so one
+    // suspended student inside an otherwise-valid whole-class promotion
+    // doesn't block the rest of the class.
+    const suspendedCount = fetched.filter(s => s.status === 'suspended').length
+    const students = fetched.filter(s => s.status !== 'suspended')
+    if (!students.length) {
+      return res.status(400).json({ success: false, error: 'All selected students are suspended — reactivate them before transferring.' })
+    }
 
     const promotionRecords = students.map(s => ({
       school_id, student_id: s.id, from_academic_year_id: s.academic_year_id,
@@ -967,10 +985,13 @@ router.post('/bulk/promote', requirePermissionV2('student.promote'),
 
     const { error: updateErr } = await supabase.from('students')
       .update({ class_id: body.to_class_id, section_id: body.to_section_id ?? null, academic_year_id: body.to_academic_year_id })
-      .in('id', body.student_ids).eq('school_id', school_id)
+      .in('id', students.map(s => s.id)).eq('school_id', school_id)
     if (updateErr) return res.status(400).json({ success: false, error: updateErr.message })
 
-    res.json({ success: true, data: { promoted_count: students.length, message: `${students.length} students promoted successfully` } })
+    const message = suspendedCount
+      ? `${students.length} student${students.length > 1 ? 's' : ''} promoted successfully — ${suspendedCount} suspended student${suspendedCount > 1 ? 's were' : ' was'} skipped.`
+      : `${students.length} students promoted successfully`
+    res.json({ success: true, data: { promoted_count: students.length, skipped_suspended: suspendedCount, message } })
   })
 )
 
@@ -1518,7 +1539,7 @@ router.get('/tc-requests/pending', asyncHandler(async (req: AuthRequest, res: Re
 
 async function fetchStudentWithFeeSummary(id: string, school_id: string) {
   const { data, error } = await supabase.from('students')
-    .select(`*, classes(id, name, stream), sections(id, name), houses(id, name, color), academic_years(id, name), parents(*)`)
+    .select(`*, classes(id, name, stream), sections(id, name), houses(id, name, color), academic_years(id, name), parents(*, portal_user:user_id(is_active)), portal_user:user_id(is_active)`)
     .eq('id', id).eq('school_id', school_id).single()
   if (error || !data) return null
 
@@ -1532,6 +1553,22 @@ async function fetchStudentWithFeeSummary(id: string, school_id: string) {
   const totalDue = totalBilled - totalPaid
 
   return { ...data, fee_summary: { total_billed: totalBilled, total_paid: totalPaid, total_due: totalDue } }
+}
+
+// A suspended student's portal access freezes with them — their own
+// login and their parent/guardian's, if either exists. Reversed the same
+// way on reactivation (see PATCH /:id below). Silent no-op for a student
+// with no portal login at all, which is the common case.
+async function setStudentPortalLoginsActive(studentId: string, school_id: string, active: boolean) {
+  const { data: student } = await supabase.from('students')
+    .select('user_id, parents(user_id)').eq('id', studentId).eq('school_id', school_id).maybeSingle()
+  if (!student) return
+  const userIds = [
+    (student as any).user_id,
+    ...((student as any).parents ?? []).map((p: any) => p.user_id),
+  ].filter(Boolean) as string[]
+  if (!userIds.length) return
+  await supabase.from('users').update({ is_active: active }).in('id', userIds).eq('school_id', school_id)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1622,6 +1659,16 @@ router.patch('/:id', requirePermissionV2('student.edit'),
     if (!existing) return res.status(404).json({ success: false, error: 'Student not found' })
     const { father_name, father_phone, father_email, mother_name, mother_phone, mother_email, ...studentData } = body as any
 
+    // A suspended student is frozen — nothing about their record (or
+    // their parent's) can be edited except lifting the suspension itself,
+    // by moving `status` off 'suspended' in this same request. Without
+    // that exception no one could ever reactivate anyone through this
+    // same endpoint again.
+    const leavingSuspension = studentData.status !== undefined && studentData.status !== 'suspended'
+    if (existing.status === 'suspended' && !leavingSuspension) {
+      return res.status(403).json({ success: false, error: 'This student is suspended — reactivate them first before editing their profile.' })
+    }
+
     // An edit touching ONLY parent fields (e.g. just updating a phone
     // number from the Parent Info tab) leaves studentData empty —
     // .update({}) against PostgREST doesn't reliably return the row via
@@ -1659,6 +1706,14 @@ router.patch('/:id', requirePermissionV2('student.edit'),
     }
 
     await supabase.from('audit_logs').insert({ school_id, user_id: req.user!.id, action: 'UPDATE', entity_type: 'student', entity_id: id, old_values: existing, new_values: { ...studentData, ...parentFields } })
+
+    // Suspending or reactivating freezes/restores the linked portal
+    // logins in step — see setStudentPortalLoginsActive above.
+    if (studentData.status !== undefined && studentData.status !== existing.status) {
+      if (studentData.status === 'suspended') await setStudentPortalLoginsActive(id, school_id, false)
+      else if (existing.status === 'suspended') await setStudentPortalLoginsActive(id, school_id, true)
+    }
+
     res.json({ success: true, data })
   })
 )
@@ -1863,6 +1918,88 @@ router.post('/:id/photo', requirePermissionV2('student.edit'), asyncHandler(asyn
   await supabase.from('students').update({ photo_url: urlData.publicUrl }).eq('id', id).eq('school_id', school_id)
   res.json({ success: true, data: { photo_url: urlData.publicUrl } })
 }))
+
+// ── POST /students/:id/portal-login ──────────────────────────
+// Homework module plan.md Phase 0 (2026-08-27): the parent/student portal
+// and every homework/syllabus endpoint scoped to NON_STAFF_ROLES has been
+// unreachable for a real (non-seeded) school — resolveOwnStudentId() only
+// ever finds a match if students.user_id/parents.user_id is already set,
+// and nothing outside backend/src/seed.ts's demo data ever set it. This is
+// that missing provisioning step, staff-facing. Mirrors team/routes.ts's
+// POST /team/invite exactly — admin picks the password (not server-
+// generated), same supabase.auth.admin.createUser + users-row + RBAC-role
+// pattern seed.ts already uses for demo student/parent accounts (seed.ts
+// lines ~744-764) — this just makes that a real, auditable, staff-triggered
+// action instead of something only ever done for fake data.
+const PortalLoginSchema = z.object({
+  target: z.enum(['student', 'parent']),
+  email: z.string().email(),
+  password: z.string().min(6),
+})
+
+router.post('/:id/portal-login', requirePermissionV2('student.edit'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+    const { target, email, password } = PortalLoginSchema.parse(req.body)
+
+    const { data: student } = await supabase.from('students')
+      .select('id, first_name, last_name, phone, user_id, parents(id, father_name, mother_name, guardian_name, father_phone, mother_phone, user_id)')
+      .eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!student) return res.status(404).json({ success: false, error: 'Student not found' })
+
+    const parent = (student as any).parents?.[0]
+
+    if (target === 'student' && (student as any).user_id) {
+      return res.status(400).json({ success: false, error: 'This student already has a portal login' })
+    }
+    if (target === 'parent') {
+      if (!parent) return res.status(400).json({ success: false, error: 'Add a parent/guardian record for this student before creating a parent login' })
+      if (parent.user_id) return res.status(400).json({ success: false, error: "This student's parent/guardian already has a portal login" })
+    }
+
+    const { data: existing } = await supabase.from('users').select('id').eq('email', email).eq('school_id', school_id).maybeSingle()
+    if (existing) return res.status(400).json({ success: false, error: 'A user with this email already exists in your school' })
+
+    const { data: authUser, error: authError } = await supabase.auth.admin.createUser({ email, password, email_confirm: true })
+    if (authError || !authUser?.user) {
+      return res.status(400).json({ success: false, error: authError?.message ?? 'Failed to create auth account' })
+    }
+
+    const studentName = `${(student as any).first_name} ${(student as any).last_name}`
+    const fullName = target === 'student'
+      ? studentName
+      : (parent.father_name ?? parent.mother_name ?? parent.guardian_name ?? `Parent of ${studentName}`)
+    const phone = target === 'student' ? (student as any).phone : (parent.father_phone ?? parent.mother_phone ?? null)
+
+    const { data: newUser, error: userError } = await supabase.from('users')
+      .insert({ id: authUser.user.id, school_id, full_name: fullName, email, phone, role: target, is_active: true })
+      .select().single()
+
+    if (userError) {
+      await supabase.auth.admin.deleteUser(authUser.user.id)
+      return res.status(400).json({ success: false, error: userError.message })
+    }
+
+    const linkTable = target === 'student' ? 'students' : 'parents'
+    const linkId = target === 'student' ? id : parent.id
+    const { error: linkError } = await supabase.from(linkTable).update({ user_id: newUser.id }).eq('id', linkId)
+
+    if (linkError) {
+      await supabase.auth.admin.deleteUser(authUser.user.id)
+      await supabase.from('users').delete().eq('id', newUser.id)
+      return res.status(400).json({ success: false, error: linkError.message })
+    }
+
+    await assignDefaultUserRole(newUser.id, school_id, target)
+
+    res.status(201).json({
+      success: true,
+      data: { ...newUser, has_login: true },
+      message: `Account created. Share these credentials: ${email} / ${password}`,
+    })
+  })
+)
 
 // ── GET /students/:id/documents ──────────────────────────────
 router.get('/:id/documents', asyncHandler(async (req: AuthRequest, res: Response) => {

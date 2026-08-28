@@ -1,34 +1,29 @@
 'use client'
-import { useState, useMemo } from 'react'
-import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
-import { homeworkApi, syllabusApi, admissionApi, academicsApi, classesApi, api } from '@/lib/api'
+import { useMemo, useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { homeworkApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
-import { cn, formatDate } from '@/lib/utils'
-import { Plus, Trash2, Loader2, ShieldOff, BookOpen, ClipboardList, NotebookPen, CheckCircle2, Clock, CalendarDays, Circle } from 'lucide-react'
+import { useClassPicker } from '@/lib/useClassPicker'
+import { cn, formatDate, todayLocalISO } from '@/lib/utils'
+import { Plus, Trash2, Pencil, Upload, ShieldOff, BookOpen, CalendarDays } from 'lucide-react'
 import { toast } from 'sonner'
 import { MonthCalendar, toDateKey, type CalendarEvent } from '@/components/academics/MonthCalendar'
-import { SyllabusMeter } from '@/components/academics/SyllabusMeter'
+import { AddHomeworkModal } from '@/components/academics/AddHomeworkModal'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 
-type Tab = 'homework' | 'syllabus'
 const todayKey = toDateKey(new Date())
 
 export default function HomeworkPage() {
   const { can, isLoading: permLoading } = usePermissions()
   const canView = can('homework.view')
   const canCreate = can('homework.create')
-  const canSeeSyllabus = can('syllabus.view')
   const canPlanSyllabus = can('syllabus.plan')
-  const canLogSyllabus = can('syllabus.log_progress')
+  const canSeeSyllabus = can('syllabus.view')
 
   if (!permLoading && !canView) {
     return (
@@ -38,40 +33,64 @@ export default function HomeworkPage() {
 
   // Students/parents (and, now, plain Teachers with no create/syllabus
   // rights at all) get a simple read-only "My Homework" list — everything
-  // else (class pickers, syllabus, notes) is a staff tool.
+  // else (class pickers, assign/edit/delete) is a staff tool.
   if (!canCreate && !canSeeSyllabus) {
     return <MyHomeworkView />
   }
 
-  return (
-    <StaffHomeworkView
-      canCreate={canCreate}
-      canSeeSyllabus={canSeeSyllabus}
-      canPlanSyllabus={canPlanSyllabus}
-      canLogSyllabus={canLogSyllabus}
-    />
-  )
+  return <AssignHomeworkView canCreate={canCreate} isSeniorManagement={canPlanSyllabus} />
 }
 
-// ── STUDENT / PARENT VIEW ─────────────────────────────────────
+// ── READ-ONLY VIEW (homework.view without homework.create or syllabus.view) ─
+// Checked against rbac/seed.ts directly: no built-in role actually reaches
+// this branch. Every built-in role holding homework.view also holds either
+// homework.create (School Admin/Principal/VP/Director/Teacher/Class
+// Teacher) or nothing beyond view at all (Parent/Student) — and
+// Parent/Student are hard-redirected to the family portal app by
+// `(app)/layout.tsx` before this page ever mounts. This view is reachable
+// today only via a custom/edited RBAC grant (homework.view minus both of
+// the others). Kept and polished anyway rather than deleted, since RBAC v2
+// allows exactly that kind of custom role and this is its correct landing
+// spot if one exists. plan.md Phase 8 originally framed this as unifying
+// one component shared with the portal's own read view — not achievable as
+// a literal shared import (frontend and frontend-portal are two independent
+// Next.js apps with no workspace/package tooling between them), so this
+// instead brings the grouping and field coverage to parity by hand,
+// mirroring frontend-portal/app/(portal)/homework/page.tsx's Overdue/This
+// week/Later buckets and attachment rendering — kept in sync manually,
+// same as every other piece of UI these two apps don't literally share.
+type HwGroupKey = 'overdue' | 'week' | 'later'
+const HW_GROUPS: { key: HwGroupKey; heading: string }[] = [
+  { key: 'overdue', heading: 'Overdue' },
+  { key: 'week', heading: 'Due this week' },
+  { key: 'later', heading: 'Later' },
+]
+function homeworkGroupOf(dueDate: string | null | undefined, today: string): HwGroupKey {
+  if (!dueDate) return 'later'
+  if (dueDate < today) return 'overdue'
+  const days = Math.round((new Date(dueDate).getTime() - new Date(today).getTime()) / 86_400_000)
+  return days <= 6 ? 'week' : 'later'
+}
+
 function MyHomeworkView() {
+  const today = todayLocalISO()
   const { data, isLoading } = useQuery({
     queryKey: ['my-homework'],
     queryFn: () => homeworkApi.list().then(r => r.data),
   })
+  const items = [...(data ?? [])].sort((a: any, b: any) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'))
 
   return (
     <div className="space-y-5 max-w-3xl">
-      <PageHeader title="My Homework" description="Homework and classwork assigned to you" icon={BookOpen} />
+      <PageHeader title="My Homework" description="Homework and classwork for your classes" icon={BookOpen} />
 
       {isLoading ? (
-        // Same grid and card height as the real list below.
         <div className="grid gap-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-[108px] w-full rounded-2xl" />
           ))}
         </div>
-      ) : (data ?? []).length === 0 ? (
+      ) : items.length === 0 ? (
         <div className="bg-card rounded-2xl border border-border">
           <EmptyState
             icon={BookOpen}
@@ -80,122 +99,69 @@ function MyHomeworkView() {
           />
         </div>
       ) : (
-        <div className="grid gap-3">
-          {(data ?? []).map((hw: any) => (
-            <div key={hw.id} className="bg-card rounded-2xl border border-border p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase',
-                      hw.type === 'homework' ? 'bg-primary/10 text-primary' : 'bg-success/10 text-success')}>
-                      {hw.type}
-                    </span>
-                    <span className="text-xs text-muted-foreground">{hw.subject_name}</span>
-                  </div>
-                  <h3 className="font-semibold text-foreground">{hw.title}</h3>
-                  {hw.description && <p className="text-sm text-muted-foreground mt-1">{hw.description}</p>}
+        <div className="space-y-6">
+          {HW_GROUPS.map(group => {
+            const groupItems = items.filter((hw: any) => homeworkGroupOf(hw.due_date, today) === group.key)
+            if (!groupItems.length) return null
+            return (
+              <section key={group.key} className="space-y-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.heading}</h2>
+                <div className="grid gap-3">
+                  {groupItems.map((hw: any) => (
+                    <div key={hw.id} className={cn('bg-card rounded-2xl border border-border p-5', group.key === 'overdue' && 'border-destructive/40')}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase',
+                              hw.type === 'homework' ? 'bg-primary/10 text-primary' : 'bg-success/10 text-success')}>
+                              {hw.type}
+                            </span>
+                            <span className="text-xs text-muted-foreground">{hw.subject_name}</span>
+                          </div>
+                          <h3 className="font-semibold text-foreground">{hw.title}</h3>
+                          {hw.description && <p className="text-sm text-muted-foreground mt-1">{hw.description}</p>}
+                          {hw.attachment_url && (
+                            <a href={hw.attachment_url} target="_blank" rel="noreferrer"
+                              className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
+                              <Upload className="w-3.5 h-3.5" /> Attachment
+                            </a>
+                          )}
+                        </div>
+                        {hw.due_date && (
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-xs text-muted-foreground">Due</p>
+                            <p className="text-sm font-medium text-foreground">{formatDate(hw.due_date)}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                {hw.due_date && (
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-xs text-muted-foreground">Due</p>
-                    <p className="text-sm font-medium text-foreground">{formatDate(hw.due_date)}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
+              </section>
+            )
+          })}
         </div>
       )}
     </div>
   )
 }
 
-// ── STAFF VIEW ─────────────────────────────────────────────────
-function StaffHomeworkView({ canCreate, canSeeSyllabus, canPlanSyllabus, canLogSyllabus }: {
-  canCreate: boolean; canSeeSyllabus: boolean; canPlanSyllabus: boolean; canLogSyllabus: boolean
-}) {
-  const [tab, setTab] = useState<Tab>('homework')
-  const [selectedClass, setSelectedClass] = useState('')
-  const [selectedSection, setSelectedSection] = useState('')
-
-  // syllabus.plan (setting due-date targets) is the one permission that
-  // stays exclusive to School Admin/Principal/Vice Principal — that's
-  // the actual "senior management" signal. homework.create is NOT a
-  // safe signal for this anymore: Teacher/Class Teacher now have it too
-  // (they can post homework for their own classes), so using it here
-  // would wrongly treat every teacher as senior management and show
-  // them the unrestricted school-wide view instead of just their own
-  // timetabled classes.
-  const isSeniorManagement = canPlanSyllabus
-
-  const { data: allClasses } = useQuery({
-    queryKey: ['classes'],
-    queryFn: () => admissionApi.classes().then(r => r.data),
-    enabled: isSeniorManagement,
-  })
-
-  const { data: myClasses } = useQuery({
-    queryKey: ['my-classes'],
-    queryFn: () => academicsApi.myClasses().then(r => r.data),
-    enabled: !isSeniorManagement,
-  })
-
-  // Normalize both sources into the same { id, name, sections: [{id,name}] }
-  // shape the picker below already expects.
-  const classesData = useMemo(() => {
-    if (isSeniorManagement) return allClasses ?? []
-    const byClass = new Map<string, any>()
-    for (const row of myClasses ?? []) {
-      if (!byClass.has(row.class_id)) byClass.set(row.class_id, { id: row.class_id, name: row.class_name, sections: [] })
-      if (row.section_id) byClass.get(row.class_id).sections.push({ id: row.section_id, name: row.section_name })
-    }
-    return Array.from(byClass.values())
-  }, [isSeniorManagement, allClasses, myClasses])
-
-  const selectedClassObj = classesData.find((c: any) => c.id === selectedClass)
-  const sections = selectedClassObj?.sections ?? []
-
-  // Subjects the CURRENT user is actually timetabled for in the selected
-  // class+section — undefined (no restriction) for senior management,
-  // who can post/plan for any subject.
-  const myAllowedSubjects = isSeniorManagement ? undefined : Array.from(new Set<string>(
-    (myClasses ?? [])
-      .filter((c: any) => c.class_id === selectedClass && (c.section_id ?? '') === (selectedSection ?? ''))
-      .map((c: any) => c.subject_name as string)
-  ))
-
-  const TABS: { id: Tab; label: string; icon: any; show: boolean }[] = [
-    { id: 'homework', label: 'Homework & Classwork', icon: BookOpen, show: true },
-    { id: 'syllabus', label: 'Syllabus Progress', icon: ClipboardList, show: canSeeSyllabus },
-  ]
+// ── ASSIGN — class/section picker + the homework/classwork calendar ────
+function AssignHomeworkView({ canCreate, isSeniorManagement }: { canCreate: boolean; isSeniorManagement: boolean }) {
+  const { selectedClass, setSelectedClass, selectedSection, setSelectedSection, classesData, sections, myAllowedSubjects } = useClassPicker(isSeniorManagement)
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Homework"
-        description={isSeniorManagement ? 'Assign homework/classwork and track syllabus progress school-wide' : 'Your classes, homework, and syllabus progress'}
+        title="Assign Homework"
+        description={isSeniorManagement ? 'Assign homework and classwork school-wide' : 'Assign homework and classwork for your classes'}
         icon={BookOpen}
       />
-
-      {canSeeSyllabus && (
-        <SyllabusOverview scope={isSeniorManagement ? 'all' : (myClasses ?? [])} />
-      )}
-
-      <div className="flex items-center gap-1 bg-muted p-1 rounded-lg w-full overflow-x-auto sm:w-fit">
-        {TABS.filter(t => t.show).map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} aria-pressed={tab === t.id}
-            className={cn('flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold transition-all whitespace-nowrap',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-              tab === t.id ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground')}>
-            <t.icon className="w-3.5 h-3.5" /> {t.label}
-          </button>
-        ))}
-      </div>
 
       <div className="bg-card rounded-2xl border border-border p-5 flex flex-wrap items-center gap-x-6 gap-y-3">
         <div className="flex items-center gap-2">
           <Label className="shrink-0">Class</Label>
-          <Select value={selectedClass || undefined} onValueChange={v => { setSelectedClass(v); setSelectedSection('') }}>
+          <Select value={selectedClass || undefined} onValueChange={setSelectedClass}>
             <SelectTrigger className="h-9 min-w-[160px]"><SelectValue placeholder="Select class..." /></SelectTrigger>
             <SelectContent>
               {classesData.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -228,169 +194,24 @@ function StaffHomeworkView({ canCreate, canSeeSyllabus, canPlanSyllabus, canLogS
             <EmptyState
               icon={BookOpen}
               title="Select a class to get started"
-              description="Pick a class above to see its homework calendar and syllabus progress."
+              description="Pick a class above to see its homework calendar."
             />
           )}
         </div>
-      ) : tab === 'homework' ? (
-        <HomeworkTab classId={selectedClass} sectionId={selectedSection} canCreate={canCreate} allowedSubjects={myAllowedSubjects} />
       ) : (
-        <SyllabusTab classId={selectedClass} sectionId={selectedSection} canPlan={canPlanSyllabus} canLog={canLogSyllabus} allowedSubjects={myAllowedSubjects} />
+        <HomeworkTab classId={selectedClass} sectionId={selectedSection} canCreate={canCreate} allowedSubjects={myAllowedSubjects} />
       )}
     </div>
   )
 }
 
-// ── SYLLABUS OVERVIEW — always-visible progress bars, scoped by role ──
-// School Admin/Principal/VP: every class+section+subject in the school.
-// Teacher/Class Teacher: only the exact class+section+SUBJECT combos
-// they're scheduled to teach (per the timetable) — a Maths teacher for
-// Class 1-A must not see Class 1-A's English progress just because they
-// share a section. The stats call is per class+section (merging "whole
-// class" + "this section" due dates, as the endpoint already does); the
-// subject filter is applied after, client-side, against their timetable.
-function SyllabusOverview({ scope }: {
-  scope: 'all' | { class_id: string; class_name: string; section_id: string | null; section_name: string | null; subject_name: string }[]
-}) {
-  const allStats = useQuery({
-    queryKey: ['syllabus-stats-all'],
-    queryFn: () => syllabusApi.stats().then(r => r.data),
-    enabled: scope === 'all',
-  })
-
-  const uniquePairs = useMemo(() => {
-    if (scope === 'all') return []
-    const byKey = new Map<string, { class_id: string; section_id: string | null }>()
-    for (const c of scope) byKey.set(`${c.class_id}::${c.section_id ?? 'none'}`, c)
-    return Array.from(byKey.values())
-  }, [scope])
-
-  const allowedSubjects = useMemo(() => {
-    const map = new Map<string, Set<string>>()
-    if (scope === 'all') return map
-    for (const c of scope) {
-      const key = `${c.class_id}::${c.section_id ?? 'none'}`
-      if (!map.has(key)) map.set(key, new Set())
-      map.get(key)!.add(c.subject_name)
-    }
-    return map
-  }, [scope])
-
-  const myStats = useQueries({
-    queries: uniquePairs.map(c => ({
-      queryKey: ['syllabus-stats', c.class_id, c.section_id],
-      queryFn: () => syllabusApi.stats({ class_id: c.class_id, section_id: c.section_id ?? undefined }).then(r => r.data),
-    })),
-  })
-
-  const cards = scope === 'all'
-    ? (allStats.data ?? [])
-    : myStats.flatMap(q => q.data ?? []).filter((s: any) => {
-        const key = `${s.class_id}::${s.section_id ?? 'none'}`
-        return allowedSubjects.get(key)?.has(s.subject_name)
-      })
-
-  const [selected, setSelected] = useState<any | null>(null)
-
-  if (scope !== 'all' && scope.length === 0) return null
-  if (cards.length === 0) return null
-
-  return (
-    <div className="bg-card rounded-2xl border border-border p-5">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-4">
-        {scope === 'all' ? 'School-wide syllabus progress' : 'Your classes'}
-      </h3>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {cards.map((s: any) => (
-          <button
-            key={`${s.class_id}-${s.section_id ?? 'all'}-${s.subject_name}`}
-            onClick={() => setSelected(s)}
-            className="rounded-lg p-1 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          >
-            <SyllabusMeter
-              label={`${s.class_name}${s.section_name ? ` · ${s.section_name}` : ''} · ${s.subject_name}`}
-              percentComplete={s.percent_complete}
-              percentExpected={s.percent_expected}
-              completed={s.completed}
-              total={s.total}
-            />
-          </button>
-        ))}
-      </div>
-
-      {selected && <SyllabusChapterModal card={selected} onClose={() => setSelected(null)} />}
-    </div>
-  )
-}
-
-const CHAPTER_STATUS_ICON: Record<string, any> = { completed: CheckCircle2, in_progress: Clock, pending: Circle }
-const CHAPTER_STATUS_COLOR: Record<string, string> = { completed: 'text-success', in_progress: 'text-warning', pending: 'text-muted-foreground/50' }
-
-// Chapter-by-chapter drill-down behind a syllabus progress card — same
-// endpoint the "Syllabus Progress" tab below already uses for the
-// selected-class view, just parameterized by whichever card was
-// clicked instead of the page's own class/section picker.
-function SyllabusChapterModal({ card, onClose }: { card: any; onClose: () => void }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['syllabus-chapter-detail', card.class_id, card.section_id, card.subject_name],
-    queryFn: () => syllabusApi.list({ class_id: card.class_id, section_id: card.section_id ?? undefined, subject_name: card.subject_name }).then(r => r.data),
-  })
-  const chapters = data ?? []
-  const today = todayKey
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>{card.class_name}{card.section_name ? ` · ${card.section_name}` : ''} · {card.subject_name}</DialogTitle>
-          <DialogDescription>{card.completed} of {card.total} chapters covered</DialogDescription>
-        </DialogHeader>
-
-        {isLoading ? (
-          <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-11 w-full rounded-lg" />)}</div>
-        ) : chapters.length === 0 ? (
-          <EmptyState icon={BookOpen} title="No chapters planned yet" className="py-8" />
-        ) : (
-          <div className="max-h-[360px] space-y-1 overflow-y-auto pr-1">
-            {chapters.map((c: any) => {
-              const Icon = CHAPTER_STATUS_ICON[c.status] ?? Circle
-              const overdue = c.status !== 'completed' && c.due_date && c.due_date < today
-              return (
-                <div key={c.id} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <Icon className={cn('h-4 w-4 shrink-0', CHAPTER_STATUS_COLOR[c.status])} />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-foreground">
-                        {c.chapter_number ? `Ch ${c.chapter_number}. ` : ''}{c.chapter_name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {c.status === 'completed' && c.actual_completion_date
-                          ? `Completed ${formatDate(c.actual_completion_date)}`
-                          : c.due_date ? `Due ${formatDate(c.due_date)}` : 'No due date'}
-                      </p>
-                    </div>
-                  </div>
-                  {overdue && <Badge variant="destructive" className="shrink-0">Overdue</Badge>}
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Close</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ── HOMEWORK & CLASSWORK TAB — calendar view ────────────────────
+// ── HOMEWORK & CLASSWORK CALENDAR ────────────────────────────────
 function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
   classId: string; sectionId: string; canCreate: boolean; allowedSubjects?: string[]
 }) {
   const qc = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)
+  const [editingHomework, setEditingHomework] = useState<any>(null)
   const [month, setMonth] = useState(() => new Date())
   const [selectedDate, setSelectedDate] = useState<string>(todayKey)
 
@@ -398,8 +219,8 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
     queryKey: ['homework', classId, sectionId],
     queryFn: () => homeworkApi.list({ class_id: classId, section_id: sectionId || undefined }).then(r => r.data),
   })
-  // Same boundary as Syllabus: a teacher only sees/manages homework for
-  // subjects they're actually scheduled to teach in this class+section.
+  // A teacher only sees/manages homework for subjects they're actually
+  // scheduled to teach in this class+section.
   const data = allowedSubjects ? (rawData ?? []).filter((hw: any) => allowedSubjects.includes(hw.subject_name)) : rawData
 
   const deleteMutation = useMutation({
@@ -450,7 +271,6 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
         </div>
 
         {isLoading ? (
-          // Matches the assignment cards that land in this rail.
           <div className="space-y-3">
             {Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className="h-[76px] w-full rounded-xl" />
@@ -485,10 +305,16 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
                     {hw.description && <p className="text-xs text-muted-foreground mt-0.5">{hw.description}</p>}
                   </div>
                   {canCreate && (
-                    <button onClick={() => deleteMutation.mutate(hw.id)} aria-label={`Delete ${hw.title}`}
-                      className="-mr-1.5 -mt-1.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="-mr-1.5 -mt-1.5 flex flex-shrink-0 items-center">
+                      <button onClick={() => setEditingHomework(hw)} aria-label={`Edit ${hw.title}`}
+                        className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => deleteMutation.mutate(hw.id)} aria-label={`Delete ${hw.title}`}
+                        className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -501,589 +327,10 @@ function HomeworkTab({ classId, sectionId, canCreate, allowedSubjects }: {
         <AddHomeworkModal classId={classId} sectionId={sectionId} initialDueDate={selectedDate} allowedSubjects={allowedSubjects}
           onClose={() => { setShowAdd(false); qc.invalidateQueries({ queryKey: ['homework'] }) }} />
       )}
-    </div>
-  )
-}
-
-function AddHomeworkModal({ classId, sectionId, initialDueDate, allowedSubjects, onClose }: {
-  classId: string; sectionId: string; initialDueDate?: string; allowedSubjects?: string[]; onClose: () => void
-}) {
-  const [type, setType] = useState<'homework' | 'classwork'>('homework')
-  const [assignmentType, setAssignmentType] = useState<'class' | 'individual'>('class')
-  const [subjectName, setSubjectName] = useState(allowedSubjects?.length === 1 ? allowedSubjects[0] : '')
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [dueDate, setDueDate] = useState(initialDueDate ?? '')
-  const [studentIds, setStudentIds] = useState<string[]>([])
-  const [loading, setLoading] = useState(false)
-
-  const { data: students } = useQuery({
-    queryKey: ['attendance-class-students', classId, sectionId],
-    queryFn: () => api.get('/students/attendance/class', { params: { class_id: classId, section_id: sectionId || undefined, date: new Date().toISOString().slice(0, 10) } }).then(r => r.data.data.students),
-    enabled: assignmentType === 'individual',
-  })
-
-  // Senior management picks from the school's full subject list for this
-  // class; a restricted teacher's options (allowedSubjects) are always a
-  // subset of the same list, sourced from their timetable.
-  const { data: classSubjects } = useQuery({
-    queryKey: ['subjects', classId],
-    queryFn: () => classesApi.subjects.list(classId).then(r => r.data),
-    enabled: !allowedSubjects,
-  })
-  const subjectOptions = allowedSubjects ?? (classSubjects ?? []).map((s: any) => s.name)
-
-  const handleSave = async () => {
-    if (!subjectName.trim() || !title.trim()) return toast.error('Subject and title are required')
-    if (assignmentType === 'individual' && studentIds.length === 0) return toast.error('Select at least one student')
-    setLoading(true)
-    try {
-      await homeworkApi.create({
-        class_id: classId, section_id: sectionId || undefined, subject_name: subjectName.trim(),
-        type, assignment_type: assignmentType, title: title.trim(), description: description.trim() || undefined,
-        due_date: dueDate || undefined, student_ids: assignmentType === 'individual' ? studentIds : undefined,
-      })
-      toast.success('Assigned')
-      onClose()
-    } catch (e: any) {
-      toast.error(e?.response?.data?.error ?? 'Failed to assign')
-    } finally { setLoading(false) }
-  }
-
-  return (
-    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Assign Homework / Classwork</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Type</Label>
-              <Select value={type} onValueChange={v => setType(v as any)}>
-                <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="homework">Homework</SelectItem>
-                  <SelectItem value="classwork">Classwork</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Assign to</Label>
-              <Select value={assignmentType} onValueChange={v => setAssignmentType(v as any)}>
-                <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="class">Whole class</SelectItem>
-                  <SelectItem value="individual">Specific students</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {assignmentType === 'individual' && (
-            <div className="space-y-1.5">
-              <Label>Students</Label>
-              <div className="border border-border rounded-xl p-2 max-h-36 overflow-y-auto space-y-1">
-                {(students ?? []).map((s: any) => (
-                  <label key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-muted/50 text-sm text-foreground cursor-pointer">
-                    <input type="checkbox" checked={studentIds.includes(s.id)}
-                      onChange={e => setStudentIds(ids => e.target.checked ? [...ids, s.id] : ids.filter(id => id !== s.id))} />
-                    {s.first_name} {s.last_name} {s.roll_number && <span className="text-muted-foreground">· Roll {s.roll_number}</span>}
-                  </label>
-                ))}
-                {(students ?? []).length === 0 && <p className="text-xs text-muted-foreground px-2 py-1.5">No students found for this class/section</p>}
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <Label>Subject *</Label>
-            <Select value={subjectName || undefined} onValueChange={setSubjectName}>
-              <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Select subject..." /></SelectTrigger>
-              <SelectContent>
-                {subjectOptions.map((s: string) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {subjectOptions.length === 0 && (
-              <p className="text-xs text-warning mt-1.5">
-                {allowedSubjects ? "You're not timetabled for any subject in this class/section." : 'No subjects set up for this class yet — add some in Settings → Classes & Sections.'}
-              </p>
-            )}
-          </div>
-          <div className="space-y-1.5">
-            <Label>Title *</Label>
-            <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Chapter 4 exercises 1-10" />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Description</Label>
-            <Textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details / instructions" />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Due Date</Label>
-            <Input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={loading}>
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Assign
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ── SYLLABUS PROGRESS TAB ──────────────────────────────────────
-// "Due" = the planned date senior management set for a chapter.
-// "Covered" = derived from a teacher's daily progress log against that
-// chapter — logging a chapter as 'completed' is what actually flips its
-// status; there's no separate one-click toggle anymore.
-function SyllabusTab({ classId, sectionId, canPlan, canLog, allowedSubjects }: {
-  classId: string; sectionId: string; canPlan: boolean; canLog: boolean; allowedSubjects?: string[]
-}) {
-  const qc = useQueryClient()
-  const [subjectFilter, setSubjectFilter] = useState('')
-  const [showAdd, setShowAdd] = useState(false)
-  const [showLog, setShowLog] = useState(false)
-  const [logChapter, setLogChapter] = useState<any>(null)
-  const [month, setMonth] = useState(() => new Date())
-  const [selectedDate, setSelectedDate] = useState<string>(todayKey)
-
-  const invalidateAll = () => {
-    qc.invalidateQueries({ queryKey: ['syllabus'] })
-    qc.invalidateQueries({ queryKey: ['syllabus-stats'] })
-    qc.invalidateQueries({ queryKey: ['syllabus-stats-all'] })
-    qc.invalidateQueries({ queryKey: ['progress-notes'] })
-  }
-
-  const { data: rawChapters, isLoading } = useQuery({
-    queryKey: ['syllabus', classId, sectionId, subjectFilter],
-    queryFn: () => syllabusApi.list({ class_id: classId, section_id: sectionId || undefined, subject_name: subjectFilter || undefined }).then(r => r.data),
-  })
-  // A teacher only ever sees due dates / progress for subjects they're
-  // actually scheduled to teach in this class+section — not the whole
-  // class's syllabus just because they share a room with it.
-  const chapters = allowedSubjects ? (rawChapters ?? []).filter((c: any) => allowedSubjects.includes(c.subject_name)) : rawChapters
-
-  const { data: rawLogs } = useQuery({
-    queryKey: ['progress-notes', classId],
-    queryFn: () => syllabusApi.notes.list({ class_id: classId }).then(r => r.data),
-  })
-  const logs = allowedSubjects ? (rawLogs ?? []).filter((l: any) => allowedSubjects.includes(l.subject_name)) : rawLogs
-
-  const deleteChapterMutation = useMutation({
-    mutationFn: (id: string) => syllabusApi.delete(id),
-    onSuccess: () => { invalidateAll(); toast.success('Removed') },
-    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
-  })
-
-  const deleteLogMutation = useMutation({
-    mutationFn: (id: string) => syllabusApi.notes.delete(id),
-    onSuccess: () => { invalidateAll(); toast.success('Log entry removed') },
-  })
-
-  // A chapter appears on the calendar on its due date (so you can see
-  // pace ahead of time). Log entries appear on the day they were logged,
-  // separately — that's the actual daily activity.
-  const byDate = useMemo(() => {
-    const map: Record<string, any[]> = {}
-    for (const ch of chapters ?? []) {
-      if (!ch.planned_date) continue
-      if (!map[ch.planned_date]) map[ch.planned_date] = []
-      map[ch.planned_date].push(ch)
-    }
-    return map
-  }, [chapters])
-
-  const logsByDate = useMemo(() => {
-    const map: Record<string, any[]> = {}
-    for (const log of logs ?? []) {
-      if (!map[log.note_date]) map[log.note_date] = []
-      map[log.note_date].push(log)
-    }
-    return map
-  }, [logs])
-
-  const eventsByDate = useMemo(() => {
-    const map: Record<string, CalendarEvent[]> = {}
-    for (const [key, items] of Object.entries(byDate)) {
-      map[key] = items.map((ch: any) => {
-        const behind = ch.status !== 'completed' && ch.planned_date < todayKey
-        const color = ch.status === 'completed' ? 'bg-success/15 text-success'
-          : behind ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'
-        return { id: `due-${ch.id}`, label: ch.chapter_name, color }
-      })
-    }
-    for (const [key, items] of Object.entries(logsByDate)) {
-      if (!map[key]) map[key] = []
-      map[key].push(...items.map((log: any) => ({
-        id: `log-${log.id}`,
-        label: log.syllabus_chapters?.chapter_name ?? log.note.slice(0, 24),
-        color: 'bg-primary/15 text-primary',
-      })))
-    }
-    return map
-  }, [byDate, logsByDate])
-
-  const dueToday = byDate[selectedDate] ?? []
-  const loggedToday = logsByDate[selectedDate] ?? []
-
-  const openLogModal = (chapter: any = null) => { setLogChapter(chapter); setShowLog(true) }
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <Input value={subjectFilter} onChange={e => setSubjectFilter(e.target.value)} placeholder="Filter by subject..." className="max-w-[240px]" />
-        <div className="flex items-center gap-2">
-          {canPlan && (
-            <Button variant="outline" onClick={() => setShowAdd(true)}>
-              <Plus className="w-4 h-4" /> Set Chapter Due Dates
-            </Button>
-          )}
-          {canLog && (
-            <Button onClick={() => openLogModal(null)}>
-              <NotebookPen className="w-4 h-4" /> Log Today's Progress
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 items-start lg:grid-cols-[1fr_320px]">
-        {isLoading ? (
-          // Stands in for the month calendar so the two-column layout holds.
-          <Skeleton className="h-[420px] w-full rounded-2xl sm:h-[540px]" />
-        ) : (
-          <MonthCalendar month={month} onMonthChange={setMonth} selectedDate={selectedDate} onSelectDate={setSelectedDate} eventsByDate={eventsByDate} />
-        )}
-
-        <div className="bg-card rounded-2xl border border-border p-5 space-y-5">
-          <div>
-            <p className="text-xs text-muted-foreground flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" /> {selectedDate === todayKey ? 'Today' : formatDate(selectedDate)}</p>
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Due this day</h3>
-            {dueToday.length === 0 ? (
-              <p className="text-xs text-muted-foreground">Nothing due</p>
-            ) : (
-              <div className="space-y-2">
-                {dueToday.map((ch: any) => {
-                  const behind = ch.status !== 'completed' && ch.planned_date < todayKey
-                  return (
-                    <div key={ch.id} className="border border-border rounded-xl p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-start gap-2 min-w-0">
-                          {ch.status === 'completed' ? (
-                            <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0 mt-0.5" />
-                          ) : (
-                            <Clock className={cn('w-4 h-4 flex-shrink-0 mt-0.5', behind ? 'text-destructive' : 'text-warning')} />
-                          )}
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-foreground truncate">
-                              {ch.chapter_number ? `${ch.chapter_number}. ` : ''}{ch.chapter_name}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {ch.subject_name} · {ch.status === 'completed' ? 'Covered' : behind ? 'Overdue' : 'Due'}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {canLog && ch.status !== 'completed' && (
-                            <button onClick={() => openLogModal(ch)}
-                              className="-my-1.5 flex h-9 items-center rounded-md px-1.5 text-[11px] font-semibold text-primary transition-colors hover:bg-accent hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                              Log progress
-                            </button>
-                          )}
-                          {canPlan && (
-                            <button onClick={() => deleteChapterMutation.mutate(ch.id)} aria-label={`Remove chapter ${ch.chapter_name}`}
-                              className="-mr-1.5 -my-1.5 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Logged this day</h3>
-            {loggedToday.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No progress logged</p>
-            ) : (
-              <div className="space-y-2">
-                {loggedToday.map((log: any) => (
-                  <div key={log.id} className="border border-border rounded-xl p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                          {log.progress_status && (
-                            <span className={cn('px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase',
-                              log.progress_status === 'completed' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning')}>
-                              {log.progress_status.replace('_', ' ')}
-                            </span>
-                          )}
-                          <span className="text-[10px] text-muted-foreground truncate">{log.subject_name}</span>
-                        </div>
-                        {log.syllabus_chapters?.chapter_name && (
-                          <p className="text-sm font-medium text-foreground truncate">{log.syllabus_chapters.chapter_name}</p>
-                        )}
-                        {log.note && <p className="text-xs text-muted-foreground mt-0.5">{log.note}</p>}
-                        <p className="text-[10px] text-muted-foreground mt-1">{log.users?.full_name}</p>
-                      </div>
-                      {canLog && (
-                        <button onClick={() => deleteLogMutation.mutate(log.id)} aria-label="Remove progress log entry"
-                          className="-mr-1.5 -mt-1.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {showAdd && (
-        <AddChaptersModal classId={classId} sectionId={sectionId} initialDate={selectedDate} onClose={() => { setShowAdd(false); invalidateAll() }} />
-      )}
-
-      {showLog && (
-        <LogProgressModal
-          classId={classId} sectionId={sectionId} chapters={chapters ?? []} initialChapter={logChapter} initialDate={selectedDate}
-          onClose={() => { setShowLog(false); setLogChapter(null); invalidateAll() }}
-        />
+      {editingHomework && (
+        <AddHomeworkModal classId={classId} sectionId={sectionId} editing={editingHomework}
+          onClose={() => { setEditingHomework(null); qc.invalidateQueries({ queryKey: ['homework'] }) }} />
       )}
     </div>
-  )
-}
-
-function LogProgressModal({ classId, sectionId, chapters, initialChapter, initialDate, onClose }: {
-  classId: string; sectionId: string; chapters: any[]; initialChapter: any; initialDate?: string; onClose: () => void
-}) {
-  const subjects = useMemo(() => Array.from(new Set(chapters.map(c => c.subject_name))), [chapters])
-  const [subjectName, setSubjectName] = useState(initialChapter?.subject_name ?? subjects[0] ?? '')
-  const [chapterId, setChapterId] = useState(initialChapter?.id ?? '')
-  const [status, setStatus] = useState<'started' | 'in_progress' | 'completed'>('in_progress')
-  const [note, setNote] = useState('')
-  const [logDate, setLogDate] = useState(initialDate ?? todayKey)
-  const [loading, setLoading] = useState(false)
-
-  const chaptersForSubject = chapters.filter(c => c.subject_name === subjectName)
-
-  const handleSave = async () => {
-    if (!subjectName) return toast.error('Pick a subject')
-    setLoading(true)
-    try {
-      await syllabusApi.notes.create({
-        class_id: classId, section_id: sectionId || undefined, subject_name: subjectName,
-        chapter_id: chapterId || undefined, progress_status: status, note_date: logDate, note: note.trim() || undefined,
-      })
-      toast.success('Progress logged')
-      onClose()
-    } catch (e: any) {
-      toast.error(e?.response?.data?.error ?? 'Failed to log progress')
-    } finally { setLoading(false) }
-  }
-
-  return (
-    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Log Today's Progress</DialogTitle>
-          <DialogDescription>What did you actually cover this period? This drives the covered-vs-left tracking.</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Subject *</Label>
-              <Select value={subjectName || undefined} onValueChange={v => { setSubjectName(v); setChapterId('') }}>
-                <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Select subject..." /></SelectTrigger>
-                <SelectContent>
-                  {subjects.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Date</Label>
-              <Input type="date" value={logDate} onChange={e => setLogDate(e.target.value)} />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Chapter</Label>
-            <Select value={chapterId || 'none'} onValueChange={v => setChapterId(v === 'none' ? '' : v)} disabled={!subjectName}>
-              <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No specific chapter (general note)</SelectItem>
-                {chaptersForSubject.map(c => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.chapter_number ? `${c.chapter_number}. ` : ''}{c.chapter_name}{c.status === 'completed' ? ' (already covered)' : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Status</Label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-              {(['started', 'in_progress', 'completed'] as const).map(s => (
-                <button key={s} onClick={() => setStatus(s)} aria-pressed={status === s}
-                  className={cn('h-9 rounded-lg text-xs font-semibold border transition-all',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                    status === s ? 'bg-primary border-primary text-primary-foreground' : 'border-input text-muted-foreground hover:bg-muted/50')}>
-                  {s === 'started' ? 'Started' : s === 'in_progress' ? 'In Progress' : 'Completed'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Notes (optional)</Label>
-            <Textarea rows={3} value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Covered pages 10-15, did examples on the board" />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={loading}>
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-const EXAM_TYPE_LABELS: Record<string, string> = {
-  unit_test: 'Unit Test', monthly: 'Monthly Test', half_yearly: 'Half Yearly', annual: 'Annual Exam',
-  pre_board: 'Pre-Board', practical: 'Practical', other: 'Exam',
-}
-
-type ChapterRow = { chapter_name: string; due_mode: 'exam' | 'custom'; exam_id: string; planned_date: string }
-
-function AddChaptersModal({ classId, sectionId, initialDate, onClose }: { classId: string; sectionId?: string; initialDate?: string; onClose: () => void }) {
-  const [subjectName, setSubjectName] = useState('')
-  const [applyToSection, setApplyToSection] = useState(!!sectionId)
-  const [rows, setRows] = useState<ChapterRow[]>([{ chapter_name: '', due_mode: 'custom', exam_id: '', planned_date: initialDate ?? '' }])
-  const [loading, setLoading] = useState(false)
-
-  // The chapter's due date should track the school's real exam
-  // calendar (Unit Test 1 -> Half Yearly -> ...) rather than a
-  // hand-typed date with no anchor — pick an exam here, or fall back to
-  // a custom date if there's no matching exam yet.
-  const { data: exams } = useQuery({
-    queryKey: ['exams-for-syllabus'],
-    queryFn: () => api.get('/exams', { params: { limit: 100 } }).then(r => r.data.data as any[]),
-  })
-  const sortedExams = useMemo(() => [...(exams ?? [])].sort((a, b) => (a.start_date ?? '').localeCompare(b.start_date ?? '')), [exams])
-
-  // Subject is picked from the school's master subject list (Settings ->
-  // Classes & Sections), not typed — a typo here ("Maths" vs
-  // "Mathematics") would silently break the match against what's on the
-  // teacher's timetable.
-  const { data: subjects } = useQuery({
-    queryKey: ['subjects', classId],
-    queryFn: () => classesApi.subjects.list(classId).then(r => r.data),
-  })
-
-  const handleSave = async () => {
-    const valid = rows.filter(r => r.chapter_name.trim())
-    if (!subjectName.trim()) return toast.error('Subject is required')
-    if (!valid.length) return toast.error('Add at least one chapter')
-    setLoading(true)
-    try {
-      await syllabusApi.createChapters({
-        class_id: classId, section_id: (applyToSection && sectionId) ? sectionId : undefined, subject_name: subjectName.trim(),
-        chapters: valid.map((r, i) => ({
-          chapter_number: i + 1, chapter_name: r.chapter_name.trim(),
-          exam_id: r.due_mode === 'exam' ? (r.exam_id || undefined) : undefined,
-          planned_date: r.due_mode === 'custom' ? (r.planned_date || undefined) : undefined,
-        })),
-      })
-      toast.success('Chapters added')
-      onClose()
-    } catch (e: any) {
-      toast.error(e?.response?.data?.error ?? 'Failed to add chapters')
-    } finally { setLoading(false) }
-  }
-
-  const updateRow = (i: number, patch: Partial<ChapterRow>) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r))
-
-  return (
-    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Set Chapter Due Dates</DialogTitle>
-          <DialogDescription>Tie each chapter to the exam it needs to be covered before, or set a custom date — teachers mark them covered as they go</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>Subject *</Label>
-            <Select value={subjectName || undefined} onValueChange={setSubjectName}>
-              <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Select subject..." /></SelectTrigger>
-              <SelectContent>
-                {(subjects ?? []).map((s: any) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {(subjects ?? []).length === 0 && (
-              <p className="text-xs text-warning mt-1.5">No subjects set up for this class yet — add some in Settings → Classes & Sections.</p>
-            )}
-          </div>
-          {sectionId && (
-            <label className="flex items-center gap-2 text-sm text-foreground bg-muted/50 rounded-xl px-4 py-3 cursor-pointer">
-              <input type="checkbox" checked={applyToSection} onChange={e => setApplyToSection(e.target.checked)} />
-              Only for this section — uncheck to apply to every section of the class
-            </label>
-          )}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Label className="flex-1">Chapter</Label>
-              <Label className="w-48">Due before</Label>
-            </div>
-            {rows.map((row, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Input className="flex-1" value={row.chapter_name} placeholder={`Chapter ${i + 1} name`}
-                  onChange={e => updateRow(i, { chapter_name: e.target.value })} />
-                <Select
-                  value={row.due_mode === 'custom' ? 'custom' : (row.exam_id || 'none')}
-                  onValueChange={v => v === 'custom' ? updateRow(i, { due_mode: 'custom', exam_id: '' }) : updateRow(i, { due_mode: 'exam', exam_id: v === 'none' ? '' : v })}>
-                  <SelectTrigger className="h-9 w-48"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No due date</SelectItem>
-                    {sortedExams.map(ex => (
-                      <SelectItem key={ex.id} value={ex.id}>
-                        {EXAM_TYPE_LABELS[ex.exam_type] ?? ex.exam_type} — {ex.name}{ex.start_date ? ` (${formatDate(ex.start_date)})` : ''}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value="custom">Custom date...</SelectItem>
-                  </SelectContent>
-                </Select>
-                {row.due_mode === 'custom' && (
-                  <Input type="date" className="w-40"
-                    value={row.planned_date} onChange={e => updateRow(i, { planned_date: e.target.value })} />
-                )}
-              </div>
-            ))}
-            <button onClick={() => setRows(rs => [...rs, { chapter_name: '', due_mode: 'custom', exam_id: '', planned_date: '' }])}
-              className="-ml-2 flex h-9 items-center gap-1 rounded-md px-2 text-xs font-semibold text-primary transition-colors hover:bg-accent hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-              <Plus className="w-3 h-3" /> Add another chapter
-            </button>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={loading}>
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />} Save Chapters
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }

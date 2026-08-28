@@ -150,6 +150,11 @@ export const feeApi = {
 export const homeworkApi = {
   list: (params?: { class_id?: string; section_id?: string; subject_name?: string }) =>
     api.get('/academics/homework', { params }).then(r => r.data),
+  submit: (id: string, data: { submission_text?: string; file_base64?: string; file_name?: string; mime_type?: string }) =>
+    api.post(`/academics/homework/${id}/submit`, data).then(r => r.data),
+  settings: {
+    get: () => api.get('/academics/homework-settings').then(r => r.data),
+  },
 }
 
 export const timetableApi = {

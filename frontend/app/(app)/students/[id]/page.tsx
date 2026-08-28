@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation'
 import { studentsApi, admissionApi, academicYearsApi, documentsApi } from '@/lib/api'
 import { formatDate, formatCurrency, cn, STATUS_COLORS } from '@/lib/utils'
 import { TransferCertificateCard } from '@/components/students/TransferCertificateCard'
-import { ArrowLeft, User, BookOpen, Phone, CreditCard, FileText, Calendar, Droplets, MapPin, Mail, Hash, Camera, Loader2, ArrowRightLeft, X, History, Users } from 'lucide-react'
+import { ArrowLeft, User, BookOpen, Phone, CreditCard, FileText, Calendar, Droplets, MapPin, Mail, Hash, Camera, Loader2, ArrowRightLeft, X, History, Users, KeyRound, Check, Copy } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/shared/PageHeader'
@@ -83,6 +83,7 @@ export default function StudentDetailPage() {
 
   const s = data
   const parent = s.parents?.[0]
+  const isSuspended = s.status === 'suspended'
   const initials = `${s.first_name?.[0] ?? ''}${s.last_name?.[0] ?? ''}`.toUpperCase()
   const subtitle = [
     s.classes?.name ? `${s.classes.name}${s.sections?.name ? ` · ${s.sections.name}` : ''}` : null,
@@ -113,12 +114,23 @@ export default function StudentDetailPage() {
               <Button asChild variant="outline" size="sm">
                 <a href={documentsApi.idCard(id)} target="_blank" rel="noreferrer">ID Card</a>
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)}>
+              <Button asChild variant="outline" size="sm">
+                <a href={documentsApi.studentProfile(id)} target="_blank" rel="noreferrer">Export</a>
+              </Button>
+              <Button variant="outline" size="sm" disabled={isSuspended}
+                title={isSuspended ? 'Suspended students cannot be transferred — reactivate first' : undefined}
+                onClick={() => setShowTransferModal(true)}>
                 <ArrowRightLeft className="h-3.5 w-3.5" /> Transfer
               </Button>
-              <Button asChild variant="outline" size="sm">
-                <Link href={`/students/${id}/edit`}>Edit profile</Link>
-              </Button>
+              {isSuspended ? (
+                <Button variant="outline" size="sm" disabled title="Suspended students cannot be edited — reactivate first">
+                  Edit profile
+                </Button>
+              ) : (
+                <Button asChild variant="outline" size="sm">
+                  <Link href={`/students/${id}/edit`}>Edit profile</Link>
+                </Button>
+              )}
             </>
           }
         />
@@ -218,6 +230,11 @@ export default function StudentDetailPage() {
         </div>
 
         <div className="space-y-5">
+          {/* Homework module plan.md Phase 0 (2026-08-27): the parent/
+              student portal has been unreachable for a real school with no
+              way to actually create a login — this is that missing step. */}
+          <PortalAccessCard student={s} studentId={id} />
+
           <Card title="Fee Summary" icon={CreditCard} id="fee-summary">
             <div className="space-y-3">
               <div className="flex items-center justify-between py-2 border-b border-border">
@@ -241,6 +258,7 @@ export default function StudentDetailPage() {
               <QuickAction href={`/students/${id}/attendance`} label="View Attendance" />
               <QuickAction href={`/students/${id}/performance`} label="View Performance" />
               <QuickAction href={documentsApi.idCard(id)} label="Print ID Card" external />
+              <QuickAction href={documentsApi.studentProfile(id)} label="Export Profile" external />
               <QuickAction href="#transfer-certificate" label="Transfer Certificate" />
             </div>
           </Card>
@@ -450,5 +468,160 @@ function Detail({ label, value }: { label: string; value: string }) {
       <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
       <p className="text-sm font-medium text-foreground">{value}</p>
     </div>
+  )
+}
+
+function PortalAccessCard({ student, studentId }: { student: any; studentId: string }) {
+  const [modalTarget, setModalTarget] = useState<'student' | 'parent' | null>(null)
+  const qc = useQueryClient()
+  const parent = student.parents?.[0]
+
+  return (
+    <Card title="Portal Access" icon={KeyRound}>
+      <div className="space-y-3">
+        <PortalRow
+          label="Student login"
+          hasLogin={!!student.user_id}
+          isActive={!!student.portal_user?.is_active}
+          onCreate={() => setModalTarget('student')}
+        />
+        <PortalRow
+          label="Parent login"
+          hasLogin={!!parent?.user_id}
+          isActive={!!parent?.portal_user?.is_active}
+          disabled={!parent}
+          disabledHint="Add a parent/guardian first"
+          onCreate={() => setModalTarget('parent')}
+        />
+      </div>
+      {modalTarget && (
+        <PortalLoginModal
+          studentId={studentId}
+          target={modalTarget}
+          defaultEmail={modalTarget === 'student' ? (student.email ?? '') : (parent?.father_email ?? parent?.mother_email ?? '')}
+          onClose={() => setModalTarget(null)}
+          onDone={() => {
+            setModalTarget(null)
+            qc.invalidateQueries({ queryKey: ['student', studentId] })
+          }}
+        />
+      )}
+    </Card>
+  )
+}
+
+function PortalRow({ label, hasLogin, isActive, disabled, disabledHint, onCreate }: {
+  label: string; hasLogin: boolean; isActive?: boolean; disabled?: boolean; disabledHint?: string; onCreate: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <div>
+        <p className="text-sm font-medium text-foreground">{label}</p>
+        {disabled && disabledHint && <p className="text-xs text-muted-foreground">{disabledHint}</p>}
+        {/* A login can exist but be frozen — set is_active:false when the
+            student was suspended (see setStudentPortalLoginsActive on
+            PATCH /students/:id), restored automatically on reactivation. */}
+        {hasLogin && !isActive && <p className="text-xs text-muted-foreground">Frozen while suspended</p>}
+      </div>
+      {hasLogin ? (
+        isActive ? <Badge variant="success">Active</Badge> : <Badge variant="destructive">Frozen</Badge>
+      ) : (
+        <Button size="sm" variant="outline" disabled={disabled} onClick={onCreate}>Create</Button>
+      )}
+    </div>
+  )
+}
+
+// Mirrors settings/team's InviteModal + generatePassword() pattern exactly
+// (admin picks/generates the password client-side, server just uses it) —
+// duplicated rather than shared, matching how that same small helper is
+// already duplicated once already between settings/team and hr/recruitment.
+function generatePassword() {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
+  let out = ''
+  for (let i = 0; i < 10; i++) out += chars[Math.floor(Math.random() * chars.length)]
+  return out
+}
+
+function CredentialsBox({ email, password }: { email: string; password: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(`Email: ${email}\nPassword: ${password}`)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  return (
+    <div className="rounded-xl border border-success/30 bg-success/5 p-4 space-y-2">
+      <p className="text-sm font-semibold text-success">Login created</p>
+      <div className="text-sm space-y-1 font-mono">
+        <p><span className="text-muted-foreground">Email:</span> {email}</p>
+        <p><span className="text-muted-foreground">Password:</span> {password}</p>
+      </div>
+      <Button size="sm" variant="outline" onClick={copy}>
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}
+      </Button>
+      <p className="mt-2 text-xs text-success/80">This password won&apos;t be shown again — make sure to share it now.</p>
+    </div>
+  )
+}
+
+function PortalLoginModal({ studentId, target, defaultEmail, onClose, onDone }: {
+  studentId: string; target: 'student' | 'parent'; defaultEmail: string; onClose: () => void; onDone: () => void
+}) {
+  const [email, setEmail] = useState(defaultEmail)
+  const [password, setPassword] = useState(generatePassword())
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<{ email: string; password: string } | null>(null)
+
+  const handleSubmit = async () => {
+    if (!email || password.length < 6) return toast.error('Email and a password of at least 6 characters are required')
+    setLoading(true)
+    try {
+      await studentsApi.createPortalLogin(studentId, { target, email, password })
+      setResult({ email, password })
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? 'Failed to create login')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) (result ? onDone() : onClose()) }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{target === 'student' ? 'Create student login' : 'Create parent login'}</DialogTitle>
+        </DialogHeader>
+        {result ? (
+          <CredentialsBox email={result.email} password={result.password} />
+        ) : (
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="portal-email">Email *</Label>
+              <Input id="portal-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@example.com" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="portal-pass">Password *</Label>
+              <div className="flex gap-2">
+                <Input id="portal-pass" className="font-mono" value={password} onChange={e => setPassword(e.target.value)} />
+                <Button variant="outline" className="whitespace-nowrap" onClick={() => setPassword(generatePassword())}>Regenerate</Button>
+              </div>
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          {result ? (
+            <Button className="w-full" onClick={onDone}>Done</Button>
+          ) : (
+            <>
+              <Button variant="ghost" onClick={onClose}>Cancel</Button>
+              <Button onClick={handleSubmit} disabled={loading}>
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />} Create login
+              </Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

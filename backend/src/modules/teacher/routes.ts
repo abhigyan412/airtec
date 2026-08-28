@@ -96,10 +96,14 @@ router.get('/dashboard', requireRole('teacher'), asyncHandler(async (req: AuthRe
   )
 
   // ── Task metrics ─────────────────────────────────────────────────
-  // homework_students only exists where assignment_type = 'individual'
-  // rows were fanned out to students — bulk 'class' homework has no
-  // per-student rows to count, so these counts reflect individually
-  // tracked submissions only.
+  // homework_students used to only exist where assignment_type =
+  // 'individual' rows were fanned out — bulk 'class' homework had no
+  // per-student rows, so these counts silently excluded most real
+  // assignments. Fixed at the source in academics/routes.ts's POST
+  // /homework (plan.md Phase 1): every homework item now gets rows
+  // fanned out regardless of type, so this query (already unfiltered by
+  // assignment_type) picks up both automatically — nothing below needed
+  // to change to fix that, only this stale comment describing it.
   let homework_assigned = 0
   // Grouped by (title, due_date) rather than one entry per homework row —
   // the same assignment given separately to two of this teacher's
@@ -422,17 +426,26 @@ router.get('/dashboard', requireRole('teacher'), asyncHandler(async (req: AuthRe
 
 // ═══════════════════════════════════════════════════════════════
 // GET /teacher/homework-overview — every homework/classwork item THIS
-// teacher assigned, grouped by class and section, behind the "Homework
-// Assigned" metric card. Scoped to created_by=req.user.id, same as the
-// dashboard's own homework_assigned count — a subject-only teacher
-// never sees another teacher's assignments here either.
+// caller assigned, grouped by class and section, behind the "Homework
+// Assigned" metric card and the admin app's "Grading" tab. Scoped to
+// created_by=req.user.id, same as the dashboard's own homework_assigned
+// count — a subject-only teacher never sees another teacher's
+// assignments here either.
+//
+// Gated on homework.create, not requireRole('teacher') — this used to 403
+// for anyone whose base role wasn't literally 'teacher', which silently
+// broke Grading for a School Admin/Principal/VP who'd assigned homework
+// themselves (the frontend swallows the 403 as "0 groups", rendering the
+// same empty state as never having assigned anything at all). The
+// created_by scoping below is what actually keeps this personal, not the
+// role check — anyone who can create homework can see their own.
 //
 // 'class'-type homework has no per-student rows (see the comment on
 // homework_students throughout this file) — those items report
 // student_count from the roster instead of a submission breakdown,
 // which only exists for 'individual' assignments.
 // ═══════════════════════════════════════════════════════════════
-router.get('/homework-overview', requireRole('teacher'), asyncHandler(async (req: AuthRequest, res: Response) => {
+router.get('/homework-overview', requirePermissionV2('homework.create'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const teacherId = req.user!.id
   const school_id = req.user!.school_id
 
@@ -455,7 +468,12 @@ router.get('/homework-overview', requireRole('teacher'), asyncHandler(async (req
 
   const items = (homeworkRows ?? []).map((h: any) => {
     const statuses = (h.homework_students ?? []).map((hs: any) => hs.status)
-    const tracked = h.assignment_type === 'individual'
+    // plan.md Phase 1 (2026-08-27): class-wide homework now gets
+    // homework_students rows fanned out at creation too, not just
+    // individual — so "tracked" is just "does this item have rows",
+    // not "is it individually-targeted". Items created before that
+    // migration still fall back to the roster-count-only display below.
+    const tracked = statuses.length > 0
     return {
       id: h.id, title: h.title, description: h.description, subject_name: h.subject_name,
       type: h.type, assignment_type: h.assignment_type, assigned_date: h.assigned_date, due_date: h.due_date,

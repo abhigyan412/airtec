@@ -141,6 +141,10 @@ export const documentsApi = {
     const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
     return `${API_BASE}/documents/id-card/${studentId}?token=${token}`
   },
+  studentProfile: (studentId: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
+    return `${API_BASE}/documents/student-profile/${studentId}?token=${token}`
+  },
   reportCard: (examId: string, studentId: string) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('airtec_token') ?? '' : ''
     return `${API_BASE}/documents/report-card/${examId}/${studentId}?token=${token}`
@@ -192,6 +196,8 @@ export const studentsApi = {
     api.post(`/students/${id}/tc`, data).then(r => r.data),
   uploadPhoto: (id: string, data: any) =>
     api.post(`/students/${id}/photo`, data).then(r => r.data),
+  createPortalLogin: (id: string, data: { target: 'student' | 'parent'; email: string; password: string }) =>
+    api.post(`/students/${id}/portal-login`, data).then(r => r.data),
   getDocuments: (id: string) =>
     api.get(`/students/${id}/documents`).then(r => r.data),
   uploadDocument: (id: string, data: any) =>
@@ -972,7 +978,21 @@ export const homeworkApi = {
   list: (params?: { class_id?: string; section_id?: string; subject_name?: string }) =>
     api.get('/academics/homework', { params }).then(r => r.data),
   create: (data: any) => api.post('/academics/homework', data).then(r => r.data),
+  update: (id: string, data: any) => api.patch(`/academics/homework/${id}`, data).then(r => r.data),
   delete: (id: string) => api.delete(`/academics/homework/${id}`).then(r => r.data),
+  submit: (id: string, data: { submission_text?: string; file_base64?: string; file_name?: string; mime_type?: string }) =>
+    api.post(`/academics/homework/${id}/submit`, data).then(r => r.data),
+  submitForStudent: (id: string, studentId: string, data: { submission_text?: string; file_base64?: string; file_name?: string; mime_type?: string }) =>
+    api.post(`/academics/homework/${id}/students/${studentId}/submit`, data).then(r => r.data),
+  roster: (id: string) => api.get(`/academics/homework/${id}/students`).then(r => r.data),
+  remind: (id: string) => api.post(`/academics/homework/${id}/remind`).then(r => r.data),
+  grade: (id: string, studentId: string, data: { marks_obtained?: number | null; max_marks?: number | null; feedback?: string | null }) =>
+    api.patch(`/academics/homework/${id}/students/${studentId}/grade`, data).then(r => r.data),
+  settings: {
+    get: () => api.get('/academics/homework-settings').then(r => r.data),
+    update: (data: { homework_accept_late_submissions?: boolean; homework_late_grace_days?: number; homework_resubmission_allowed?: boolean }) =>
+      api.patch('/academics/homework-settings', data).then(r => r.data),
+  },
 }
 
 export const syllabusApi = {
@@ -981,6 +1001,7 @@ export const syllabusApi = {
   stats: (params?: { class_id?: string; section_id?: string }) =>
     api.get('/academics/syllabus/stats', { params }).then(r => r.data),
   createChapters: (data: any) => api.post('/academics/syllabus', data).then(r => r.data),
+  importChapters: (file: string) => api.post('/academics/syllabus/import-chapters', { file }).then(r => r.data),
   update: (id: string, data: any) => api.patch(`/academics/syllabus/${id}`, data).then(r => r.data),
   delete: (id: string) => api.delete(`/academics/syllabus/${id}`).then(r => r.data),
   notes: {

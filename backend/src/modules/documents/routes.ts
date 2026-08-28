@@ -4,6 +4,7 @@ import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticateFlexible, AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, NON_STAFF_ROLES, resolveOwnStudentId } from '../../shared/utils/helpers'
+import { getTeacherContext } from '../../shared/utils/teacherContext'
 
 const router = Router()
 
@@ -424,6 +425,58 @@ router.get('/report-card/:exam_id/:student_id', asyncHandler(async (req: AuthReq
   res.send(generateReportCard(rc, marks ?? []))
 }))
 
+// GET /student-profile/:student_id — a printable summary of everything
+// already shown on the student's profile page (personal info, academic
+// details, parent/guardian, fee summary), so a school can hand someone a
+// single document instead of them screenshotting the screen. Same access
+// rule as GET /students/:id itself (sis/routes.ts) — a parent/student can
+// only export their own child, a subject-only Teacher only a student in a
+// section they actually teach — deliberately duplicated here rather than
+// gated on student.view alone, since that permission is also held by the
+// Parent/Student RBAC roles and a flat permission check would let either
+// export any student by id, the exact hole GET /students/:id itself was
+// fixed for.
+router.get('/student-profile/:student_id', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { student_id } = req.params
+  const school_id = req.user!.school_id
+
+  if (NON_STAFF_ROLES.includes(req.user!.role)) {
+    const ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+    if (!ownStudentId || ownStudentId !== student_id) {
+      return res.status(403).send('<h2>You can only export your own student record</h2>')
+    }
+  } else {
+    const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+    if (!isSuperRole && !permissionCodes.has('student.view')) {
+      return res.status(403).send('<h2>Missing permission: student.view</h2>')
+    }
+  }
+
+  const { data: student } = await supabase
+    .from('students')
+    .select('*, classes(name, stream), sections(name), houses(name, color), academic_years(name), schools(name, city, phone, logo_url), parents(*)')
+    .eq('id', student_id).eq('school_id', school_id).single()
+  if (!student) return res.status(404).send('<h2>Student not found</h2>')
+
+  if (req.user!.role === 'teacher') {
+    const ctx = await getTeacherContext(req.user!.id, school_id)
+    if (!ctx.sectionIds.includes((student as any).section_id)) {
+      return res.status(403).send('<h2>You can only export students in a section you teach</h2>')
+    }
+  }
+
+  const [{ data: invoices }, { data: payments }] = await Promise.all([
+    supabase.from('fee_invoices').select('total_amount').eq('student_id', student_id),
+    supabase.from('fee_payments').select('amount_paid').eq('student_id', student_id),
+  ])
+  const total_billed = invoices?.reduce((s, i) => s + Number(i.total_amount), 0) ?? 0
+  const total_paid = payments?.reduce((s, p) => s + Number(p.amount_paid), 0) ?? 0
+  const total_due = total_billed - total_paid
+
+  res.setHeader('Content-Type', 'text/html')
+  res.send(studentProfilePage(student, { total_billed, total_paid, total_due }))
+}))
+
 router.get('/certificate-templates', requirePermissionV2('certificate.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase
     .from('certificate_templates')
@@ -481,6 +534,81 @@ router.post('/issue-certificate', requirePermissionV2('certificate.generate'),
 )
 
 // ── HTML GENERATORS ───────────────────────────────────────────
+
+function studentProfilePage(student: any, feeSummary: { total_billed: number; total_paid: number; total_due: number }): string {
+  const school = student.schools ?? {}
+  const parent = student.parents?.[0]
+  const fmt = (d: string | null) => d ? new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : '—'
+  const money = (n: number) => `₹${Number(n ?? 0).toLocaleString('en-IN')}`
+  const row = (label: string, value: string) =>
+    `<tr><td style="color:#6b7280;padding:6px 12px 6px 0;font-size:13px;white-space:nowrap;">${label}</td><td style="color:#111;padding:6px 0;font-size:13px;font-weight:500;">${value || '—'}</td></tr>`
+  const section = (title: string, rows: string) => `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.04em;color:#4F46E5;border-bottom:2px solid #e5e7eb;padding-bottom:6px;margin-bottom:10px;">${title}</div>
+      <table style="border-collapse:collapse;width:100%;">${rows}</table>
+    </div>`
+
+  const address = [student.permanent_address, student.city, student.state, student.pincode].filter(Boolean).join(', ') || '—'
+
+  const guardianRows = parent
+    ? [
+        parent.father_name ? row('Father', `${parent.father_name}${parent.father_phone ? ` · ${parent.father_phone}` : ''}${parent.father_email ? ` · ${parent.father_email}` : ''}`) : '',
+        parent.mother_name ? row('Mother', `${parent.mother_name}${parent.mother_phone ? ` · ${parent.mother_phone}` : ''}${parent.mother_email ? ` · ${parent.mother_email}` : ''}`) : '',
+      ].join('')
+    : ''
+
+  return `<!DOCTYPE html><html><head><title>${student.first_name} ${student.last_name} — Profile</title>
+  <style>@media print{.no-print{display:none}}body{font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:20px;color:#111;}
+  .container{max-width:720px;margin:0 auto;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.08);padding:32px;}
+  .header{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #4F46E5;padding-bottom:16px;margin-bottom:24px;}
+  </style></head><body>
+  <button class="no-print" onclick="window.print()" style="position:fixed;top:20px;right:20px;padding:10px 20px;background:#4F46E5;color:white;border:none;border-radius:8px;cursor:pointer;">Print / Save as PDF</button>
+  <div class="container">
+    <div class="header">
+      <div>
+        <div style="font-size:12px;color:#6b7280;">${school.name ?? 'School'}${school.city ? ` · ${school.city}` : ''}</div>
+        <div style="font-size:22px;font-weight:bold;margin-top:2px;">${student.first_name} ${student.last_name}</div>
+        <div style="font-size:13px;color:#6b7280;margin-top:2px;">
+          ${student.classes?.name ?? '—'}${student.sections?.name ? ` · ${student.sections.name}` : ''} · #${student.admission_number ?? '—'}
+          · <span style="text-transform:capitalize;">${student.status}</span>
+        </div>
+      </div>
+      ${student.houses ? `<div style="font-size:11px;font-weight:bold;color:#fff;background:${student.houses.color ?? '#4F46E5'};padding:4px 10px;border-radius:100px;">${student.houses.name}</div>` : ''}
+    </div>
+
+    ${section('Personal Information', [
+      row('Date of Birth', fmt(student.date_of_birth)),
+      row('Gender', student.gender ? student.gender.charAt(0).toUpperCase() + student.gender.slice(1) : '—'),
+      row('Blood Group', student.blood_group),
+      row('Aadhaar', student.aadhaar_number),
+      row('Email', student.email),
+      row('Phone', student.phone),
+      row('Address', address),
+    ].join(''))}
+
+    ${section('Academic Details', [
+      row('Class', student.classes?.name),
+      row('Section', student.sections?.name),
+      row('Roll Number', student.roll_number),
+      row('Stream', student.stream),
+      row('Academic Year', student.academic_years?.name),
+      row('Admission Date', fmt(student.admission_date)),
+    ].join(''))}
+
+    ${guardianRows ? section('Parent / Guardian', guardianRows) : ''}
+
+    ${section('Fee Summary', [
+      row('Total Billed', money(feeSummary.total_billed)),
+      row('Collected', money(feeSummary.total_paid)),
+      row('Due', money(feeSummary.total_due)),
+    ].join(''))}
+
+    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:11px;color:#9ca3af;">
+      Exported ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })} · AIRTEC School ERP
+    </div>
+  </div>
+  </body></html>`
+}
 
 function idCardPage(student: any, parent: any): string {
   return `<!DOCTYPE html><html><head><title>ID Card</title>

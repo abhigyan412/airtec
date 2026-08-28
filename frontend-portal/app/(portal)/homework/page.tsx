@@ -1,10 +1,14 @@
 'use client'
-import { useQuery } from '@tanstack/react-query'
-import { NotebookPen, Paperclip } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CheckCircle2, Loader2, NotebookPen, Paperclip, Upload } from 'lucide-react'
+import { toast } from 'sonner'
 import { homeworkApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Textarea } from '@/components/ui/textarea'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { cn, formatRelativeDue, todayLocalISO } from '@/lib/utils'
@@ -32,11 +36,21 @@ export default function PortalHomeworkPage() {
   // Local date, not UTC — through an IST morning `toISOString()` is still on
   // yesterday, which would file a task due today under "Overdue".
   const today = todayLocalISO()
+  const [openId, setOpenId] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['portal-homework'],
     queryFn: () => homeworkApi.list().then(r => r.data),
   })
+
+  // plan.md Phase 9: whether a graded item can be resubmitted at all is a
+  // school setting, off by default — a graded card only gets a resubmit
+  // action when the school has actually turned it on.
+  const { data: settings } = useQuery({
+    queryKey: ['portal-homework-settings'],
+    queryFn: () => homeworkApi.settings.get().then(r => r.data),
+  })
+  const resubmissionAllowed = !!settings?.homework_resubmission_allowed
 
   const items = [...(data ?? [])].sort((a: any, b: any) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'))
 
@@ -75,18 +89,23 @@ export default function PortalHomeworkPage() {
                 </h2>
                 {groupItems.map((h: any) => {
                   const due = h.due_date ? formatRelativeDue(h.due_date) : null
+                  const sub = h.my_submission
+                  const status = sub?.status ?? null
                   return (
                     <Card
                       key={h.id}
                       // Overdue gets a tinted edge and a red pill — enough to spot
                       // while scrolling, without a slab of colour down the side.
-                      className={cn('p-5', due?.overdue && 'border-destructive/40')}
+                      className={cn('p-5', due?.overdue && status !== 'submitted' && status !== 'graded' && 'border-destructive/40')}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <Badge>{h.subject_name}</Badge>
                             <span className="text-xs capitalize text-muted-foreground">{h.type}</span>
+                            {status === 'graded' && <Badge variant="success">Graded</Badge>}
+                            {status === 'submitted' && <Badge variant="neutral">Submitted</Badge>}
+                            {sub?.is_late && (status === 'submitted' || status === 'graded') && <Badge variant="destructive">Late</Badge>}
                           </div>
                           <p className="mt-1.5 font-semibold text-foreground">{h.title}</p>
                           {h.description && (
@@ -105,13 +124,48 @@ export default function PortalHomeworkPage() {
                         </div>
                         {due && (
                           <Badge
-                            variant={due.overdue ? 'destructive' : 'neutral'}
+                            variant={due.overdue && status !== 'submitted' && status !== 'graded' ? 'destructive' : 'neutral'}
                             className="shrink-0 whitespace-nowrap normal-case"
                           >
                             {due.label}
                           </Badge>
                         )}
                       </div>
+
+                      {status === 'graded' ? (
+                        <div className="mt-3 space-y-2">
+                          <div className="rounded-lg border border-success/30 bg-success/5 p-3">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-success">
+                              <CheckCircle2 className="h-4 w-4" />
+                              {sub.marks_obtained != null && sub.max_marks != null
+                                ? `${sub.marks_obtained}/${sub.max_marks}`
+                                : 'Reviewed'}
+                            </div>
+                            {sub.feedback && <p className="mt-1 text-sm text-foreground">{sub.feedback}</p>}
+                          </div>
+                          {resubmissionAllowed && (
+                            openId === h.id ? (
+                              <SubmissionForm homeworkId={h.id} existingText="" onClose={() => setOpenId(null)} />
+                            ) : (
+                              <Button size="sm" variant="outline" onClick={() => setOpenId(h.id)}>Resubmit</Button>
+                            )
+                          )}
+                        </div>
+                      ) : (
+                        <div className="mt-3">
+                          {openId === h.id ? (
+                            <SubmissionForm
+                              homeworkId={h.id}
+                              existingText={sub?.submission_text ?? ''}
+                              onClose={() => setOpenId(null)}
+                            />
+                          ) : (
+                            <Button size="sm" variant={status === 'submitted' ? 'outline' : 'default'} onClick={() => setOpenId(h.id)}>
+                              {status === 'submitted' ? 'Edit submission' : 'Submit'}
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </Card>
                   )
                 })}
@@ -120,6 +174,66 @@ export default function PortalHomeworkPage() {
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+function SubmissionForm({ homeworkId, existingText, onClose }: { homeworkId: string; existingText: string; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [text, setText] = useState(existingText)
+  const [file, setFile] = useState<File | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const submitMutation = useMutation({
+    mutationFn: async () => {
+      let file_base64: string | undefined
+      if (file) {
+        file_base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
+      }
+      return homeworkApi.submit(homeworkId, {
+        submission_text: text || undefined,
+        file_base64,
+        file_name: file?.name,
+        mime_type: file?.type,
+      })
+    },
+    onSuccess: () => {
+      toast.success('Submitted')
+      qc.invalidateQueries({ queryKey: ['portal-homework'] })
+      onClose()
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to submit'),
+  })
+
+  return (
+    <div className="space-y-2.5">
+      <Textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        placeholder="Type your answer here (optional if you're attaching a file)…"
+        rows={3}
+      />
+      <div>
+        <input ref={fileRef} type="file" className="hidden" onChange={e => setFile(e.target.files?.[0] ?? null)} />
+        <Button type="button" size="sm" variant="outline" onClick={() => fileRef.current?.click()}>
+          <Upload className="h-3.5 w-3.5" /> {file ? file.name : 'Attach a file (optional)'}
+        </Button>
+      </div>
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          disabled={submitMutation.isPending || (!text && !file)}
+          onClick={() => submitMutation.mutate()}
+        >
+          {submitMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Submit
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
+      </div>
     </div>
   )
 }

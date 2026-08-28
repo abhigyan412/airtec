@@ -2,6 +2,27 @@ import 'dotenv/config'
 // Side-effect import: pins the process to the school's timezone before anything
 // else in this process asks what day it is. Must stay directly below dotenv.
 import './shared/utils/timezone'
+
+// Registered before anything else runs, so it's live for the whole process
+// lifetime — startup, every request, every cron tick. Without this, an
+// unhandled rejection anywhere (a fire-and-forget promise, an async
+// callback outside Express's own request/response cycle) crashes the
+// process silently on Node 20+ — the default behavior since Node 15 — with
+// no stack trace logged anywhere, so a real bug and "tsx watch restarted
+// mid-request" look identical from the outside: the process just stops
+// responding. This doesn't change that a genuine unhandled error still
+// takes the process down (matching Node's own recommendation not to keep
+// running in a possibly-corrupted state) — it only makes sure that when it
+// does, there's a stack trace in the log first instead of nothing.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandled-rejection]', reason)
+  process.exit(1)
+})
+process.on('uncaughtException', (err) => {
+  console.error('[uncaught-exception]', err)
+  process.exit(1)
+})
+
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'

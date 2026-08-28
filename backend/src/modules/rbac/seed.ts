@@ -28,7 +28,7 @@ const CORE = [
   'resource.view', 'resource.upload', 'resource.delete',
   'staff.view', 'staff.edit', 'staff.attendance_mark', 'staff.leave_approve',
   'staff.payroll_manage', 'staff.recruitment_manage',
-  'homework.view', 'homework.create', 'homework.delete',
+  'homework.view', 'homework.create', 'homework.delete', 'homework.edit',
   'syllabus.view', 'syllabus.plan', 'syllabus.log_progress',
 ]
 
@@ -83,8 +83,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   // dates (the term-level pacing target) stay a senior-management-only
   // responsibility (syllabus.plan) — teachers only log actual coverage
   // against it (syllabus.log_progress).
-  'Teacher': ['student.view', 'exam.view', 'exam.marks_entry', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress', ...TIMETABLE_TEACHER],
-  'Class Teacher': ['student.view', 'student.edit', 'exam.view', 'exam.marks_entry', 'exam.result_publish', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'complaint.resolve', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'syllabus.view', 'syllabus.log_progress', ...TIMETABLE_TEACHER],
+  'Teacher': ['student.view', 'exam.view', 'exam.marks_entry', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'homework.edit', 'syllabus.view', 'syllabus.log_progress', ...TIMETABLE_TEACHER],
+  'Class Teacher': ['student.view', 'student.edit', 'exam.view', 'exam.marks_entry', 'exam.result_publish', 'exam.admit_card_generate', 'attendance.view', 'attendance.mark', 'attendance.edit', 'complaint.view', 'complaint.create', 'complaint.resolve', 'timetable.view', 'resource.view', 'resource.upload', 'resource.delete', 'homework.view', 'homework.create', 'homework.delete', 'homework.edit', 'syllabus.view', 'syllabus.log_progress', ...TIMETABLE_TEACHER],
   // tc.generate: Accountant could already initiate TC requests under
   // the old requireRole('school_admin','principal','accountant') gate
   // on POST /sis/:id/tc — kept so converting that route doesn't

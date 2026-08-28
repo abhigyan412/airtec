@@ -104,57 +104,82 @@ const NAV: NavItem[] = [
     ],
   },
   {
-    label: 'Examinations',
-    module: 'exams',
-    icon: BookOpen,
+    // 2026-08-28: Timetable, Examinations, Student Attendance, Homework
+    // and Syllabus used to be five unrelated top-level siblings — every
+    // one of this session's own restructures (Homework split, Syllabus
+    // split, Attendance split) just added another flat entry rather than
+    // giving the growing set of "run the academic day" tools a home. No
+    // `module` on this group itself, same reasoning as Staff & HR below:
+    // its children span five different modules, and a school that hasn't
+    // bought one of them should still see the others.
+    label: 'Academics',
+    icon: GraduationCap,
     children: [
-      { label: 'All Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
-      { label: 'Results', href: '/exams/results', icon: BarChart3, permission: 'exam.view', indent: true },
-      { label: 'Examination Settings', href: '/exams/templates', icon: SettingsIcon, permission: 'exam.view', lockUnless: 'exam.schedule', indent: true },
+      {
+        label: 'Timetable',
+        module: 'timetable',
+        icon: Clock,
+        children: [
+          // Ordered the way the module is actually used across a day:
+          // look at the timetable, work today's cover from it, then the
+          // things you do occasionally — analyse, build, configure. The old
+          // order interleaved all three, so the screen somebody opens twenty
+          // times a day sat below the one they open twice a term.
+
+          { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view' },
+          { label: 'Teacher View', href: '/timetable?view=teacher', icon: User, permission: 'timetable.view' },
+          // Every class at once, live or draft, and the thing that prints
+          // the whole set. timetable.view because printing the timetables is
+          // an office job, not a manager's.
+          { label: 'Block View', href: '/timetable/block', icon: LayoutGrid, permission: 'timetable.view' },
+
+          // Who is away, who is covering, who is free, and what needs
+          // attention right now. "Who's free" used to be a separate Free
+          // Faculty page on the class-view screen; it is a tab here now,
+          // beside the queue it exists to serve.
+          { label: 'Arrangements', href: '/timetable/arrangements', icon: UserCheck2, permission: 'arrangement.view' },
+          // Every teacher's own page: their week, the cover they have been
+          // given, and their reserved periods. Gated on nothing but a login,
+          // because it only ever shows the caller their own data — the
+          // handler resolves identity from the token and ignores any id.
+          { label: 'My Week', href: '/timetable/my-week', icon: CalendarClock },
+
+          { label: 'Workload', href: '/timetable/workload', icon: Gauge, permission: 'timetable.workload_view' },
+          { label: 'Generate', href: '/timetable/generate', icon: Wand2, permission: 'timetable.generate' },
+          { label: 'Import', href: '/timetable/import', icon: FileSpreadsheet, permission: 'timetable.import' },
+          { label: 'Setup', href: '/timetable/setup', icon: SlidersHorizontal, permission: 'timetable.setup_manage' },
+        ],
+      },
+      {
+        label: 'Examinations',
+        module: 'exams',
+        icon: BookOpen,
+        children: [
+          { label: 'All Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
+          { label: 'Results', href: '/exams/results', icon: BarChart3, permission: 'exam.view', indent: true },
+          { label: 'Examination Settings', href: '/exams/templates', icon: SettingsIcon, permission: 'exam.view', lockUnless: 'exam.schedule', indent: true },
+        ],
+      },
+      // Attendance, Homework and Syllabus collapse to one link each,
+      // unlike Timetable/Examinations above — all three already grew
+      // their own Mark/Report, Assign/Grading/Settings and Progress/Log/
+      // Due-Dates tab bars on the page itself this session (see each
+      // module's own layout.tsx), so repeating that same choice a second
+      // time in the sidebar was pure duplication, not a real sub-nav.
+      // Gated on each module's broadest permission — every real role
+      // holding a narrower one (log_progress, plan, create) already holds
+      // this one too, so nothing becomes invisible to anyone who could
+      // already reach some part of the module.
+      { label: 'Student Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true, module: 'attendance' },
+      { label: 'Homework', href: '/homework', icon: NotebookPen, permission: 'homework.view', module: 'homework' },
+      { label: 'Syllabus', href: '/syllabus', icon: ClipboardList, permission: 'syllabus.view', module: 'syllabus' },
     ],
   },
-  { label: 'Student Attendance', href: '/attendance', icon: CalendarDays, permission: 'attendance.view', teacherRequiresClassTeacher: true, module: 'attendance' },
-  {
-    label: 'Timetable',
-    module: 'timetable',
-    icon: Clock,
-    children: [
-      // Ordered the way the module is actually used across a day:
-      // look at the timetable, work today's cover from it, then the
-      // things you do occasionally — analyse, build, configure. The old
-      // order interleaved all three, so the screen somebody opens twenty
-      // times a day sat below the one they open twice a term.
-
-      { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view' },
-      { label: 'Teacher View', href: '/timetable?view=teacher', icon: User, permission: 'timetable.view' },
-      // Every class at once, live or draft, and the thing that prints
-      // the whole set. timetable.view because printing the timetables is
-      // an office job, not a manager's.
-      { label: 'Block View', href: '/timetable/block', icon: LayoutGrid, permission: 'timetable.view' },
-
-      // Who is away, who is covering, who is free, and what needs
-      // attention right now. "Who's free" used to be a separate Free
-      // Faculty page on the class-view screen; it is a tab here now,
-      // beside the queue it exists to serve.
-      { label: 'Arrangements', href: '/timetable/arrangements', icon: UserCheck2, permission: 'arrangement.view' },
-      // Every teacher's own page: their week, the cover they have been
-      // given, and their reserved periods. Gated on nothing but a login,
-      // because it only ever shows the caller their own data — the
-      // handler resolves identity from the token and ignores any id.
-      { label: 'My Week', href: '/timetable/my-week', icon: CalendarClock },
-
-      { label: 'Workload', href: '/timetable/workload', icon: Gauge, permission: 'timetable.workload_view' },
-      { label: 'Generate', href: '/timetable/generate', icon: Wand2, permission: 'timetable.generate' },
-      { label: 'Import', href: '/timetable/import', icon: FileSpreadsheet, permission: 'timetable.import' },
-      { label: 'Setup', href: '/timetable/setup', icon: SlidersHorizontal, permission: 'timetable.setup_manage' },
-    ],
-  },
-  { label: 'Homework', href: '/homework', icon: NotebookPen, permission: 'homework.view', module: 'homework' },
   { label: 'Complaints', href: '/complaints', icon: MessageSquare, permission: 'complaint.view', module: 'complaints' },
   { label: 'Certificates', href: '/certificates', icon: Award, permission: 'certificate.view', module: 'certificates' },
   { label: 'Resource Centre', href: '/resources', icon: Library, permission: 'resource.view', module: 'resources' },
   {
-    label: 'Staff & HR',
+    label: 'Human Resources',
     icon: Briefcase,
     // No module on the group itself — its children span four of them.
     // Tagging the whole group 'hr' was wrong: a school running only the
@@ -273,13 +298,28 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
   const isActive = (href: string) => href === activeHref
 
-  const getActiveGroup = React.useCallback(
-    (path: string) =>
-      [...NAV, ...SETTINGS]
-        .filter((i) => i.children?.some((c) => c.href && (path === c.href.split('?')[0] || path.startsWith(c.href.split('?')[0] + '/'))))
-        .map((i) => i.label),
-    [],
-  )
+  // Two levels deep now that Academics nests Timetable/Examinations as
+  // their own sub-groups (see NAV above) — a direct child match still
+  // expands just the top-level group as before, but a match on a
+  // grandchild (e.g. /timetable/setup) needs to expand both the top-level
+  // group AND the child sub-group it lives in, or Academics would open
+  // with Timetable's own list collapsed shut.
+  const getActiveGroup = React.useCallback((path: string) => {
+    const hrefMatchesPath = (href?: string) =>
+      !!href && (path === href.split('?')[0] || path.startsWith(href.split('?')[0] + '/'))
+    const matches: string[] = []
+    for (const top of [...NAV, ...SETTINGS]) {
+      if (!top.children) continue
+      for (const child of top.children) {
+        if (hrefMatchesPath(child.href)) {
+          matches.push(top.label)
+        } else if (child.children?.some((gc) => hrefMatchesPath(gc.href))) {
+          matches.push(top.label, child.label)
+        }
+      }
+    }
+    return matches
+  }, [])
 
   const [expanded, setExpanded] = React.useState<string[]>(() => getActiveGroup(pathname))
 
@@ -343,7 +383,14 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           </p>
           {NAV.map((item) => {
             if (!allowed(item)) return null
-            let children = item.children?.filter(allowed)
+            // One level deeper than `.filter(allowed)` alone reaches — a
+            // child that's itself a sub-group (Timetable/Examinations
+            // inside Academics) needs its OWN children filtered too, or
+            // an item hidden from this user (e.g. Examination Settings
+            // without exam.schedule) would still render inside it.
+            let children = item.children?.filter(allowed).map((c) =>
+              c.children ? { ...c, children: c.children.filter(allowed) } : c
+            )
             // A teacher's "Students" group is just their own scoped
             // roster (the backend forces this regardless of query params
             // — see GET /students) — the admin bulk-management children
@@ -465,6 +512,73 @@ function NavEntry({
         <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border pl-3 [animation-duration:var(--duration-fast)] animate-in fade-in-0 slide-in-from-top-1">
           {item.children.map((child) => {
             const ChildIcon = child.icon
+
+            // A child that's itself a sub-group (Timetable / Examinations
+            // inside Academics) renders as its own expandable level
+            // instead of the flat leaf-link case below — same
+            // expanded/onToggle state as every other group, just keyed by
+            // this child's own label rather than the top-level item's.
+            if (child.children?.length) {
+              const childOpen = expanded.includes(child.label)
+              const anyGrandchildActive = child.children.some((gc) => gc.href && isActive(gc.href))
+              return (
+                <div key={child.label}>
+                  <button
+                    onClick={() => onToggle(child.label)}
+                    className={cn(
+                      'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors [transition-duration:var(--duration-press)] ease-out',
+                      anyGrandchildActive ? 'font-medium text-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                    )}
+                  >
+                    <ChildIcon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="flex-1 text-left">{child.label}</span>
+                    {childOpen ? <ChevronDown className="h-3 w-3 opacity-60" /> : <ChevronRight className="h-3 w-3 opacity-60" />}
+                  </button>
+                  {childOpen && (
+                    <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border/60 pl-3 [animation-duration:var(--duration-fast)] animate-in fade-in-0 slide-in-from-top-1">
+                      {child.children.map((gc) => {
+                        const GcIcon = gc.icon
+                        const gcActive = gc.href ? isActive(gc.href) : false
+                        if (isLocked(gc)) {
+                          return (
+                            <div
+                              key={gc.label}
+                              className={cn(
+                                'flex cursor-not-allowed items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground/50',
+                                gc.indent && 'ml-3 border-l border-border/60 pl-2',
+                              )}
+                              title="You don't have permission to open this"
+                            >
+                              <GcIcon className="h-3 w-3 shrink-0" />
+                              <span className="flex-1">{gc.label}</span>
+                              <Lock className="h-2.5 w-2.5 shrink-0" />
+                            </div>
+                          )
+                        }
+                        return (
+                          <Link
+                            key={gc.label}
+                            href={gc.href ?? '#'}
+                            onClick={onClose}
+                            className={cn(
+                              'flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors [transition-duration:var(--duration-press)] ease-out',
+                              gc.indent && 'ml-3 border-l border-border/60 pl-2',
+                              gcActive
+                                ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+                                : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                            )}
+                          >
+                            <GcIcon className="h-3 w-3 shrink-0" />
+                            <span className="flex-1">{gc.label}</span>
+                          </Link>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            }
+
             const active = child.href ? isActive(child.href) : false
             if (isLocked(child)) {
               return (
