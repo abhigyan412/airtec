@@ -8,14 +8,14 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
+import { Select, SelectGroup, SelectLabel, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 
 export const EXAM_TYPE_LABELS: Record<string, string> = {
   unit_test: 'Unit Test', monthly: 'Monthly Test', half_yearly: 'Half Yearly', annual: 'Annual Exam',
   pre_board: 'Pre-Board', practical: 'Practical', other: 'Exam',
 }
 
-type ChapterFormRow = { chapter_name: string; due_mode: 'exam' | 'custom'; exam_id: string; planned_date: string }
+type ChapterFormRow = { chapter_name: string; due_mode: 'exam' | 'template' | 'custom'; exam_id: string; template_id: string; planned_date: string }
 
 // Shared between Syllabus's Due Dates page (day-to-day chapter planning)
 // and Organizational Settings' Syllabus Setup (bulk initial definition) —
@@ -27,7 +27,7 @@ type ChapterFormRow = { chapter_name: string; due_mode: 'exam' | 'custom'; exam_
 export function AddChaptersForm({ classId, sectionId, subjectName, onSaved }: {
   classId: string; sectionId: string; subjectName: string; onSaved: () => void
 }) {
-  const [rows, setRows] = useState<ChapterFormRow[]>([{ chapter_name: '', due_mode: 'custom', exam_id: '', planned_date: '' }])
+  const [rows, setRows] = useState<ChapterFormRow[]>([{ chapter_name: '', due_mode: 'custom', exam_id: '', template_id: '', planned_date: '' }])
   const [loading, setLoading] = useState(false)
 
   // The chapter's due date should track the school's real exam calendar
@@ -38,6 +38,17 @@ export function AddChaptersForm({ classId, sectionId, subjectName, onSaved }: {
     queryFn: () => api.get('/exams', { params: { limit: 100 } }).then(r => r.data.data as any[]),
   })
   const sortedExams = useMemo(() => [...(exams ?? [])].sort((a, b) => (a.start_date ?? '').localeCompare(b.start_date ?? '')), [exams])
+
+  // Syllabus setup usually happens before this year's actual exams are
+  // scheduled — Exam Templates (Half Yearly, Annual, Unit Test 1/2/3/4,
+  // ...) exist year-round as the school's recurring exam blueprint, so a
+  // chapter can be tagged to one as a label ("coming in Half Yearly")
+  // even with no real dated exam to link yet. Same endpoint Examination
+  // Settings' own template list uses.
+  const { data: examTemplates } = useQuery({
+    queryKey: ['exam-templates-for-syllabus'],
+    queryFn: () => api.get('/exams/templates').then(r => r.data.data as any[]),
+  })
 
   const updateRow = (i: number, patch: Partial<ChapterFormRow>) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r))
 
@@ -62,7 +73,7 @@ export function AddChaptersForm({ classId, sectionId, subjectName, onSaved }: {
       const base64 = btoa(binary)
       const res = await syllabusApi.importChapters(base64)
       const names = (res.data.chapter_names ?? []) as string[]
-      const imported: ChapterFormRow[] = names.map(name => ({ chapter_name: name, due_mode: 'custom', exam_id: '', planned_date: '' }))
+      const imported: ChapterFormRow[] = names.map(name => ({ chapter_name: name, due_mode: 'custom', exam_id: '', template_id: '', planned_date: '' }))
       setRows(prev => (prev.length === 1 && !prev[0].chapter_name.trim()) ? imported : [...prev, ...imported])
       toast.success(`Imported ${names.length} chapter${names.length > 1 ? 's' : ''} — review before saving`)
     } catch (e: any) {
@@ -84,11 +95,12 @@ export function AddChaptersForm({ classId, sectionId, subjectName, onSaved }: {
         chapters: valid.map((r, i) => ({
           chapter_number: i + 1, chapter_name: r.chapter_name.trim(),
           exam_id: r.due_mode === 'exam' ? (r.exam_id || undefined) : undefined,
+          exam_template_id: r.due_mode === 'template' ? (r.template_id || undefined) : undefined,
           planned_date: r.due_mode === 'custom' ? (r.planned_date || undefined) : undefined,
         })),
       })
       toast.success('Chapters added')
-      setRows([{ chapter_name: '', due_mode: 'custom', exam_id: '', planned_date: '' }])
+      setRows([{ chapter_name: '', due_mode: 'custom', exam_id: '', template_id: '', planned_date: '' }])
       onSaved()
     } catch (e: any) {
       toast.error(e?.response?.data?.error ?? 'Failed to add chapters')
@@ -123,16 +135,40 @@ export function AddChaptersForm({ classId, sectionId, subjectName, onSaved }: {
             <Input className="flex-1" value={row.chapter_name} placeholder={`Chapter ${i + 1} name`}
               onChange={e => updateRow(i, { chapter_name: e.target.value })} />
             <Select
-              value={row.due_mode === 'custom' ? 'custom' : (row.exam_id || 'none')}
-              onValueChange={v => v === 'custom' ? updateRow(i, { due_mode: 'custom', exam_id: '' }) : updateRow(i, { due_mode: 'exam', exam_id: v === 'none' ? '' : v })}>
+              value={
+                row.due_mode === 'custom' ? 'custom'
+                  : row.due_mode === 'template' ? (row.template_id ? `template:${row.template_id}` : 'none')
+                  : (row.exam_id ? `exam:${row.exam_id}` : 'none')
+              }
+              onValueChange={v => {
+                if (v === 'custom') updateRow(i, { due_mode: 'custom', exam_id: '', template_id: '' })
+                else if (v === 'none') updateRow(i, { due_mode: 'exam', exam_id: '', template_id: '' })
+                else if (v.startsWith('template:')) updateRow(i, { due_mode: 'template', template_id: v.slice(9), exam_id: '' })
+                else updateRow(i, { due_mode: 'exam', exam_id: v.slice(5), template_id: '' })
+              }}>
               <SelectTrigger className="h-9 w-40"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">No due date</SelectItem>
-                {sortedExams.map(ex => (
-                  <SelectItem key={ex.id} value={ex.id}>
-                    {EXAM_TYPE_LABELS[ex.exam_type] ?? ex.exam_type} — {ex.name}{ex.start_date ? ` (${formatDate(ex.start_date)})` : ''}
-                  </SelectItem>
-                ))}
+                {(examTemplates ?? []).length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel>Exam Templates</SelectLabel>
+                    {(examTemplates ?? []).map((t: any) => (
+                      <SelectItem key={t.id} value={`template:${t.id}`}>
+                        {EXAM_TYPE_LABELS[t.exam_type] ?? t.exam_type} — {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
+                {sortedExams.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel>Scheduled Exams</SelectLabel>
+                    {sortedExams.map(ex => (
+                      <SelectItem key={ex.id} value={`exam:${ex.id}`}>
+                        {EXAM_TYPE_LABELS[ex.exam_type] ?? ex.exam_type} — {ex.name}{ex.start_date ? ` (${formatDate(ex.start_date)})` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
                 <SelectItem value="custom">Custom date...</SelectItem>
               </SelectContent>
             </Select>
@@ -141,7 +177,7 @@ export function AddChaptersForm({ classId, sectionId, subjectName, onSaved }: {
             )}
           </div>
         ))}
-        <button onClick={() => setRows(rs => [...rs, { chapter_name: '', due_mode: 'custom', exam_id: '', planned_date: '' }])}
+        <button onClick={() => setRows(rs => [...rs, { chapter_name: '', due_mode: 'custom', exam_id: '', template_id: '', planned_date: '' }])}
           className="-ml-2 flex h-9 items-center gap-1 rounded-md px-2 text-xs font-semibold text-primary transition-colors hover:bg-accent hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
           <Plus className="w-3 h-3" /> Add another chapter
         </button>

@@ -1115,3 +1115,46 @@ Settings page immediately above. Two read-only panels: `ChapterListPanel`
 upload/delete — plain `syllabusApi.documents.list()`, the same
 `GET /academics/syllabus/documents` endpoint already gated on
 `syllabus.view` server-side, so no backend change was needed here).
+
+## Chapters can be tagged to an Exam Template, not just a real scheduled exam (2026-08-28)
+
+Syllabus Setup's "due before" picker (`AddChaptersForm`) only ever linked a
+chapter to a real, already-scheduled `exams` row — but initial syllabus
+setup typically happens at the *start* of the year, before this year's
+actual exams have been scheduled with real dates yet. Examination
+Settings' Exam Templates (`exam_templates` — Half Yearly, Annual, Unit
+Test 1/2/3/4, whatever recurring blueprint the school actually has,
+`frontend/app/(app)/exams/templates/page.tsx`) exist year-round precisely
+because a school's exam calendar is structurally fixed even when the
+dates aren't — the same reasoning that page's own header already states.
+A chapter can now be tagged to one of those as a label ("coming in Half
+Yearly") with no date attached, instead of being stuck on "No due date"
+until an actual exam gets scheduled.
+
+**Migration** `20260830310000_syllabus_chapter_exam_template.sql`: adds
+nullable `exam_template_id uuid references exam_templates(id)` to
+`syllabus_chapters`, alongside the existing `exam_id`/`planned_date`.
+Tag-only — `effectiveDueDate()` is untouched, so a template-tagged chapter
+still shows no `due_date` and doesn't count toward "expected by now"/
+"behind schedule" in `/syllabus/stats`, correctly, since a template alone
+has nothing to be expected *by*.
+
+**Backend** (`backend/src/modules/academics/routes.ts`): `exam_template_id`
+added to `CreateChaptersSchema` and `PATCH /syllabus/:id`, mutually
+exclusive with `exam_id`/`planned_date` in that priority order (matches
+the one-field-at-a-time semantics the three-way frontend picker already
+sends). `GET /syllabus`'s select now also joins `exam_templates(name,
+exam_type)` for display. No new endpoint — `GET /exams/templates` already
+existed (`exam.schedule`-gated; every role that reaches this form —
+School Admin/Principal/Vice Principal — already holds that via the same
+super-role bypass that gates `syllabus.plan` itself, so no permission gap).
+
+**Frontend**: `AddChaptersForm`'s due-date `Select` now groups "Exam
+Templates" above "Scheduled Exams" (`SelectGroup`/`SelectLabel`, values
+namespaced `template:<id>` / `exam:<id>` to tell the two id spaces apart
+in one dropdown) — same change mirrored in `due-dates/page.tsx`'s
+`ExistingChapterRow` inline edit. Every place a chapter's due info is
+displayed now falls back to the tag when there's no `due_date`: Due
+Dates' `ExistingChapterRow`, Progress's `ChapterRow`, and View Syllabus's
+`ChapterListPanel` all show "Coming in {template name}" instead of "No
+due date" once tagged.

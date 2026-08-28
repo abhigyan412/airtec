@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
+import { Select, SelectGroup, SelectLabel, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { AddChaptersForm, EXAM_TYPE_LABELS } from '@/components/academics/AddChaptersForm'
 
 const CHAPTER_STATUS_ICON: Record<string, any> = { completed: CheckCircle2, in_progress: Clock, pending: Circle }
@@ -167,8 +167,9 @@ function SyllabusDueDatesView() {
 // the syllabus.plan side of that same endpoint.
 function ExistingChapterRow({ chapter: c, onDelete, onSaved }: { chapter: any; onDelete: () => void; onSaved: () => void }) {
   const [editing, setEditing] = useState(false)
-  const [dueMode, setDueMode] = useState<'exam' | 'custom'>(c.exam_id ? 'exam' : 'custom')
+  const [dueMode, setDueMode] = useState<'exam' | 'template' | 'custom'>(c.exam_id ? 'exam' : c.exam_template_id ? 'template' : 'custom')
   const [examId, setExamId] = useState(c.exam_id ?? '')
+  const [templateId, setTemplateId] = useState(c.exam_template_id ?? '')
   const [plannedDate, setPlannedDate] = useState(c.planned_date ?? '')
   const [saving, setSaving] = useState(false)
 
@@ -179,12 +180,20 @@ function ExistingChapterRow({ chapter: c, onDelete, onSaved }: { chapter: any; o
   })
   const sortedExams = useMemo(() => [...(exams ?? [])].sort((a, b) => (a.start_date ?? '').localeCompare(b.start_date ?? '')), [exams])
 
+  const { data: examTemplates } = useQuery({
+    queryKey: ['exam-templates-for-syllabus'],
+    queryFn: () => api.get('/exams/templates').then(r => r.data.data as any[]),
+    enabled: editing,
+  })
+
   const Icon = CHAPTER_STATUS_ICON[c.status] ?? Circle
   const overdue = c.status !== 'completed' && c.due_date && c.due_date < todayKey
+  const templateTag = c.exam_templates?.name ?? null
 
   const startEditing = () => {
-    setDueMode(c.exam_id ? 'exam' : 'custom')
+    setDueMode(c.exam_id ? 'exam' : c.exam_template_id ? 'template' : 'custom')
     setExamId(c.exam_id ?? '')
+    setTemplateId(c.exam_template_id ?? '')
     setPlannedDate(c.planned_date ?? '')
     setEditing(true)
   }
@@ -194,6 +203,7 @@ function ExistingChapterRow({ chapter: c, onDelete, onSaved }: { chapter: any; o
     try {
       await syllabusApi.update(c.id, {
         exam_id: dueMode === 'exam' ? (examId || null) : undefined,
+        exam_template_id: dueMode === 'template' ? (templateId || null) : undefined,
         planned_date: dueMode === 'custom' ? (plannedDate || null) : undefined,
       })
       toast.success('Due date updated')
@@ -217,7 +227,9 @@ function ExistingChapterRow({ chapter: c, onDelete, onSaved }: { chapter: any; o
               <p className="text-xs text-muted-foreground">
                 {c.status === 'completed' && c.actual_completion_date
                   ? `Completed ${formatDate(c.actual_completion_date)}`
-                  : c.due_date ? `Due ${formatDate(c.due_date)}` : 'No due date'}
+                  : c.due_date ? `Due ${formatDate(c.due_date)}`
+                  : templateTag ? `Coming in ${templateTag}`
+                  : 'No due date'}
               </p>
             )}
           </div>
@@ -240,19 +252,40 @@ function ExistingChapterRow({ chapter: c, onDelete, onSaved }: { chapter: any; o
       {editing && (
         <div className="mt-2.5 flex flex-wrap items-center gap-2">
           <Select
-            value={dueMode === 'custom' ? 'custom' : (examId || 'none')}
+            value={
+              dueMode === 'custom' ? 'custom'
+                : dueMode === 'template' ? (templateId ? `template:${templateId}` : 'none')
+                : (examId ? `exam:${examId}` : 'none')
+            }
             onValueChange={v => {
-              if (v === 'custom') { setDueMode('custom'); setExamId('') }
-              else { setDueMode('exam'); setExamId(v === 'none' ? '' : v) }
+              if (v === 'custom') { setDueMode('custom'); setExamId(''); setTemplateId('') }
+              else if (v === 'none') { setDueMode('exam'); setExamId(''); setTemplateId('') }
+              else if (v.startsWith('template:')) { setDueMode('template'); setTemplateId(v.slice(9)); setExamId('') }
+              else { setDueMode('exam'); setExamId(v.slice(5)); setTemplateId('') }
             }}>
             <SelectTrigger className="h-9 w-48"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="none">No due date</SelectItem>
-              {sortedExams.map(ex => (
-                <SelectItem key={ex.id} value={ex.id}>
-                  {EXAM_TYPE_LABELS[ex.exam_type] ?? ex.exam_type} — {ex.name}{ex.start_date ? ` (${formatDate(ex.start_date)})` : ''}
-                </SelectItem>
-              ))}
+              {(examTemplates ?? []).length > 0 && (
+                <SelectGroup>
+                  <SelectLabel>Exam Templates</SelectLabel>
+                  {(examTemplates ?? []).map((t: any) => (
+                    <SelectItem key={t.id} value={`template:${t.id}`}>
+                      {EXAM_TYPE_LABELS[t.exam_type] ?? t.exam_type} — {t.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              )}
+              {sortedExams.length > 0 && (
+                <SelectGroup>
+                  <SelectLabel>Scheduled Exams</SelectLabel>
+                  {sortedExams.map(ex => (
+                    <SelectItem key={ex.id} value={`exam:${ex.id}`}>
+                      {EXAM_TYPE_LABELS[ex.exam_type] ?? ex.exam_type} — {ex.name}{ex.start_date ? ` (${formatDate(ex.start_date)})` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              )}
               <SelectItem value="custom">Custom date...</SelectItem>
             </SelectContent>
           </Select>

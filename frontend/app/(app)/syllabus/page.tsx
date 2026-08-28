@@ -205,6 +205,7 @@ function ChapterRow({ c, showSubject, classId, sectionId, canCreate, onAssigned 
   const Icon = CHAPTER_STATUS_ICON[c.status] ?? Circle
   const overdue = c.status !== 'completed' && c.due_date && c.due_date < todayKey
   const hw = c.homework_summary
+  const templateTag = c.exam_templates?.name ?? null
 
   return (
     <div className="rounded-lg px-2 py-2">
@@ -219,7 +220,9 @@ function ChapterRow({ c, showSubject, classId, sectionId, canCreate, onAssigned 
               {showSubject ? `${c.subject_name} · ` : ''}
               {c.status === 'completed' && c.actual_completion_date
                 ? `Completed ${formatDate(c.actual_completion_date)}`
-                : c.due_date ? `Due ${formatDate(c.due_date)}` : 'No due date'}
+                : c.due_date ? `Due ${formatDate(c.due_date)}`
+                : templateTag ? `Coming in ${templateTag}`
+                : 'No due date'}
             </p>
           </div>
         </div>

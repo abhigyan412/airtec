@@ -139,7 +139,9 @@ function ChapterListPanel({ classId, sectionId, subjectName }: { classId: string
                 {c.chapter_number ? `${c.chapter_number}. ` : ''}{c.chapter_name}
               </p>
               <p className="text-xs text-muted-foreground">
-                {c.due_date ? `Due ${formatDate(c.due_date)}` : 'No due date'}
+                {c.due_date ? `Due ${formatDate(c.due_date)}`
+                  : c.exam_templates?.name ? `Coming in ${c.exam_templates.name}`
+                  : 'No due date'}
               </p>
             </div>
           ))}

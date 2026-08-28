@@ -650,9 +650,14 @@ const CreateChaptersSchema = z.object({
     chapter_name: z.string().min(1),
     // A chapter's due date is either linked to a real exam on the
     // school's calendar (exam_id — preferred, stays correct if the exam
-    // date moves) or a plain custom date (planned_date) when there's no
-    // matching exam yet. exam_id wins if both are somehow given.
+    // date moves), tagged to a recurring exam template from Examination
+    // Settings (exam_template_id — Half Yearly, Annual, Unit Test 1/2/3/4,
+    // etc.; a label, not a date, for setup done before this year's actual
+    // exams are scheduled), or a plain custom date (planned_date). Priority
+    // when more than one is given: exam_id, then exam_template_id, then
+    // planned_date.
     exam_id: z.string().optional(),
+    exam_template_id: z.string().optional(),
     planned_date: z.string().optional(),
   })).min(1),
 })
@@ -674,7 +679,7 @@ router.get('/syllabus', requirePermissionV2('syllabus.view'),
 
     let query = supabase
       .from('syllabus_chapters')
-      .select('*, classes(name), sections(name), exams(name, exam_type, start_date)')
+      .select('*, classes(name), sections(name), exams(name, exam_type, start_date), exam_templates(name, exam_type)')
       .eq('school_id', school_id).order('chapter_number')
     if (class_id) query = query.eq('class_id', class_id as string)
     // A section's effective chapter list is "chapters scoped to this
@@ -864,7 +869,8 @@ router.post('/syllabus', requirePermissionV2('syllabus.plan'),
       chapter_number: ch.chapter_number ?? null,
       chapter_name: ch.chapter_name,
       exam_id: ch.exam_id || null,
-      planned_date: ch.exam_id ? null : (ch.planned_date || null),
+      exam_template_id: ch.exam_id ? null : (ch.exam_template_id || null),
+      planned_date: (ch.exam_id || ch.exam_template_id) ? null : (ch.planned_date || null),
       created_by: req.user!.id,
     }))
 
@@ -883,14 +889,14 @@ router.post('/syllabus', requirePermissionV2('syllabus.plan'),
 // teacher quietly edit the due-date schedule too.
 router.patch('/syllabus/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
-  const { chapter_name, exam_id, planned_date, actual_completion_date, status } = req.body
+  const { chapter_name, exam_id, exam_template_id, planned_date, actual_completion_date, status } = req.body
   const school_id = req.user!.school_id
 
   const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
   const hasPlan = isSuperRole || permissionCodes.has('syllabus.plan')
   const hasLog = isSuperRole || permissionCodes.has('syllabus.log_progress')
 
-  const editsPlanFields = chapter_name !== undefined || exam_id !== undefined || planned_date !== undefined
+  const editsPlanFields = chapter_name !== undefined || exam_id !== undefined || exam_template_id !== undefined || planned_date !== undefined
   const editsLogFields = actual_completion_date !== undefined || status !== undefined
 
   if (editsPlanFields && !hasPlan) {
@@ -902,8 +908,9 @@ router.patch('/syllabus/:id', asyncHandler(async (req: AuthRequest, res: Respons
 
   const update: Record<string, any> = {}
   if (chapter_name !== undefined) update.chapter_name = chapter_name
-  if (exam_id !== undefined) { update.exam_id = exam_id || null; update.planned_date = null }
-  else if (planned_date !== undefined) { update.planned_date = planned_date || null; update.exam_id = null }
+  if (exam_id !== undefined) { update.exam_id = exam_id || null; update.exam_template_id = null; update.planned_date = null }
+  else if (exam_template_id !== undefined) { update.exam_template_id = exam_template_id || null; update.exam_id = null; update.planned_date = null }
+  else if (planned_date !== undefined) { update.planned_date = planned_date || null; update.exam_id = null; update.exam_template_id = null }
   if (actual_completion_date !== undefined) update.actual_completion_date = actual_completion_date || null
   if (status !== undefined) update.status = status
   update.updated_at = new Date().toISOString()
