@@ -44,6 +44,17 @@ function SyllabusSetupView() {
   const [selectedSubject, setSelectedSubjectRaw] = useState('')
   const setSelectedClassAndReset = (v: string) => { setSelectedClass(v); setSelectedSubjectRaw('') }
 
+  // Every section of a class shares the same syllabus except 11th/12th,
+  // where "sections" are really streams (Science/Commerce/Arts) with
+  // genuinely different subjects and chapters — same numeric_level check
+  // Settings -> Classes & Sections already uses to badge those classes
+  // "Stream-wise". Below that, the section picker only adds a pointless
+  // extra step and risks the syllabus being set up for one section and
+  // silently missing from the rest.
+  const selectedClassObj = classesData.find((c: any) => c.id === selectedClass)
+  const isStreamWise = selectedClassObj?.numeric_level === 11 || selectedClassObj?.numeric_level === 12
+  const effectiveSection = isStreamWise ? selectedSection : ''
+
   const { data: masterSubjects } = useQuery({
     queryKey: ['subjects', selectedClass],
     queryFn: () => classesApi.subjects.list(selectedClass).then(r => r.data),
@@ -56,7 +67,7 @@ function SyllabusSetupView() {
     qc.invalidateQueries({ queryKey: ['syllabus-stats-all'] })
   }
 
-  const ready = !!selectedClass && (sections.length === 0 || !!selectedSection) && !!selectedSubject
+  const ready = !!selectedClass && (!isStreamWise || sections.length === 0 || !!selectedSection) && !!selectedSubject
 
   return (
     <div className="space-y-5">
@@ -72,7 +83,7 @@ function SyllabusSetupView() {
             </SelectContent>
           </Select>
         </div>
-        {sections.length > 0 && (
+        {isStreamWise && sections.length > 0 && (
           <div className="flex items-center gap-2">
             <Label className="shrink-0">Section</Label>
             <Select value={selectedSection || undefined} onValueChange={setSelectedSection}>
@@ -105,8 +116,8 @@ function SyllabusSetupView() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 items-start lg:grid-cols-2">
-          <AddChaptersForm classId={selectedClass} sectionId={selectedSection} subjectName={selectedSubject} onSaved={invalidateChapters} />
-          <SyllabusDocumentsPanel classId={selectedClass} sectionId={selectedSection} subjectName={selectedSubject} />
+          <AddChaptersForm classId={selectedClass} sectionId={effectiveSection} subjectName={selectedSubject} onSaved={invalidateChapters} />
+          <SyllabusDocumentsPanel classId={selectedClass} sectionId={effectiveSection} subjectName={selectedSubject} />
         </div>
       )}
     </div>
