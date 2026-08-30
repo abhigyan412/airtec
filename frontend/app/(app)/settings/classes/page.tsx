@@ -15,6 +15,10 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { ClassCheckboxPicker } from '@/components/exams/ClassCheckboxPicker'
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+} from '@/components/ui/select'
 import {
   Dialog,
   DialogContent,
@@ -108,6 +112,8 @@ export default function ClassesSettingsPage() {
         </CardContent>
       </Card>
 
+      <SubjectRescopeCard classes={sorted} displayStyle={displayStyle} />
+
       {isLoading ? (
         <div className="grid gap-3">
           {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-32 w-full rounded-2xl" />)}
@@ -145,6 +151,93 @@ export default function ClassesSettingsPage() {
         <AddClassModal onClose={() => { setShowAddClass(false); invalidate() }} />
       )}
     </div>
+  )
+}
+
+// ── SUBJECT RESCOPING ────────────────────────────────────────
+// A subject added without picking a class (class_id left null) silently
+// applies to EVERY class — most subjects in a real school end up this
+// way since "Add Subject" defaults to no class. That's mostly harmless
+// for a genuinely universal subject like English, but wrong for
+// something like Accountancy that should only ever be Class 11-12. This
+// re-scopes a subject to an exact class list in one submit — the ticked
+// set replaces whatever the subject's scoping was before, including
+// clearing an incorrect class_id-null row.
+function SubjectRescopeCard({ classes, displayStyle }: { classes: any[]; displayStyle: 'numeric' | 'roman' }) {
+  const qc = useQueryClient()
+  const [subjectName, setSubjectName] = useState('')
+  const [classIds, setClassIds] = useState<Set<string>>(new Set())
+
+  const { data: allSubjects } = useQuery({
+    queryKey: ['all-subjects-rescope'],
+    queryFn: () => classesApi.subjects.list().then(r => r.data as any[]),
+  })
+  const subjectNames = Array.from(new Set((allSubjects ?? []).map((s: any) => s.name))).sort()
+
+  const currentClassIdsFor = (name: string): Set<string> => {
+    const rowsForName = (allSubjects ?? []).filter((s: any) => s.name === name)
+    if (rowsForName.some((s: any) => s.class_id == null)) return new Set(classes.map((c: any) => c.id))
+    return new Set(rowsForName.map((s: any) => s.class_id))
+  }
+
+  const selectSubject = (name: string) => { setSubjectName(name); setClassIds(currentClassIdsFor(name)) }
+  const toggleClass = (id: string) => setClassIds(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+
+  const rescopeMutation = useMutation({
+    mutationFn: () => classesApi.subjects.rescope(subjectName, Array.from(classIds)),
+    onSuccess: () => {
+      toast.success(`"${subjectName}" now applies to exactly ${classIds.size} class${classIds.size === 1 ? '' : 'es'}.`)
+      qc.invalidateQueries({ queryKey: ['all-subjects-rescope'] })
+      qc.invalidateQueries({ queryKey: ['subjects'] })
+      setSubjectName('')
+      setClassIds(new Set())
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update scoping'),
+  })
+
+  const wasGlobal = subjectName ? (allSubjects ?? []).some((s: any) => s.name === subjectName && s.class_id == null) : false
+
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-4">
+        <div>
+          <p className="text-sm font-medium text-foreground">Fix Subject Scoping</p>
+          <p className="text-xs text-muted-foreground">
+            A subject added without picking a class silently applies to every class — pick one below to see and correct exactly which classes it belongs to.
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Subject</Label>
+          <Select value={subjectName || undefined} onValueChange={selectSubject}>
+            <SelectTrigger className="w-full sm:w-64"><SelectValue placeholder="Select subject..." /></SelectTrigger>
+            <SelectContent>
+              {subjectNames.map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {subjectName && (
+          <>
+            {wasGlobal && (
+              <p className="text-xs text-warning">Currently school-wide (applies to every class) — every class is pre-checked below; untick the ones that shouldn&apos;t have it.</p>
+            )}
+            <div className="space-y-1.5">
+              <Label>Classes</Label>
+              <ClassCheckboxPicker classes={classes} selected={classIds} onToggle={toggleClass} displayStyle={displayStyle} />
+            </div>
+            <div className="flex justify-end">
+              <Button size="sm" onClick={() => rescopeMutation.mutate()} disabled={classIds.size === 0 || rescopeMutation.isPending}>
+                {rescopeMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save Scoping
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 

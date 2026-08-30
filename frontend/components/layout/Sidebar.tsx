@@ -9,7 +9,7 @@ import {
   NotebookPen, GraduationCap, ChevronDown, ChevronRight, X, UserCheck,
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
   Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
-  SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2, BookMarked,
+  SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2, BookMarked, LayoutTemplate,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -156,8 +156,36 @@ const NAV: NavItem[] = [
         icon: BookOpen,
         children: [
           { label: 'All Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
-          { label: 'Results', href: '/exams/results', icon: BarChart3, permission: 'exam.view', indent: true },
-          { label: 'Examination Settings', href: '/exams/templates', icon: SettingsIcon, permission: 'exam.view', lockUnless: 'exam.schedule', indent: true },
+          { label: 'Results', href: '/exams/results', icon: BarChart3, permission: 'exam.view' },
+          // Each leaf here is one tab of /exams/templates, deep-linked via
+          // ?tab= (kept in step with EXAM_TEMPLATES_TABS in that page) —
+          // exposes what used to be one long scrolling page as separately
+          // reachable sections.
+          {
+            label: 'Examination Settings',
+            icon: SettingsIcon,
+            children: [
+              { label: 'Time Slots', href: '/exams/templates?tab=Time+Slots', icon: Clock, permission: 'exam.view', lockUnless: 'exam.schedule' },
+              { label: 'Exam Structure (Annually)', href: '/exams/templates?tab=Exam+Structure+(Annually)', icon: Wand2, permission: 'exam.view', lockUnless: 'exam.schedule' },
+              { label: 'Exam Templates', href: '/exams/templates?tab=Exam+Templates', icon: LayoutTemplate, permission: 'exam.view', lockUnless: 'exam.schedule' },
+            ],
+          },
+          // Same pattern, one leaf per tab of /exams/result-settings
+          // (kept in step with RESULT_SETTINGS_TABS in that page).
+          {
+            label: 'Result Settings',
+            icon: SlidersHorizontal,
+            children: [
+              { label: 'Class Rules', href: '/exams/result-settings?tab=Class+Rules', icon: GraduationCap, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
+              { label: 'Exam Type Rules', href: '/exams/result-settings?tab=Exam+Type+Rules', icon: Layers, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
+              { label: 'Subject Overrides', href: '/exams/result-settings?tab=Subject+Overrides', icon: BookOpen, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
+              { label: 'Grade Scales', href: '/exams/result-settings?tab=Grade+Scales', icon: BarChart3, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
+              { label: 'Remarks Rules', href: '/exams/result-settings?tab=Remarks+Rules', icon: FileText, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
+              { label: 'Term Templates', href: '/exams/result-settings?tab=Term+Templates', icon: CalendarClock, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
+              { label: 'Apply Preset', href: '/exams/result-settings?tab=Apply+Preset', icon: ClipboardList, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
+              { label: 'Publish Workflow', href: '/exams/result-settings?tab=Publish+Workflow', icon: Send, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
+            ],
+          },
         ],
       },
       {
@@ -322,12 +350,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
   const isActive = (href: string) => href === activeHref
 
-  // Two levels deep now that Academics nests Timetable/Examinations as
-  // their own sub-groups (see NAV above) — a direct child match still
-  // expands just the top-level group as before, but a match on a
-  // grandchild (e.g. /timetable/setup) needs to expand both the top-level
-  // group AND the child sub-group it lives in, or Academics would open
-  // with Timetable's own list collapsed shut.
+  // Three levels deep now that Examinations nests Examination Settings/
+  // Result Settings as their own sub-groups one level below Timetable/
+  // Examinations itself (see NAV above) — a match on a great-grandchild
+  // (e.g. /exams/templates?tab=Time+Slots) needs to expand all three
+  // ancestor groups, or Academics would open with Examinations' own list
+  // collapsed shut, same reasoning as the two-level case just below it.
   const getActiveGroup = React.useCallback((path: string) => {
     const hrefMatchesPath = (href?: string) =>
       !!href && (path === href.split('?')[0] || path.startsWith(href.split('?')[0] + '/'))
@@ -339,6 +367,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           matches.push(top.label)
         } else if (child.children?.some((gc) => hrefMatchesPath(gc.href))) {
           matches.push(top.label, child.label)
+        } else if (child.children?.some((gc) => gc.children?.some((ggc) => hrefMatchesPath(ggc.href)))) {
+          const gc = child.children!.find((g) => g.children?.some((ggc) => hrefMatchesPath(ggc.href)))!
+          matches.push(top.label, child.label, gc.label)
         }
       }
     }
@@ -562,6 +593,69 @@ function NavEntry({
                     <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border/60 pl-3 [animation-duration:var(--duration-fast)] animate-in fade-in-0 slide-in-from-top-1">
                       {child.children.map((gc) => {
                         const GcIcon = gc.icon
+
+                        // A grandchild that's itself a sub-group
+                        // (Examination Settings / Result Settings inside
+                        // Examinations) — same pattern one level deeper
+                        // again, own expanded/onToggle state keyed by its
+                        // own label, leaves rendered one notch smaller.
+                        if (gc.children?.length) {
+                          const gcOpen = expanded.includes(gc.label)
+                          const anyGreatGrandchildActive = gc.children.some((ggc) => ggc.href && isActive(ggc.href))
+                          return (
+                            <div key={gc.label}>
+                              <button
+                                onClick={() => onToggle(gc.label)}
+                                className={cn(
+                                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors [transition-duration:var(--duration-press)] ease-out',
+                                  anyGreatGrandchildActive ? 'font-medium text-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                                )}
+                              >
+                                <GcIcon className="h-3 w-3 shrink-0" />
+                                <span className="flex-1 text-left">{gc.label}</span>
+                                {gcOpen ? <ChevronDown className="h-2.5 w-2.5 opacity-60" /> : <ChevronRight className="h-2.5 w-2.5 opacity-60" />}
+                              </button>
+                              {gcOpen && (
+                                <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border/60 pl-2.5 [animation-duration:var(--duration-fast)] animate-in fade-in-0 slide-in-from-top-1">
+                                  {gc.children.map((ggc) => {
+                                    const GgcIcon = ggc.icon
+                                    const ggcActive = ggc.href ? isActive(ggc.href) : false
+                                    if (isLocked(ggc)) {
+                                      return (
+                                        <div
+                                          key={ggc.label}
+                                          className="flex cursor-not-allowed items-center gap-2 rounded-md px-2 py-1.5 text-[12px] text-muted-foreground/50"
+                                          title="You don't have permission to open this"
+                                        >
+                                          <GgcIcon className="h-2.5 w-2.5 shrink-0" />
+                                          <span className="flex-1">{ggc.label}</span>
+                                          <Lock className="h-2.5 w-2.5 shrink-0" />
+                                        </div>
+                                      )
+                                    }
+                                    return (
+                                      <Link
+                                        key={ggc.label}
+                                        href={ggc.href ?? '#'}
+                                        onClick={onClose}
+                                        className={cn(
+                                          'flex items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors [transition-duration:var(--duration-press)] ease-out',
+                                          ggcActive
+                                            ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+                                            : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                                        )}
+                                      >
+                                        <GgcIcon className="h-2.5 w-2.5 shrink-0" />
+                                        <span className="flex-1">{ggc.label}</span>
+                                      </Link>
+                                    )
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        }
+
                         const gcActive = gc.href ? isActive(gc.href) : false
                         if (isLocked(gc)) {
                           return (

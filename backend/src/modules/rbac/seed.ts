@@ -42,6 +42,10 @@ const PHASE2_MANAGEMENT = [
   'exam.result_generate', 'staff.payroll_view', 'certificate.template_manage',
   'exam.admit_card_generate', 'tc.view', 'team.credentials_manage', 'team.edit',
   'role.view', 'staff.homeroom_manage', 'staff.promote', 'staff.exit_manage',
+  // Result Settings — configuring per-class/exam-type pass criteria, grading
+  // mode and grade scales. Same tier as exam.result_generate: senior
+  // management, not day-to-day marks entry.
+  'exam.result_settings_manage',
 ]
 
 // Timetable module (20260829010000). Deliberately fine-grained: a school
@@ -101,7 +105,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   'HR': ['staff.view', 'staff.edit', 'staff.attendance_mark', 'staff.leave_approve', 'staff.payroll_manage', 'staff.recruitment_manage', 'staff.promote', 'staff.exit_manage', 'team.view', 'team.invite'],
   'Receptionist': ['student.view', 'admission.view', 'admission.create', 'admission.follow_up', 'complaint.view', 'complaint.create'],
   'Librarian': ['student.view', 'resource.view', 'resource.upload', 'resource.delete', 'timetable.view', ...TIMETABLE_TEACHER],
-  'Exam Controller': ['student.view', 'exam.view', 'exam.create', 'exam.publish', 'exam.schedule', 'exam.marks_entry', 'exam.result_publish', 'exam.freeze', 'exam.admit_card_generate', 'certificate.view', 'certificate.generate', 'tc.generate', 'syllabus.view'],
+  'Exam Controller': ['student.view', 'exam.view', 'exam.create', 'exam.publish', 'exam.schedule', 'exam.marks_entry', 'exam.result_publish', 'exam.freeze', 'exam.admit_card_generate', 'exam.result_settings_manage', 'certificate.view', 'certificate.generate', 'tc.generate', 'syllabus.view'],
   'Parent': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
   'Student': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
   // The person who actually runs this module day to day. Narrow on

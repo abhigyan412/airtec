@@ -96,11 +96,23 @@ describe('asyncHandler', () => {
 describe('errorHandler', () => {
   beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}) })
 
-  it('turns a ZodError into a 400 with details', () => {
+  it('turns a ZodError into a 400 with a readable field-level summary', () => {
+    // Was a flat 'Validation error' string with the real cause only ever
+    // logged server-side — every frontend toast across the app showed
+    // that same unhelpful string regardless of which field or why.
+    // error is now a human-readable "path: message" summary (still
+    // carrying the raw Zod issues in .details for anything that wants them).
     const res = mockRes()
-    const err: any = new Error('bad'); err.name = 'ZodError'; err.errors = [{ path: ['a'] }]
+    const err: any = new Error('bad'); err.name = 'ZodError'; err.errors = [{ path: ['a'], message: 'Required' }]
     errorHandler(err, req(), res, vi.fn() as unknown as NextFunction)
     expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'a: Required', details: err.errors }))
+  })
+
+  it('falls back to the flat string when a ZodError somehow has no issues', () => {
+    const res = mockRes()
+    const err: any = new Error('bad'); err.name = 'ZodError'; err.errors = []
+    errorHandler(err, req(), res, vi.fn() as unknown as NextFunction)
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'Validation error' }))
   })
 

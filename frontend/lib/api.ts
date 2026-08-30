@@ -376,6 +376,8 @@ export const classesApi = {
     create: (data: { name: string; class_id?: string; is_elective?: boolean }) =>
       api.post('/admission/subjects', data).then(r => r.data),
     delete: (id: string) => api.delete(`/admission/subjects/${id}`).then(r => r.data),
+    rescope: (name: string, class_ids: string[]) =>
+      api.post('/admission/subjects/rescope', { name, class_ids }).then(r => r.data),
   },
 }
 

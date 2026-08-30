@@ -8,6 +8,23 @@ import { getTeacherContext } from '../../shared/utils/teacherContext'
 
 const router = Router()
 
+// A split subject can have Theory and Practical on different days — an
+// admit card that only ever showed exam_date would silently omit the
+// Practical date entirely. Shows both when they differ, one when they
+// don't (or when the subject isn't split), short-form to match each
+// card's existing date formatting.
+function subjectDateLabel(s: any, opts: { short?: boolean } = {}): string {
+  const fmt = (d: string) => opts.short
+    ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+    : new Date(d).toLocaleDateString('en-IN')
+  const isSplit = s.theory_max_marks != null && s.practical_max_marks != null
+  if (!isSplit || !s.practical_exam_date || s.practical_exam_date === s.exam_date) {
+    return s.exam_date ? fmt(s.exam_date) : '-'
+  }
+  const theoryPart = s.exam_date ? `Th: ${fmt(s.exam_date)}` : 'Th: -'
+  return `${theoryPart} · Pr: ${fmt(s.practical_exam_date)}`
+}
+
 // ── PUBLIC ROUTES (no auth required) ─────────────────────────
 
 router.get('/verify/tc/:tc_number', asyncHandler(async (req: Request, res: Response) => {
@@ -122,7 +139,7 @@ router.get('/admit-card/:exam_id/:student_id', requirePermissionV2('exam.admit_c
   const subjectRows = (subjects ?? []).map((s: any) => `
     <tr>
       <td style="padding:10px 14px;border-bottom:1px solid #e5e7eb;font-weight:500;">${s.subject_name}</td>
-      <td style="padding:10px 14px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.exam_date ? new Date(s.exam_date).toLocaleDateString('en-IN') : '-'}</td>
+      <td style="padding:10px 14px;border-bottom:1px solid #e5e7eb;text-align:center;">${subjectDateLabel(s)}</td>
       <td style="padding:10px 14px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.start_time ?? '-'}</td>
       <td style="padding:10px 14px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.max_marks}</td>
     </tr>`).join('')
@@ -196,7 +213,7 @@ router.get('/admit-cards/bulk/:exam_id', requirePermissionV2('exam.admit_card_ge
     const rows = classSubjects.map((s: any) => `
       <tr>
         <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;font-size:12px;">${s.subject_name}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center;font-size:12px;">${s.exam_date ? new Date(s.exam_date).toLocaleDateString('en-IN', { day:'2-digit', month:'short' }) : '-'}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center;font-size:12px;">${subjectDateLabel(s, { short: true })}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center;font-size:12px;">${s.start_time ?? '-'}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center;font-size:12px;">${s.max_marks}</td>
       </tr>`).join('')
@@ -822,6 +839,14 @@ function generateReportCard(rc: any, marks: any[]): string {
   const school = student.schools ?? {}
   const exam = rc.exams ?? {}
   const gradeColor = (g: string) => ['A+','A'].includes(g) ? '#16a34a' : ['B+','B'].includes(g) ? '#2563eb' : g === 'C' ? '#d97706' : '#dc2626'
+  // result_status (pass/fail/compartment/not_eligible/withheld) is set by
+  // every generate-results run since the Result Settings engine shipped —
+  // falls back to the plain is_pass boolean for a report card generated
+  // before that.
+  const resultStatusLabel = (status: string | null | undefined, isPass: boolean) =>
+    ({ pass: 'Pass', fail: 'Fail', compartment: 'Compartment', not_eligible: 'Not Eligible', withheld: 'Withheld' } as Record<string, string>)[status ?? ''] ?? (isPass ? 'Pass' : 'Fail')
+  const resultStatusColor = (status: string | null | undefined, isPass: boolean) =>
+    ({ pass: '#16a34a', fail: '#dc2626', compartment: '#d97706', not_eligible: '#6b7280', withheld: '#6b7280' } as Record<string, string>)[status ?? ''] ?? (isPass ? '#16a34a' : '#dc2626')
   const marksRows = marks.map(m => {
     const sub = m.exam_subjects ?? {}
     const pct = sub.max_marks ? Math.round((m.marks_obtained / sub.max_marks) * 100) : 0
@@ -863,8 +888,10 @@ function generateReportCard(rc: any, marks: any[]): string {
         <div><div style="font-size:22px;font-weight:bold;color:#4F46E5;">${rc.obtained_marks ?? 0}/${rc.total_marks ?? 0}</div><div style="font-size:11px;color:#6b7280;margin-top:2px;">Marks</div></div>
         <div><div style="font-size:22px;font-weight:bold;color:#7C3AED;">${rc.percentage ?? 0}%</div><div style="font-size:11px;color:#6b7280;margin-top:2px;">Percentage</div></div>
         <div><div style="font-size:22px;font-weight:bold;color:${gradeColor(rc.grade ?? 'F')};">${rc.grade ?? '-'}</div><div style="font-size:11px;color:#6b7280;margin-top:2px;">Grade</div></div>
-        <div><div style="font-size:22px;font-weight:bold;color:${rc.is_pass ? '#16a34a' : '#dc2626'};">${rc.is_pass ? 'Pass' : 'Fail'}</div><div style="font-size:11px;color:#6b7280;margin-top:2px;">Result</div></div>
+        <div><div style="font-size:22px;font-weight:bold;color:${resultStatusColor(rc.result_status, rc.is_pass)};">${resultStatusLabel(rc.result_status, rc.is_pass)}</div><div style="font-size:11px;color:#6b7280;margin-top:2px;">Result</div></div>
       </div>
+      ${rc.overall_cgpa != null ? `<div style="text-align:center;font-size:12px;color:#6b7280;margin-top:-8px;margin-bottom:12px;">CGPA: <b style="color:#111827;">${rc.overall_cgpa}</b></div>` : ''}
+      ${Number(rc.grace_marks_applied_total) > 0 ? `<div style="text-align:center;font-size:12px;color:#2563eb;margin-top:-8px;margin-bottom:12px;">Includes ${rc.grace_marks_applied_total} grace mark${Number(rc.grace_marks_applied_total) === 1 ? '' : 's'}</div>` : ''}
       <table>
         <thead><tr><th>Subject</th><th style="text-align:center;">Max</th><th style="text-align:center;">Obtained</th><th style="text-align:center;">%</th><th style="text-align:center;">Grade</th></tr></thead>
         <tbody>${marksRows}</tbody>

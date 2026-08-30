@@ -20,9 +20,20 @@ export const errorHandler = (
   console.error(`[Error] ${req.method} ${req.path}:`, err)
 
   if (err.name === 'ZodError') {
+    // The flat "Validation error" string used to be the only thing any
+    // caller ever saw — every frontend onError reads response.data.error,
+    // none of them read .details, so a real field-level problem (wrong
+    // type, out-of-range value, missing required field) was completely
+    // invisible outside this server-side log line. Building a readable
+    // "field: message" summary into .error itself means every existing
+    // toast across the app starts saying something useful, with zero
+    // frontend changes needed.
+    const summary = (err.errors ?? [])
+      .map((e: any) => `${(e.path ?? []).join('.') || 'body'}: ${e.message}`)
+      .join('; ')
     return res.status(400).json({
       success: false,
-      error: 'Validation error',
+      error: summary || 'Validation error',
       details: err.errors,
     })
   }

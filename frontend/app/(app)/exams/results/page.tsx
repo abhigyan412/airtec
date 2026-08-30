@@ -1,8 +1,11 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { api, documentsApi } from '@/lib/api'
-import { ArrowLeft, BarChart2 } from 'lucide-react'
+import { ResultStatusBadge } from '@/components/exams/ResultStatusBadge'
+import { TermResultsBrowser } from '@/components/exams/TermResultsBrowser'
+import { ArrowLeft, BarChart2, ExternalLink } from 'lucide-react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -23,6 +26,18 @@ import {
 // collapsible grouping; this is the direct "pick an exam, narrow to one
 // class or section" path, one level deeper than that grouping ever goes.
 export default function ExamResultsPage() {
+  const searchParams = useSearchParams()
+  const initialMode = searchParams.get('mode')
+  const [mode, setMode] = useState<'exam' | 'term'>(initialMode === 'term' ? 'term' : 'exam')
+  // A link into this page (e.g. result-settings' redirect after bulk-
+  // creating Terms) only changes ?mode= via client-side navigation — this
+  // component stays mounted, so the useState initializer above never sees
+  // a later URL's mode on its own.
+  useEffect(() => {
+    const urlMode = searchParams.get('mode')
+    if (urlMode === 'term' && mode !== 'term') setMode('term')
+    else if (urlMode === 'exam' && mode !== 'exam') setMode('exam')
+  }, [searchParams])
   const [examId, setExamId] = useState('')
   const [classId, setClassId] = useState('')
   const [sectionId, setSectionId] = useState('')
@@ -82,6 +97,19 @@ export default function ExamResultsPage() {
         />
       </div>
 
+      <div className="flex w-fit items-center gap-1 rounded-xl bg-muted p-1">
+        {(['exam', 'term'] as const).map(m => (
+          <button key={m} onClick={() => setMode(m)}
+            className={`rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-colors ${mode === m ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+            {m === 'exam' ? 'Single Exam' : 'Composite Term'}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'term' && <TermResultsBrowser />}
+
+      {mode === 'exam' && (
+      <>
       <Card className="flex flex-wrap items-end gap-4 p-5">
         <div className="min-w-[220px] flex-1 space-y-1.5">
           <Label>Exam</Label>
@@ -91,6 +119,11 @@ export default function ExamResultsPage() {
               {(exams ?? []).map((e: any) => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}
             </SelectContent>
           </Select>
+          {examId && (
+            <Link href={`/exams/${examId}?tab=Results`} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+              View full exam <ExternalLink className="h-3 w-3" />
+            </Link>
+          )}
         </div>
         <div className="min-w-[160px] space-y-1.5">
           <Label>Class</Label>
@@ -160,18 +193,27 @@ export default function ExamResultsPage() {
                     <TableCell className="text-muted-foreground">
                       {rc.students?.classes?.name}{rc.students?.sections?.name ? ` · ${rc.students.sections.name}` : ''}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{rc.obtained_marks}/{rc.total_marks}</TableCell>
-                    <TableCell className="font-semibold text-foreground">{rc.percentage}%</TableCell>
-                    <TableCell>
-                      <Badge variant={
-                        ['A+', 'A'].includes(rc.grade) ? 'success' :
-                        ['B+', 'B'].includes(rc.grade) ? 'info' :
-                        rc.grade === 'C' ? 'warning' : 'destructive'}>
-                        {rc.grade}
-                      </Badge>
+                    <TableCell className="text-muted-foreground">
+                      {rc.obtained_marks}/{rc.total_marks}
+                      {Number(rc.grace_marks_applied_total) > 0 && (
+                        <span className="ml-1.5 text-xs text-info" title="Grace marks applied">+{rc.grace_marks_applied_total} grace</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-semibold text-foreground">
+                      {rc.percentage}%{rc.overall_cgpa != null && <span className="ml-1 text-xs font-normal text-muted-foreground">· {rc.overall_cgpa} CGPA</span>}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={rc.is_pass ? 'success' : 'destructive'}>{rc.is_pass ? 'Pass' : 'Fail'}</Badge>
+                      {rc.grade ? (
+                        <Badge variant={
+                          ['A+', 'A', 'A1', 'A2'].includes(rc.grade) ? 'success' :
+                          ['B+', 'B', 'B1', 'B2'].includes(rc.grade) ? 'info' :
+                          ['C', 'C1', 'C2'].includes(rc.grade) ? 'warning' : 'destructive'}>
+                          {rc.grade}
+                        </Badge>
+                      ) : <span className="text-xs text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell>
+                      <ResultStatusBadge status={rc.result_status} isPass={rc.is_pass} />
                     </TableCell>
                     <TableCell>
                       <a href={documentsApi.reportCard(rc.exam_id, rc.student_id)}
@@ -186,6 +228,8 @@ export default function ExamResultsPage() {
             </Table>
           </div>
         </Card>
+      )}
+      </>
       )}
     </div>
   )

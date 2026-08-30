@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { formatDate } from '@/lib/utils'
-import { Plus, BookOpen, CheckCircle, Clock, FileText, Loader2, ChevronRight } from 'lucide-react'
+import { Plus, BookOpen, CheckCircle, Clock, FileText, Loader2, ChevronRight, LayoutTemplate, CalendarRange } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/shared/PageHeader'
@@ -11,10 +11,13 @@ import { StatCard } from '@/components/shared/StatCard'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge, type BadgeProps } from '@/components/ui/badge'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ApplyTemplateModal } from '@/components/exams/ApplyTemplateModal'
+import { NeedsAttentionPanel } from '@/components/exams/NeedsAttentionPanel'
+import { STATUS_VARIANT } from '@/components/exams/statusVariant'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
@@ -24,18 +27,11 @@ import {
 
 const EXAM_TYPES = ['unit_test','monthly','half_yearly','annual','pre_board','practical','other']
 
-const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
-  draft:            'secondary',
-  published:        'info',
-  ongoing:          'warning',
-  completed:        'default',
-  result_declared:  'success',
-}
-
 const titleCase = (t: string) => t.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())
 
 export default function ExamsPage() {
   const [showNew, setShowNew] = useState(false)
+  const [showApplyTemplate, setShowApplyTemplate] = useState(false)
   const qc = useQueryClient()
 
   const { data: stats, isLoading: statsLoading } = useQuery({
@@ -65,11 +61,18 @@ export default function ExamsPage() {
         description="Manage exams, datesheets, marks and results"
         icon={BookOpen}
         actions={
-          <Button onClick={() => setShowNew(true)}>
-            <Plus className="h-4 w-4" /> New Exam
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setShowApplyTemplate(true)}>
+              <LayoutTemplate className="h-4 w-4" /> New from Template
+            </Button>
+            <Button onClick={() => setShowNew(true)}>
+              <Plus className="h-4 w-4" /> New Exam
+            </Button>
+          </>
         }
       />
+
+      <NeedsAttentionPanel />
 
       {/* Stats */}
       {statsLoading ? (
@@ -101,9 +104,14 @@ export default function ExamsPage() {
               title="No exams yet"
               description="Create an exam to build its datesheet, enter marks and publish results."
               action={
-                <Button onClick={() => setShowNew(true)}>
-                  <Plus className="h-4 w-4" /> New Exam
-                </Button>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <Button variant="outline" onClick={() => setShowApplyTemplate(true)}>
+                    <LayoutTemplate className="h-4 w-4" /> New from Template
+                  </Button>
+                  <Button onClick={() => setShowNew(true)}>
+                    <Plus className="h-4 w-4" /> New Exam
+                  </Button>
+                </div>
               }
             />
           ) : (
@@ -146,6 +154,11 @@ export default function ExamsPage() {
                         Complete
                       </Button>
                     )}
+                    <Button variant="outline" size="icon" className="h-8 w-8" asChild title="Datesheet">
+                      <Link href={`/exams/${exam.id}?tab=Datesheet`}>
+                        <CalendarRange className="h-4 w-4" />
+                      </Link>
+                    </Button>
                     <Button variant="secondary" size="sm" asChild>
                       <Link href={`/exams/${exam.id}`}>
                         Manage <ChevronRight className="h-3 w-3" />
@@ -161,6 +174,7 @@ export default function ExamsPage() {
       </Card>
 
       {showNew && <NewExamModal onClose={() => setShowNew(false)} />}
+      {showApplyTemplate && <ApplyTemplateModal onClose={() => setShowApplyTemplate(false)} />}
     </div>
   )
 }

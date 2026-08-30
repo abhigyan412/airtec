@@ -133,6 +133,75 @@ interface ActOnWorkflowResult {
 }
 
 /**
+ * Whether userId may act on a step requiring roleId, for schoolId —
+ * role match, School Admin bypass, or leave-delegate fallback. Extracted
+ * out of actOnWorkflow so a route can preview "can this user act right
+ * now" (e.g. to render Approve/Reject controls) without duplicating this
+ * three-way check, which used to only exist inline inside actOnWorkflow.
+ */
+export async function canActOnStep(params: { schoolId: string; userId: string; roleId: string }): Promise<{ allowed: boolean; delegateFor: string | null }> {
+  const { schoolId, userId, roleId } = params
+
+  // Verify the acting user has the role required for this step
+  const { data: userRole } = await supabase
+    .from('user_roles')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('school_id', schoolId)
+    .eq('role_id', roleId)
+    .maybeSingle()
+
+  if (userRole) return { allowed: true, delegateFor: null }
+
+  // School Admin bypass: check if user has the "School Admin" role
+  const { data: adminCheck } = await supabase
+    .from('user_roles')
+    .select('id, roles!inner(name)')
+    .eq('user_id', userId)
+    .eq('school_id', schoolId)
+    .eq('roles.name', 'School Admin')
+    .maybeSingle()
+  if (adminCheck) return { allowed: true, delegateFor: null }
+
+  // Delegated-approver fallback: a workflow step is authorized by ROLE,
+  // not by one specific person — anyone holding the role can act. That
+  // only stalls a queue when a school has exactly one holder of that
+  // role and they're on approved leave today. Rather than special-case
+  // this for Leave Approval alone, it's solved once here so it covers
+  // every workflow (Exit, Regularization, Comp-Off, Leave) that routes
+  // through actOnWorkflow. A user acts as delegate if: someone who
+  // nominated them (staff_profiles.leave_delegate_id) holds this step's
+  // role AND has an approved leave_requests row covering today.
+  const { data: delegators } = await supabase
+    .from('staff_profiles')
+    .select('user_id, users:user_id(full_name)')
+    .eq('school_id', schoolId)
+    .eq('leave_delegate_id', userId)
+
+  if (delegators?.length) {
+    const { data: roleHolders } = await supabase
+      .from('user_roles').select('user_id')
+      .eq('school_id', schoolId).eq('role_id', roleId)
+      .in('user_id', delegators.map(d => d.user_id))
+
+    const today = new Date().toISOString().slice(0, 10)
+    for (const holder of roleHolders ?? []) {
+      const { data: onLeave } = await supabase
+        .from('leave_requests').select('id')
+        .eq('user_id', holder.user_id).eq('status', 'approved')
+        .lte('from_date', today).gte('to_date', today)
+        .limit(1).maybeSingle()
+      if (onLeave) {
+        const delegator = delegators.find(d => d.user_id === holder.user_id)
+        return { allowed: true, delegateFor: (delegator as any)?.users?.full_name ?? 'the assigned approver' }
+      }
+    }
+  }
+
+  return { allowed: false, delegateFor: null }
+}
+
+/**
  * Records an approval/rejection action on the workflow's CURRENT step,
  * verifying the acting user holds the role required for that step.
  *
@@ -167,68 +236,9 @@ export async function actOnWorkflow(params: ActOnWorkflowParams): Promise<ActOnW
 
   if (stepErr || !currentStep) return { success: false, error: 'Current workflow step not found' }
 
-  // Verify the acting user has the role required for this step
-  const { data: userRole, error: roleErr } = await supabase
-    .from('user_roles')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('school_id', schoolId)
-    .eq('role_id', currentStep.role_id)
-    .maybeSingle()
+  const { allowed, delegateFor } = await canActOnStep({ schoolId, userId, roleId: currentStep.role_id })
 
-  // School Admin bypass: check if user has the "School Admin" role
-  let isSuperUser = false
-  if (!userRole) {
-    const { data: adminCheck } = await supabase
-      .from('user_roles')
-      .select('id, roles!inner(name)')
-      .eq('user_id', userId)
-      .eq('school_id', schoolId)
-      .eq('roles.name', 'School Admin')
-      .maybeSingle()
-    isSuperUser = !!adminCheck
-  }
-
-  // Delegated-approver fallback: a workflow step is authorized by ROLE,
-  // not by one specific person — anyone holding the role can act. That
-  // only stalls a queue when a school has exactly one holder of that
-  // role and they're on approved leave today. Rather than special-case
-  // this for Leave Approval alone, it's solved once here so it covers
-  // every workflow (Exit, Regularization, Comp-Off, Leave) that routes
-  // through actOnWorkflow. A user acts as delegate if: someone who
-  // nominated them (staff_profiles.leave_delegate_id) holds this step's
-  // role AND has an approved leave_requests row covering today.
-  let delegateFor: string | null = null
-  if (!userRole && !isSuperUser) {
-    const { data: delegators } = await supabase
-      .from('staff_profiles')
-      .select('user_id, users:user_id(full_name)')
-      .eq('school_id', schoolId)
-      .eq('leave_delegate_id', userId)
-
-    if (delegators?.length) {
-      const { data: roleHolders } = await supabase
-        .from('user_roles').select('user_id')
-        .eq('school_id', schoolId).eq('role_id', currentStep.role_id)
-        .in('user_id', delegators.map(d => d.user_id))
-
-      const today = new Date().toISOString().slice(0, 10)
-      for (const holder of roleHolders ?? []) {
-        const { data: onLeave } = await supabase
-          .from('leave_requests').select('id')
-          .eq('user_id', holder.user_id).eq('status', 'approved')
-          .lte('from_date', today).gte('to_date', today)
-          .limit(1).maybeSingle()
-        if (onLeave) {
-          const delegator = delegators.find(d => d.user_id === holder.user_id)
-          delegateFor = (delegator as any)?.users?.full_name ?? 'the assigned approver'
-          break
-        }
-      }
-    }
-  }
-
-  if (!userRole && !isSuperUser && !delegateFor) {
+  if (!allowed) {
     return { success: false, error: `You don't have the "${(currentStep as any).roles?.name}" role required for this step` }
   }
 
@@ -299,7 +309,7 @@ export async function getWorkflowStatus(entityType: string, entityId: string, sc
     .select(`
       id, status, started_at, completed_at, workflow_id,
       workflow_definitions ( name ),
-      current_step:current_step_id ( id, step_order, action_name, roles ( name ) )
+      current_step:current_step_id ( id, step_order, role_id, action_name, roles ( name ) )
     `)
     .eq('entity_type', entityType)
     .eq('entity_id', entityId)
@@ -318,7 +328,7 @@ export async function getWorkflowStatus(entityType: string, entityId: string, sc
       .order('acted_at'),
     supabase
       .from('workflow_steps')
-      .select('id, step_order, action_name, roles ( name )')
+      .select('id, step_order, role_id, action_name, roles ( name )')
       .eq('workflow_id', (instance as any).workflow_id)
       .order('step_order'),
   ])

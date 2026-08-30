@@ -2605,6 +2605,53 @@ router.delete('/subjects/:id', requirePermissionV2('settings.manage'),
   })
 )
 
+// POST /subjects/rescope — "which classes should this subject actually
+// belong to", as a set operation: the given class_ids becomes the
+// complete, authoritative list for this subject name, replacing
+// whatever it was before (including undoing an incorrectly school-wide
+// class_id-null row, e.g. "Accountancy" that should only ever have been
+// Class 11-12). Found necessary when Result Settings' bulk subject-marks
+// tool started showing every class as eligible for subjects that are
+// really senior-secondary-only, because most subjects in this school
+// were created without ever picking a class.
+router.post('/subjects/rescope', requirePermissionV2('settings.manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { name, class_ids } = req.body
+    const school_id = req.user!.school_id
+    if (!name?.trim()) return res.status(400).json({ success: false, error: 'name is required' })
+    if (!Array.isArray(class_ids) || !class_ids.length) return res.status(400).json({ success: false, error: 'At least one class is required' })
+    const trimmedName = name.trim()
+    const uniqueClassIds = [...new Set(class_ids)] as string[]
+
+    const { data: existingRows } = await supabase
+      .from('subjects').select('id, class_id').eq('school_id', school_id).eq('name', trimmedName)
+
+    // Any class_id-null ("school-wide") row for this name is exactly
+    // what's being replaced by an explicit class list — always removed,
+    // never left behind alongside the new scoped rows.
+    const globalRowIds = (existingRows ?? []).filter(r => r.class_id == null).map(r => r.id)
+    const existingClassIds = new Set((existingRows ?? []).filter(r => r.class_id != null).map(r => r.class_id as string))
+
+    const toRemoveIds = [
+      ...globalRowIds,
+      ...(existingRows ?? []).filter(r => r.class_id != null && !uniqueClassIds.includes(r.class_id as string)).map(r => r.id),
+    ]
+    const toAddClassIds = uniqueClassIds.filter(id => !existingClassIds.has(id))
+
+    if (toRemoveIds.length) {
+      const { error } = await supabase.from('subjects').delete().in('id', toRemoveIds)
+      if (error) return res.status(400).json({ success: false, error: error.message })
+    }
+    if (toAddClassIds.length) {
+      const { error } = await supabase.from('subjects')
+        .insert(toAddClassIds.map(class_id => ({ school_id, name: trimmedName, class_id })))
+      if (error) return res.status(400).json({ success: false, error: error.message })
+    }
+
+    res.json({ success: true, data: { added: toAddClassIds.length, removed: toRemoveIds.length } })
+  })
+)
+
 // ── ACADEMIC CALENDAR — holiday list + weekly-off pattern. This is
 // the source of truth attendance.report reads "working days" from,
 // so a date only counts against a student's attendance % if it's

@@ -1,14 +1,18 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { api, admitCardApi, documentsApi, classesApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { usePermissions } from '@/lib/usePermissions'
+import { ResultStatusBadge } from '@/components/exams/ResultStatusBadge'
+import { STATUS_VARIANT } from '@/components/exams/statusVariant'
 import { cn, formatDate } from '@/lib/utils'
 import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone, BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
+import { Alert } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -30,24 +34,52 @@ const TABS = ['Datesheet', 'Marks Entry', 'Results']
 
 const titleCase = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
-const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
-  draft: 'secondary',
-  published: 'info',
-  ongoing: 'warning',
-  completed: 'default',
-  result_declared: 'success',
-  result_frozen: 'info',
-  result_verified: 'default',
-  result_published: 'success',
+// Categorical subject colouring for the Datesheet grid, matching Timetable's
+// convention (hash the subject name to a stable hue so unanticipated
+// subjects still get distinct, non-grey colours) — written out locally
+// rather than importing timetable/components.tsx across module boundaries,
+// since that file's helpers are scoped to the timetable feature.
+const DATESHEET_TONES: Record<string, string> = {
+  indigo: 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 ring-1 ring-inset ring-indigo-500/20',
+  blue: 'bg-blue-500/10 text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-500/20',
+  emerald: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-1 ring-inset ring-emerald-500/20',
+  orange: 'bg-orange-500/10 text-orange-700 dark:text-orange-300 ring-1 ring-inset ring-orange-500/20',
+  purple: 'bg-purple-500/10 text-purple-700 dark:text-purple-300 ring-1 ring-inset ring-purple-500/20',
+  cyan: 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 ring-1 ring-inset ring-cyan-500/20',
+  pink: 'bg-pink-500/10 text-pink-700 dark:text-pink-300 ring-1 ring-inset ring-pink-500/20',
+  lime: 'bg-lime-500/10 text-lime-700 dark:text-lime-300 ring-1 ring-inset ring-lime-500/20',
+  yellow: 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-300 ring-1 ring-inset ring-yellow-500/20',
+  rose: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-500/20',
+  teal: 'bg-teal-500/10 text-teal-700 dark:text-teal-300 ring-1 ring-inset ring-teal-500/20',
+  violet: 'bg-violet-500/10 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/20',
+  amber: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-500/20',
+  sky: 'bg-sky-500/10 text-sky-700 dark:text-sky-300 ring-1 ring-inset ring-sky-500/20',
+  fuchsia: 'bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300 ring-1 ring-inset ring-fuchsia-500/20',
+  green: 'bg-green-500/10 text-green-700 dark:text-green-300 ring-1 ring-inset ring-green-500/20',
+}
+const DATESHEET_HUES = Object.keys(DATESHEET_TONES)
+function subjectColor(subject: string): string {
+  const key = subject.toLowerCase().trim()
+  let hash = 0
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0
+  return DATESHEET_TONES[DATESHEET_HUES[hash % DATESHEET_HUES.length]]
 }
 
 export default function ExamDetailPage() {
   const { id } = useParams<{ id: string }>()
-  const [tab, setTab] = useState('Datesheet')
+  const searchParams = useSearchParams()
+  const initialTab = searchParams.get('tab')
+  const [tab, setTab] = useState(TABS.includes(initialTab as any) ? initialTab! : 'Datesheet')
+  // Next.js reuses this component across navigations that only change the
+  // [id] param or ?tab= (e.g. clicking a different Needs Attention item) —
+  // it doesn't remount, so the useState initializer above (which only
+  // runs once, on first mount) never sees a later URL's tab on its own.
+  useEffect(() => {
+    const urlTab = searchParams.get('tab')
+    if (urlTab && TABS.includes(urlTab) && urlTab !== tab) setTab(urlTab)
+  }, [searchParams])
   const [showAddSubject, setShowAddSubject] = useState(false)
   const [editingSubject, setEditingSubject] = useState<any>(null)
-  const [scheduleClassFilter, setScheduleClassFilter] = useState('')
-  const [scheduleSubjectFilter, setScheduleSubjectFilter] = useState('')
   const qc = useQueryClient()
 
   const { data: exam, isLoading } = useQuery({
@@ -112,38 +144,42 @@ export default function ExamDetailPage() {
     )
   }
 
-  // An exam's datesheet can span multiple classes at once (e.g. one
-  // "Unit Test 4" covering Class 1 English and Class 2 Economics as
-  // separate rows) — a flat table mixing every class/subject together
-  // reads as a jumble once there's more than a couple of rows, so the
-  // schedule is filterable down to one class and/or one subject.
+  // Datesheet grid: one row per class, one column per date — reading like
+  // a real school datesheet/timetable rather than a flat list. A split
+  // subject can appear in two date columns (Theory's date and Practical's,
+  // when they differ) or one (when they're the same, or it isn't split).
   const examSubjects: any[] = exam?.exam_subjects ?? []
   const scheduleClasses = Array.from(
     new Map(examSubjects.map((s: any) => [s.class_id, { id: s.class_id, name: s.classes?.name }])).values()
   ).filter(c => c.id)
-  const scheduleSubjectsForClass = Array.from(new Set(
-    examSubjects
-      .filter((s: any) => !scheduleClassFilter || s.class_id === scheduleClassFilter)
-      .map((s: any) => s.subject_name)
-  )).sort()
-  const filteredSchedule = examSubjects.filter((s: any) =>
-    (!scheduleClassFilter || s.class_id === scheduleClassFilter) &&
-    (!scheduleSubjectFilter || s.subject_name === scheduleSubjectFilter)
-  )
 
-  // A datesheet's whole point is "what's happening on which date" — date
-  // is the primary organizing axis, Class/Subject above are just narrowing
-  // filters on top of it. Grouped and sorted chronologically rather than
-  // left in whatever order the rows happen to have been added in.
-  const scheduleByDate = new Map<string, any[]>()
-  for (const s of filteredSchedule) {
-    const key = s.exam_date ?? ''
-    if (!scheduleByDate.has(key)) scheduleByDate.set(key, [])
-    scheduleByDate.get(key)!.push(s)
+  const scheduleDates = Array.from(new Set(
+    examSubjects.flatMap((s: any) => [s.exam_date, s.practical_exam_date].filter(Boolean))
+  )).sort((a: string, b: string) => a.localeCompare(b))
+
+  type ScheduleChip = { subject: any; suffix: string | null }
+  const scheduleGrid = new Map<string, Map<string, ScheduleChip[]>>() // class_id -> date ('' = unscheduled) -> chips
+  const pushChip = (classId: string, date: string, chip: ScheduleChip) => {
+    if (!scheduleGrid.has(classId)) scheduleGrid.set(classId, new Map())
+    const byDate = scheduleGrid.get(classId)!
+    if (!byDate.has(date)) byDate.set(date, [])
+    byDate.get(date)!.push(chip)
   }
-  const scheduleDateGroups = Array.from(scheduleByDate.entries())
-    .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
-    .map(([date, rows]) => ({ date, rows: rows.sort((a, b) => (a.start_time ?? '').localeCompare(b.start_time ?? '')) }))
+  for (const s of examSubjects) {
+    const isSplit = s.theory_max_marks != null && s.practical_max_marks != null
+    if (!isSplit) {
+      pushChip(s.class_id, s.exam_date ?? '', { subject: s, suffix: null })
+      continue
+    }
+    const sameDay = s.exam_date && s.practical_exam_date && s.exam_date === s.practical_exam_date
+    if (sameDay) {
+      pushChip(s.class_id, s.exam_date, { subject: s, suffix: null })
+      continue
+    }
+    if (s.exam_date) pushChip(s.class_id, s.exam_date, { subject: s, suffix: null })
+    if (s.practical_exam_date) pushChip(s.class_id, s.practical_exam_date, { subject: s, suffix: 'Practical' })
+    if (!s.exam_date && !s.practical_exam_date) pushChip(s.class_id, '', { subject: s, suffix: null })
+  }
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -172,7 +208,7 @@ export default function ExamDetailPage() {
                   Bulk Admit Cards
                 </a>
               </Button>
-              {(exam.status === 'completed' || exam.status === 'ongoing') && (
+              {exam.status === 'completed' && (
                 <Button
                   onClick={() => generateResults.mutate()}
                   disabled={generateResults.isPending}
@@ -201,29 +237,9 @@ export default function ExamDetailPage() {
           <Card>
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
               <h3 className="font-semibold text-foreground">Exam Schedule</h3>
-              <div className="flex flex-wrap items-center gap-2">
-                {scheduleClasses.length > 1 && (
-                  <Select value={scheduleClassFilter || 'all'} onValueChange={v => { setScheduleClassFilter(v === 'all' ? '' : v); setScheduleSubjectFilter('') }}>
-                    <SelectTrigger className="h-8 w-auto min-w-[130px] text-xs"><SelectValue placeholder="All classes" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All classes</SelectItem>
-                      {scheduleClasses.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                )}
-                {scheduleSubjectsForClass.length > 1 && (
-                  <Select value={scheduleSubjectFilter || 'all'} onValueChange={v => setScheduleSubjectFilter(v === 'all' ? '' : v)}>
-                    <SelectTrigger className="h-8 w-auto min-w-[130px] text-xs"><SelectValue placeholder="All subjects" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All subjects</SelectItem>
-                      {scheduleSubjectsForClass.map((s: string) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                )}
-                <Button variant="ghost" size="sm" onClick={() => setShowAddSubject(true)}>
-                  <Plus className="h-4 w-4" /> Add Subject
-                </Button>
-              </div>
+              <Button variant="ghost" size="sm" onClick={() => setShowAddSubject(true)}>
+                <Plus className="h-4 w-4" /> Add Subject
+              </Button>
             </div>
             {!examSubjects.length ? (
               <EmptyState
@@ -236,50 +252,57 @@ export default function ExamDetailPage() {
                   </Button>
                 }
               />
-            ) : !filteredSchedule.length ? (
-              <EmptyState
-                icon={FileText}
-                title="No subjects match this filter"
-                description="Clear the class/subject filter above to see the full datesheet."
-                action={
-                  <Button variant="outline" onClick={() => { setScheduleClassFilter(''); setScheduleSubjectFilter('') }}>
-                    Clear filters
-                  </Button>
-                }
-              />
             ) : (
-              <div className="divide-y divide-border">
-                {scheduleDateGroups.map(({ date, rows }) => (
-                  <div key={date || 'undated'} className="px-6 py-4">
-                    <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {date ? formatDate(date) : 'Date not set'}
-                    </p>
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="hover:bg-transparent">
-                          <TableHead>Subject</TableHead>
-                          <TableHead>Class</TableHead>
-                          <TableHead>Time</TableHead>
-                          <TableHead>Max Marks</TableHead>
-                          <TableHead>Pass Marks</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {rows.map((sub: any) => (
-                          <TableRow key={sub.id} onClick={() => setEditingSubject(sub)} className="cursor-pointer hover:bg-muted/40">
-                            <TableCell className="font-medium text-foreground">{sub.subject_name}</TableCell>
-                            <TableCell className="text-muted-foreground">{sub.classes?.name}</TableCell>
-                            <TableCell className="text-muted-foreground">
-                              {sub.start_time ? `${sub.start_time.slice(0, 5)}${sub.end_time ? `–${sub.end_time.slice(0, 5)}` : ''}` : '-'}
-                            </TableCell>
-                            <TableCell className="font-medium text-foreground">{sub.max_marks}</TableCell>
-                            <TableCell className="text-muted-foreground">{sub.pass_marks}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                ))}
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-muted/50 text-xs font-semibold uppercase text-muted-foreground">
+                      <th className="sticky left-0 z-10 bg-muted/50 px-4 py-3 text-left whitespace-nowrap">Class</th>
+                      {scheduleDates.map((date: string) => (
+                        <th key={date} className="px-4 py-3 text-left whitespace-nowrap">{formatDate(date)}</th>
+                      ))}
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Not Scheduled</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {scheduleClasses.map((c: any) => {
+                      const byDate = scheduleGrid.get(c.id) ?? new Map()
+                      return (
+                        <tr key={c.id} className="align-top">
+                          <td className="sticky left-0 z-10 bg-card px-4 py-3 font-medium text-foreground whitespace-nowrap">{c.name}</td>
+                          {scheduleDates.map((date: string) => (
+                            <td key={date} className="px-4 py-3 min-w-[160px]">
+                              <div className="flex flex-wrap gap-1.5">
+                                {(byDate.get(date) ?? []).map((chip: ScheduleChip) => (
+                                  <button
+                                    key={`${chip.subject.id}-${chip.suffix ?? ''}`}
+                                    onClick={() => setEditingSubject(chip.subject)}
+                                    className={cn('rounded-lg px-2 py-1 text-xs font-medium transition hover:opacity-80', subjectColor(chip.subject.subject_name))}
+                                  >
+                                    {chip.subject.subject_name}{chip.suffix ? ` (${chip.suffix})` : ''}
+                                  </button>
+                                ))}
+                              </div>
+                            </td>
+                          ))}
+                          <td className="px-4 py-3 min-w-[160px]">
+                            <div className="flex flex-wrap gap-1.5">
+                              {(byDate.get('') ?? []).map((chip: ScheduleChip) => (
+                                <button
+                                  key={chip.subject.id}
+                                  onClick={() => setEditingSubject(chip.subject)}
+                                  className={cn('rounded-lg px-2 py-1 text-xs font-medium transition hover:opacity-80', subjectColor(chip.subject.subject_name))}
+                                >
+                                  {chip.subject.subject_name}
+                                </button>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
           </Card>
@@ -291,14 +314,22 @@ export default function ExamDetailPage() {
 
         <TabsContent value="Results" className="mt-6">
           <div className="space-y-6">
+            <div className="flex justify-end">
+              <Link href="/exams/results" className="text-xs text-muted-foreground hover:text-foreground">
+                Browse all results ↗
+              </Link>
+            </div>
+            <TermMembershipWarning memberships={exam.term_memberships ?? []} />
             <FreezePublishPipeline examId={id} exam={exam} />
-            <ResultsView examId={id} />
+            {(exam.term_memberships ?? []).length > 0
+              ? <ScoresheetView examId={id} />
+              : <ResultsView examId={id} />}
           </div>
         </TabsContent>
       </Tabs>
 
       {showAddSubject && (
-        <AddSubjectModal examId={id} classes={classes ?? []} defaultTimeSlot={exam.default_time_slot} onClose={() => {
+        <AddSubjectModal examId={id} examType={exam.exam_type} classes={classes ?? []} defaultTimeSlot={exam.default_time_slot} onClose={() => {
           setShowAddSubject(false)
           qc.invalidateQueries({ queryKey: ['exam', id] })
         }} />
@@ -331,6 +362,31 @@ const STEP_LABELS: Record<string, string> = {
 }
 
 const RESULT_STATUSES = ['result_declared', 'result_frozen', 'result_verified', 'result_published']
+
+// A pure hint, never a block: this exam already feeds one or more
+// composite Terms, so publishing IT standalone risks a parent seeing two
+// different numbers for the same subject/period — this exam's own %, and
+// the Term's blended one. Some schools do want both (a Unit Test's quick
+// standalone result now, the official Term card later), so this only
+// nudges toward the Term, it never disables Freeze/Publish below.
+function TermMembershipWarning({ memberships }: { memberships: any[] }) {
+  if (!memberships.length) return null
+  return (
+    <Alert variant="warning" title="This exam is part of a composite Term">
+      <p>
+        It feeds into{' '}
+        {memberships.map((m: any, i: number) => (
+          <span key={m.id}>
+            {i > 0 && ', '}
+            <Link href={`/exams/result-groups/${m.id}`} className="font-medium underline hover:no-underline">{m.name}</Link>
+            {' '}<span className="text-xs">({m.status.replace(/_/g, ' ')})</span>
+          </span>
+        ))}
+        . Consider publishing that Term's result instead of this exam's standalone one, so parents only ever see the one official number for this period.
+      </p>
+    </Alert>
+  )
+}
 
 function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) {
   const { user } = useAuth()
@@ -424,15 +480,13 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
   const status = workflow.status as 'in_progress' | 'approved' | 'rejected' | 'cancelled'
   const canStart = ['school_admin', 'principal', 'teacher'].includes(user?.role ?? '')
 
-  const roleMap: Record<string, string> = {
-    school_admin: 'School Admin',
-    principal: 'Principal',
-  }
-  const canAct = status === 'in_progress' && currentStep && (
-    user?.role === 'school_admin' ||
-    roleMap[user?.role ?? ''] === currentStep.roles?.name ||
-    (user?.role === 'teacher' && currentStep.roles?.name === 'Exam Controller')
-  )
+  // Schools can configure this workflow with any of their own roles
+  // (Result Settings -> Publish Workflow), so who can act on the current
+  // step can't be determined from a fixed list of role names client-side —
+  // the backend computes it the same way actOnWorkflow itself authorizes
+  // actions (role match / School Admin bypass / leave-delegate fallback)
+  // and returns it as `can_act` on the workflow-status response.
+  const canAct = status === 'in_progress' && !!currentStep && !!workflow.can_act
 
   const handleAction = (actionStatus: 'approved' | 'rejected' | 'commented') => {
     if (actionStatus === 'rejected' && !notes.trim()) {
@@ -510,7 +564,7 @@ function FreezePublishPipeline({ examId, exam }: { examId: string, exam: any }) 
                 <Button onClick={() => handleAction('approved')} disabled={actionMutation.isPending}
                   className="bg-success text-success-foreground hover:bg-success/90">
                   {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                  {currentStep.action_name === 'publish' ? 'Publish' : currentStep.action_name === 'verify' ? 'Verify' : 'Freeze'}
+                  {currentStep.action_name.charAt(0).toUpperCase() + currentStep.action_name.slice(1)}
                 </Button>
                 <Button variant="destructive" onClick={() => handleAction('rejected')} disabled={actionMutation.isPending}>
                   <X className="h-4 w-4" /> Send Back
@@ -601,7 +655,10 @@ function MarksEntry({ examId, exam }: any) {
   const [selectedClass, setSelectedClass] = useState('')
   const [selectedSubject, setSelectedSubject] = useState('')
   const [marksData, setMarksData] = useState<Record<string, any>>({})
+  const [overridingStudent, setOverridingStudent] = useState<any>(null)
   const qc = useQueryClient()
+  const { can } = usePermissions()
+  const canOverride = can('exam.result_generate')
 
   // Only classes actually on this exam's datesheet belong here — the
   // full school class list (every class the school has, whether or not
@@ -620,13 +677,32 @@ function MarksEntry({ examId, exam }: any) {
     enabled: !!selectedClass,
   })
 
+  const selectedSubjectRow = subjectsForClass.find((sub: any) => sub.id === selectedSubject)
+  const isSplit = selectedSubjectRow?.theory_max_marks != null && selectedSubjectRow?.practical_max_marks != null
+  // Resolved once per class by GET /marks/:class_id (Result Settings ->
+  // Class Rules/Subject Overrides), keyed by subject name — tells this
+  // screen whether the subject is grade_only (no numeric marks at all)
+  // without a second round trip.
+  const subjectRule = sheetData?.subject_rules?.[selectedSubjectRow?.subject_name]
+  const isGradeOnly = !isSplit && subjectRule?.grading_mode === 'grade_only'
+
   const saveMutation = useMutation({
     mutationFn: () => api.post(`/exams/${examId}/marks`, {
       exam_subject_id: selectedSubject,
       marks: Object.entries(marksData).map(([student_id, m]: any) => ({
         student_id,
-        marks_obtained: m.absent ? null : Number(m.marks),
-        is_absent: m.absent ?? false,
+        ...(isSplit ? {
+          theory_marks_obtained: m.theoryAbsent ? null : (m.theory === '' || m.theory == null ? null : Number(m.theory)),
+          practical_marks_obtained: m.practicalAbsent ? null : (m.practical === '' || m.practical == null ? null : Number(m.practical)),
+          theory_is_absent: m.theoryAbsent ?? false,
+          practical_is_absent: m.practicalAbsent ?? false,
+        } : isGradeOnly ? {
+          grade: m.grade || null,
+          is_absent: m.absent ?? false,
+        } : {
+          marks_obtained: m.absent ? null : Number(m.marks),
+          is_absent: m.absent ?? false,
+        }),
       })),
     }),
     onSuccess: () => {
@@ -643,9 +719,30 @@ function MarksEntry({ examId, exam }: any) {
     const existing = (sheetData.marks ?? []).filter((m: any) => m.exam_subject_id === selectedSubject)
     const init: Record<string, any> = {}
     for (const m of existing) {
-      init[m.student_id] = { marks: m.marks_obtained ?? '', absent: m.is_absent }
+      init[m.student_id] = {
+        marks: m.marks_obtained ?? '', absent: m.is_absent,
+        theory: m.theory_marks_obtained ?? '', practical: m.practical_marks_obtained ?? '',
+        theoryAbsent: m.theory_is_absent ?? false, practicalAbsent: m.practical_is_absent ?? false,
+        grade: m.grade ?? '',
+      }
     }
     setMarksData(init)
+  }
+
+  // Numbers only start "fitting in" once the exam has actually started —
+  // matches the backend's own gate on POST /:id/marks, so this isn't just
+  // a UI nicety papering over a call that would fail anyway.
+  if (exam.status === 'draft' || exam.status === 'published') {
+    return (
+      <Card>
+        <EmptyState
+          icon={Upload}
+          title="Marks entry opens once the exam starts"
+          description={`This exam is currently ${exam.status === 'draft' ? 'in Draft' : 'Published, but not yet started'}. Move it to Ongoing from the Examinations list to begin entering marks.`}
+          className="py-10"
+        />
+      </Card>
+    )
   }
 
   return (
@@ -700,35 +797,109 @@ function MarksEntry({ examId, exam }: any) {
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Roll No</TableHead>
                     <TableHead>Student</TableHead>
-                    <TableHead className="w-32">Marks</TableHead>
-                    <TableHead className="w-24">Absent</TableHead>
+                    {isSplit ? (
+                      <>
+                        <TableHead className="w-28">Theory (out of {selectedSubjectRow?.theory_max_marks})</TableHead>
+                        <TableHead className="w-20">Absent</TableHead>
+                        <TableHead className="w-28">Practical (out of {selectedSubjectRow?.practical_max_marks})</TableHead>
+                        <TableHead className="w-20">Absent</TableHead>
+                      </>
+                    ) : isGradeOnly ? (
+                      <TableHead className="w-40">Grade</TableHead>
+                    ) : (
+                      <>
+                        <TableHead className="w-32">Marks (out of {selectedSubjectRow?.max_marks ?? 100})</TableHead>
+                        <TableHead className="w-24">Absent</TableHead>
+                      </>
+                    )}
+                    {canOverride && <TableHead className="w-20"></TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {(sheetData?.students ?? []).map((s: any) => {
                     const m = marksData[s.id] ?? {}
-                    const sub = subjectsForClass.find((sub: any) => sub.id === selectedSubject)
+                    const sub = selectedSubjectRow
                     return (
-                      <TableRow key={s.id} className={cn('cursor-default', m.absent && 'opacity-50')}>
+                      <TableRow key={s.id} className={cn('cursor-default', (m.absent || (m.theoryAbsent && m.practicalAbsent)) && 'opacity-50')}>
                         <TableCell className="text-muted-foreground">{s.roll_number}</TableCell>
                         <TableCell className="font-medium text-foreground">
                           {s.first_name} {s.last_name}
                           <span className="ml-2 text-xs text-muted-foreground">{s.admission_number}</span>
                         </TableCell>
-                        <TableCell>
-                          <Input type="number" min="0" max={sub?.max_marks ?? 100}
-                            value={m.marks ?? ''}
-                            disabled={m.absent}
-                            onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], marks: e.target.value } }))}
-                            placeholder={`/${sub?.max_marks ?? 100}`}
-                            className="h-8" />
-                        </TableCell>
-                        <TableCell>
-                          <input type="checkbox" checked={m.absent ?? false}
-                            aria-label={`Mark ${s.first_name} ${s.last_name} absent`}
-                            onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], absent: e.target.checked, marks: '' } }))}
-                            className="h-4 w-4 rounded border-input accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" />
-                        </TableCell>
+                        {isSplit ? (
+                          <>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Input type="number" min="0" max={sub?.theory_max_marks ?? 100}
+                                  value={m.theory ?? ''}
+                                  disabled={m.theoryAbsent}
+                                  onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], theory: e.target.value } }))}
+                                  className="h-8" />
+                                <span className="shrink-0 text-xs text-muted-foreground">/{sub?.theory_max_marks}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <input type="checkbox" checked={m.theoryAbsent ?? false}
+                                aria-label={`Mark ${s.first_name} ${s.last_name} absent for theory`}
+                                onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], theoryAbsent: e.target.checked, theory: '' } }))}
+                                className="h-4 w-4 rounded border-input accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" />
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Input type="number" min="0" max={sub?.practical_max_marks ?? 100}
+                                  value={m.practical ?? ''}
+                                  disabled={m.practicalAbsent}
+                                  onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], practical: e.target.value } }))}
+                                  className="h-8" />
+                                <span className="shrink-0 text-xs text-muted-foreground">/{sub?.practical_max_marks}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <input type="checkbox" checked={m.practicalAbsent ?? false}
+                                aria-label={`Mark ${s.first_name} ${s.last_name} absent for practical`}
+                                onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], practicalAbsent: e.target.checked, practical: '' } }))}
+                                className="h-4 w-4 rounded border-input accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" />
+                            </TableCell>
+                          </>
+                        ) : isGradeOnly ? (
+                          <TableCell>
+                            <Select value={m.grade || undefined} onValueChange={v => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], grade: v } }))}>
+                              <SelectTrigger className="h-8"><SelectValue placeholder="Select grade..." /></SelectTrigger>
+                              <SelectContent>
+                                {(subjectRule?.grade_bands ?? []).map((b: any) => (
+                                  <SelectItem key={b.grade_label} value={b.grade_label}>{b.grade_label}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </TableCell>
+                        ) : (
+                          <>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Input type="number" min="0" max={sub?.max_marks ?? 100}
+                                  value={m.marks ?? ''}
+                                  disabled={m.absent}
+                                  onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], marks: e.target.value } }))}
+                                  className="h-8" />
+                                <span className="shrink-0 text-xs text-muted-foreground">/{sub?.max_marks ?? 100}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <input type="checkbox" checked={m.absent ?? false}
+                                aria-label={`Mark ${s.first_name} ${s.last_name} absent`}
+                                onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], absent: e.target.checked, marks: '' } }))}
+                                className="h-4 w-4 rounded border-input accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" />
+                            </TableCell>
+                          </>
+                        )}
+                        {canOverride && (
+                          <TableCell>
+                            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground hover:text-primary"
+                              onClick={() => setOverridingStudent(s)} title="Set a manual result exception for this student">
+                              Override
+                            </Button>
+                          </TableCell>
+                        )}
                       </TableRow>
                     )
                   })}
@@ -747,7 +918,84 @@ function MarksEntry({ examId, exam }: any) {
           )}
         </div>
       )}
+
+      {overridingStudent && (
+        <StudentOverrideModal
+          examId={examId} student={overridingStudent} examSubjectId={selectedSubject}
+          onClose={() => setOverridingStudent(null)}
+        />
+      )}
     </Card>
+  )
+}
+
+// A one-off exception for exactly one student's one subject — "Absent -
+// Medical", "Result Withheld", or a specific grace-mark award — separate
+// from the bulk marks sheet above since it always requires a reason and
+// only ever touches one field at a time (never both together, so an
+// override clear can't silently wipe a grace-mark award or vice versa).
+function StudentOverrideModal({ examId, student, examSubjectId, onClose }: any) {
+  const [mode, setMode] = useState<'status' | 'grace'>('status')
+  const [statusOverride, setStatusOverride] = useState('')
+  const [graceMarks, setGraceMarks] = useState('')
+  const [reason, setReason] = useState('')
+  const qc = useQueryClient()
+
+  const mutation = useMutation({
+    mutationFn: () => api.patch(`/exams/${examId}/marks/${student.id}/${examSubjectId}/override`, {
+      ...(mode === 'status' ? { result_status_override: statusOverride || null } : { grace_marks_applied: Number(graceMarks) || 0 }),
+      reason,
+    }),
+    onSuccess: () => { toast.success('Override saved'); qc.invalidateQueries({ queryKey: ['marks-sheet'] }); onClose() },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to save override'),
+  })
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Override — {student.first_name} {student.last_name}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Type</Label>
+            <Select value={mode} onValueChange={v => setMode(v as any)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="status">Manual status (Absent - Medical, Result Withheld...)</SelectItem>
+                <SelectItem value="grace">Grace marks</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {mode === 'status' ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="status-override">Status text</Label>
+              <Input id="status-override" value={statusOverride} onChange={e => setStatusOverride(e.target.value)}
+                placeholder="e.g. Absent - Medical" />
+              <p className="text-xs text-muted-foreground">Shown in place of the computed grade/pass-fail for this one subject; excludes it from the aggregate. Leave blank to clear an existing override.</p>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label htmlFor="grace-marks">Grace marks to apply</Label>
+              <Input id="grace-marks" type="number" min={0} value={graceMarks} onChange={e => setGraceMarks(e.target.value)} />
+              <p className="text-xs text-muted-foreground">Always shown separately on the report card — never silently folded into the raw marks.</p>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="override-reason">Reason (required, kept as an audit trail)</Label>
+            <Textarea id="override-reason" value={reason} onChange={e => setReason(e.target.value)} rows={2} className="resize-none" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending || !reason.trim()}>
+            {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save Override
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -758,6 +1006,7 @@ function MarksEntry({ examId, exam }: any) {
 // section instead, collapsed by default, so opening the page doesn't
 // dump a thousand rows at once and each group's rank is locally
 // meaningful again.
+
 function ResultsView({ examId }: { examId: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['results', examId],
@@ -860,20 +1109,27 @@ function ResultsView({ examId }: { examId: string }) {
                         <TableCell className="font-medium text-foreground">
                           {rc.students?.first_name} {rc.students?.last_name}
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{rc.obtained_marks}/{rc.total_marks}</TableCell>
-                        <TableCell className="font-semibold text-foreground">{rc.percentage}%</TableCell>
-                        <TableCell>
-                          <Badge variant={
-                            ['A+','A'].includes(rc.grade) ? 'success' :
-                            ['B+','B'].includes(rc.grade) ? 'info' :
-                            rc.grade === 'C' ? 'warning' : 'destructive'}>
-                            {rc.grade}
-                          </Badge>
+                        <TableCell className="text-muted-foreground">
+                          {rc.obtained_marks}/{rc.total_marks}
+                          {Number(rc.grace_marks_applied_total) > 0 && (
+                            <span className="ml-1.5 text-xs text-info" title="Grace marks applied">+{rc.grace_marks_applied_total} grace</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-semibold text-foreground">
+                          {rc.percentage}%{rc.overall_cgpa != null && <span className="ml-1 text-xs font-normal text-muted-foreground">· {rc.overall_cgpa} CGPA</span>}
                         </TableCell>
                         <TableCell>
-                          <Badge variant={rc.is_pass ? 'success' : 'destructive'}>
-                            {rc.is_pass ? 'Pass' : 'Fail'}
-                          </Badge>
+                          {rc.grade ? (
+                            <Badge variant={
+                              ['A+', 'A', 'A1', 'A2'].includes(rc.grade) ? 'success' :
+                              ['B+', 'B', 'B1', 'B2'].includes(rc.grade) ? 'info' :
+                              ['C', 'C1', 'C2'].includes(rc.grade) ? 'warning' : 'destructive'}>
+                              {rc.grade}
+                            </Badge>
+                          ) : <span className="text-xs text-muted-foreground">—</span>}
+                        </TableCell>
+                        <TableCell>
+                          <ResultStatusBadge status={rc.result_status} isPass={rc.is_pass} />
                         </TableCell>
                         <TableCell>
                           <a href={documentsApi.reportCard(rc.exam_id, rc.student_id)}
@@ -895,14 +1151,157 @@ function ResultsView({ examId }: { examId: string }) {
   )
 }
 
-function AddSubjectModal({ examId, classes, defaultTimeSlot, onClose }: any) {
+// Shown instead of ResultsView for a Term-member exam — this exam's own
+// percentage/pass-fail isn't the "official" one (the Term's blended
+// result is, see TermMembershipWarning above), so rather than an
+// aggregate table this renders the raw student x subject grid: every
+// active student in the exam's classes down the rows, every subject
+// across the columns, "NA" where nothing's entered yet and "Absent"
+// where the student was actually marked absent — grouped by class +
+// section the same way ResultsView is, for the same reason (rank would
+// be meaningless flattened across sections; here it's just readability
+// at scale).
+function ScoresheetView({ examId }: { examId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['scoresheet', examId],
+    queryFn: () => api.get(`/exams/${examId}/scoresheet`).then(r => r.data.data),
+  })
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggle = (key: string) => setExpanded(prev => {
+    const next = new Set(prev)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    return next
+  })
+
+  if (isLoading) {
+    return (
+      <Card className="space-y-3 p-6">
+        {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+      </Card>
+    )
+  }
+
+  const subjects = data?.subjects ?? []
+  const students = data?.students ?? []
+  if (!students.length || !subjects.length) {
+    return (
+      <Card>
+        <EmptyState
+          icon={BarChart2}
+          title="No scoresheet yet"
+          description="Enter marks on the Marks Entry tab to see each student's subject-wise marks here."
+        />
+      </Card>
+    )
+  }
+
+  const marksByKey = new Map<string, any>()
+  for (const m of data?.marks ?? []) marksByKey.set(`${m.student_id}:${m.exam_subject_id}`, m)
+
+  const subjectsByClass = new Map<string, any[]>()
+  for (const s of subjects) {
+    if (!subjectsByClass.has(s.class_id)) subjectsByClass.set(s.class_id, [])
+    subjectsByClass.get(s.class_id)!.push(s)
+  }
+
+  const groupMap = new Map<string, { class_name: string; section_name: string; numeric_level: number; class_id: string; students: any[] }>()
+  for (const s of students) {
+    const key = s.section_id ?? s.class_id ?? 'unknown'
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        class_name: s.classes?.name ?? 'Unknown class',
+        section_name: s.sections?.name ?? '',
+        numeric_level: s.classes?.numeric_level ?? 999,
+        class_id: s.class_id,
+        students: [],
+      })
+    }
+    groupMap.get(key)!.students.push(s)
+  }
+  const groups = Array.from(groupMap.entries())
+    .map(([key, g]) => ({ key, ...g, classSubjects: subjectsByClass.get(g.class_id) ?? [] }))
+    .sort((a, b) => a.numeric_level - b.numeric_level || a.section_name.localeCompare(b.section_name))
+
+  const formatCell = (studentId: string, subject: any) => {
+    const m = marksByKey.get(`${studentId}:${subject.id}`)
+    const isSplit = subject.theory_max_marks != null && subject.practical_max_marks != null
+    if (!m) return <span className="text-muted-foreground">NA</span>
+    if (isSplit) {
+      if (m.theory_is_absent && m.practical_is_absent) return <span className="font-medium text-destructive">Absent</span>
+      const theoryPart = m.theory_is_absent ? 'Absent' : (m.theory_marks_obtained ?? 'NA')
+      const practicalPart = m.practical_is_absent ? 'Absent' : (m.practical_marks_obtained ?? 'NA')
+      return <span>T: {theoryPart} · P: {practicalPart}</span>
+    }
+    if (m.is_absent) return <span className="font-medium text-destructive">Absent</span>
+    if (m.grade) return <span>{m.grade}</span>
+    if (m.marks_obtained == null) return <span className="text-muted-foreground">NA</span>
+    return <span>{m.marks_obtained}</span>
+  }
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex items-center justify-between border-b border-border px-6 py-4">
+        <h3 className="font-semibold text-foreground">Scoresheet — {students.length} students across {groups.length} sections</h3>
+        <p className="text-xs text-muted-foreground">Part of a Term — see the Term's own result for pass/fail</p>
+      </div>
+      <div className="divide-y divide-border">
+        {groups.map(g => {
+          const isOpen = expanded.has(g.key)
+          return (
+            <div key={g.key}>
+              <button
+                onClick={() => toggle(g.key)}
+                className="flex w-full items-center justify-between px-6 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              >
+                <div className="flex items-center gap-2">
+                  {isOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                  <span className="font-medium text-foreground">{g.class_name} {g.section_name}</span>
+                  <span className="text-xs text-muted-foreground">{g.students.length} students</span>
+                </div>
+              </button>
+              {isOpen && (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>Student</TableHead>
+                        {g.classSubjects.map((sub: any) => (
+                          <TableHead key={sub.id}>{sub.subject_name}</TableHead>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {g.students.map((s: any) => (
+                        <TableRow key={s.id} className="cursor-default">
+                          <TableCell className="font-medium text-foreground">{s.first_name} {s.last_name}</TableCell>
+                          {g.classSubjects.map((sub: any) => (
+                            <TableCell key={sub.id} className="text-muted-foreground">{formatCell(s.id, sub)}</TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
+function AddSubjectModal({ examId, examType, classes, defaultTimeSlot, onClose }: any) {
   // Pre-filled from the exam's own default time slot (set at Create
   // Exam time) if it has one — still just a starting point, the Time
   // Slot select below can always override it per subject.
   const [form, setForm] = useState({
     class_id: '', subject_name: '', exam_date: '',
     start_time: defaultTimeSlot?.start_time ?? '', end_time: defaultTimeSlot?.end_time ?? '', max_marks: 100, pass_marks: 33,
+    practical_exam_date: '', practical_start_time: '', practical_end_time: '',
   })
+  const [split, setSplit] = useState(false)
+  const [splitForm, setSplitForm] = useState({ theory_max_marks: 70, theory_pass_marks: 25, practical_max_marks: 30, practical_pass_marks: 10 })
 
   // Subjects come from the class's master list (Settings -> Classes &
   // Sections) — the same source Timetable and Homework already draw
@@ -914,6 +1313,19 @@ function AddSubjectModal({ examId, classes, defaultTimeSlot, onClose }: any) {
     enabled: !!form.class_id,
   })
 
+  // Result Settings -> Subject Overrides can flag a subject as
+  // "has_practical" ahead of time (a UI hint only) — pre-checks the split
+  // here so setting it up once in Result Settings carries through to
+  // every future exam's datesheet for that subject. Matches the same
+  // exam-type-scoped-first-then-default precedence resolveEffectiveSubjectRule()
+  // uses server-side (this exam's own exam_type wins over the class-wide
+  // default override, if a type-specific one exists for this subject).
+  const { data: subjectOverrides } = useQuery({
+    queryKey: ['result-subject-overrides', form.class_id],
+    queryFn: () => api.get('/exams/result-settings/subject-overrides', { params: { class_id: form.class_id } }).then(r => r.data.data as any[]),
+    enabled: !!form.class_id,
+  })
+
   // Reusable named windows (Settings -> Exam Templates) instead of
   // re-typing the same start/end time on every subject added.
   const { data: timeSlots } = useQuery({
@@ -922,7 +1334,10 @@ function AddSubjectModal({ examId, classes, defaultTimeSlot, onClose }: any) {
   })
 
   const mutation = useMutation({
-    mutationFn: (data: any) => api.post('/exams/subjects/add', { ...data, exam_id: examId }),
+    mutationFn: (data: any) => api.post('/exams/subjects/add', {
+      ...data, exam_id: examId,
+      ...(split ? splitForm : {}),
+    }),
     onSuccess: () => {
       toast.success('Subject added!')
       onClose()
@@ -953,7 +1368,28 @@ function AddSubjectModal({ examId, classes, defaultTimeSlot, onClose }: any) {
           <div className="space-y-1.5">
             <Label>Subject *</Label>
             <Select value={form.subject_name || undefined} disabled={!form.class_id}
-              onValueChange={v => setForm(f => ({ ...f, subject_name: v }))}>
+              onValueChange={v => {
+                const override =
+                  (subjectOverrides ?? []).find((o: any) => o.subject_name === v && o.exam_type === examType) ??
+                  (subjectOverrides ?? []).find((o: any) => o.subject_name === v && o.exam_type == null)
+                const hasSplit = !!override?.has_practical
+                setSplit(hasSplit)
+                setForm(f => ({
+                  ...f, subject_name: v,
+                  ...(!hasSplit && (override?.default_max_marks != null || override?.default_pass_marks != null) ? {
+                    max_marks: override?.default_max_marks ?? f.max_marks,
+                    pass_marks: override?.default_pass_marks ?? f.pass_marks,
+                  } : {}),
+                }))
+                if (hasSplit) {
+                  setSplitForm(f => ({
+                    theory_max_marks: override?.default_theory_max_marks ?? f.theory_max_marks,
+                    theory_pass_marks: override?.default_theory_pass_marks ?? f.theory_pass_marks,
+                    practical_max_marks: override?.default_practical_max_marks ?? f.practical_max_marks,
+                    practical_pass_marks: override?.default_practical_pass_marks ?? f.practical_pass_marks,
+                  }))
+                }
+              }}>
               <SelectTrigger>
                 <SelectValue placeholder={form.class_id ? 'Select subject...' : 'Select a class first'} />
               </SelectTrigger>
@@ -967,11 +1403,11 @@ function AddSubjectModal({ examId, classes, defaultTimeSlot, onClose }: any) {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="subject-date">Exam Date</Label>
+              <Label htmlFor="subject-date">{split ? 'Theory Date' : 'Exam Date'}</Label>
               <Input id="subject-date" type="date" value={form.exam_date} onChange={e => setForm(f => ({ ...f, exam_date: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Time Slot</Label>
+              <Label>{split ? 'Theory Time Slot' : 'Time Slot'}</Label>
               <Select value={form.start_time ? `${form.start_time}-${form.end_time}` : 'none'}
                 onValueChange={v => {
                   if (v === 'none') { setForm(f => ({ ...f, start_time: '', end_time: '' })); return }
@@ -992,11 +1428,69 @@ function AddSubjectModal({ examId, classes, defaultTimeSlot, onClose }: any) {
                 <p className="mt-1.5 text-xs text-muted-foreground">No time slots set up yet — add some under Manage Templates.</p>
               )}
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="subject-max">Max Marks</Label>
-              <Input id="subject-max" type="number" value={form.max_marks} onChange={e => setForm(f => ({ ...f, max_marks: Number(e.target.value) }))} />
-            </div>
+            {!split && (
+              <div className="space-y-1.5">
+                <Label htmlFor="subject-max">Max Marks</Label>
+                <Input id="subject-max" type="number" value={form.max_marks} onChange={e => setForm(f => ({ ...f, max_marks: Number(e.target.value) }))} />
+              </div>
+            )}
           </div>
+
+          <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+            <input type="checkbox" checked={split} onChange={e => setSplit(e.target.checked)} />
+            Split into Theory + Practical
+          </label>
+
+          {split && (
+            <div className="space-y-4 rounded-xl bg-muted/40 p-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="subject-practical-date">Practical Date</Label>
+                  <Input id="subject-practical-date" type="date" value={form.practical_exam_date} onChange={e => setForm(f => ({ ...f, practical_exam_date: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Practical Time Slot</Label>
+                  <Select value={form.practical_start_time ? `${form.practical_start_time}-${form.practical_end_time}` : 'none'}
+                    onValueChange={v => {
+                      if (v === 'none') { setForm(f => ({ ...f, practical_start_time: '', practical_end_time: '' })); return }
+                      const slot = (timeSlots ?? []).find((s: any) => `${s.start_time}-${s.end_time}` === v)
+                      setForm(f => ({ ...f, practical_start_time: slot?.start_time ?? '', practical_end_time: slot?.end_time ?? '' }))
+                    }}>
+                    <SelectTrigger><SelectValue placeholder="No time slot" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No time slot</SelectItem>
+                      {(timeSlots ?? []).map((s: any) => (
+                        <SelectItem key={s.id} value={`${s.start_time}-${s.end_time}`}>
+                          {s.name} · {s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="theory-max">Theory Max</Label>
+                  <Input id="theory-max" type="number" value={splitForm.theory_max_marks} onChange={e => setSplitForm(f => ({ ...f, theory_max_marks: Number(e.target.value) }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="theory-pass">Theory Pass</Label>
+                  <Input id="theory-pass" type="number" value={splitForm.theory_pass_marks} onChange={e => setSplitForm(f => ({ ...f, theory_pass_marks: Number(e.target.value) }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="practical-max">Practical Max</Label>
+                  <Input id="practical-max" type="number" value={splitForm.practical_max_marks} onChange={e => setSplitForm(f => ({ ...f, practical_max_marks: Number(e.target.value) }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="practical-pass">Practical Pass</Label>
+                  <Input id="practical-pass" type="number" value={splitForm.practical_pass_marks} onChange={e => setSplitForm(f => ({ ...f, practical_pass_marks: Number(e.target.value) }))} />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Combined max marks: {splitForm.theory_max_marks + splitForm.practical_max_marks}
+              </p>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
@@ -1020,6 +1514,12 @@ function EditSubjectModal({ subject, onClose }: any) {
   const [form, setForm] = useState({
     exam_date: subject.exam_date ?? '', start_time: subject.start_time ?? '', end_time: subject.end_time ?? '',
     max_marks: subject.max_marks, pass_marks: subject.pass_marks,
+    practical_exam_date: subject.practical_exam_date ?? '', practical_start_time: subject.practical_start_time ?? '', practical_end_time: subject.practical_end_time ?? '',
+  })
+  const [split, setSplit] = useState(subject.theory_max_marks != null && subject.practical_max_marks != null)
+  const [splitForm, setSplitForm] = useState({
+    theory_max_marks: subject.theory_max_marks ?? 70, theory_pass_marks: subject.theory_pass_marks ?? 25,
+    practical_max_marks: subject.practical_max_marks ?? 30, practical_pass_marks: subject.practical_pass_marks ?? 10,
   })
 
   const { data: timeSlots } = useQuery({
@@ -1028,7 +1528,16 @@ function EditSubjectModal({ subject, onClose }: any) {
   })
 
   const updateMutation = useMutation({
-    mutationFn: () => api.patch(`/exams/subjects/${subject.id}`, form),
+    mutationFn: () => api.patch(`/exams/subjects/${subject.id}`, {
+      ...form,
+      theory_max_marks: split ? splitForm.theory_max_marks : null,
+      theory_pass_marks: split ? splitForm.theory_pass_marks : null,
+      practical_max_marks: split ? splitForm.practical_max_marks : null,
+      practical_pass_marks: split ? splitForm.practical_pass_marks : null,
+      practical_exam_date: split ? (form.practical_exam_date || null) : null,
+      practical_start_time: split ? (form.practical_start_time || null) : null,
+      practical_end_time: split ? (form.practical_end_time || null) : null,
+    }),
     onSuccess: () => { toast.success('Subject updated'); onClose() },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update'),
   })
@@ -1048,11 +1557,11 @@ function EditSubjectModal({ subject, onClose }: any) {
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="edit-subject-date">Exam Date</Label>
+              <Label htmlFor="edit-subject-date">{split ? 'Theory Date' : 'Exam Date'}</Label>
               <Input id="edit-subject-date" type="date" value={form.exam_date} onChange={e => setForm(f => ({ ...f, exam_date: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Time Slot</Label>
+              <Label>{split ? 'Theory Time Slot' : 'Time Slot'}</Label>
               <Select value={form.start_time ? `${form.start_time}-${form.end_time}` : 'none'}
                 onValueChange={v => {
                   if (v === 'none') { setForm(f => ({ ...f, start_time: '', end_time: '' })); return }
@@ -1071,16 +1580,74 @@ function EditSubjectModal({ subject, onClose }: any) {
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-subject-max">Max Marks</Label>
-              <Input id="edit-subject-max" type="number" value={form.max_marks} onChange={e => setForm(f => ({ ...f, max_marks: Number(e.target.value) }))} />
+          {!split && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-subject-max">Max Marks</Label>
+                <Input id="edit-subject-max" type="number" value={form.max_marks} onChange={e => setForm(f => ({ ...f, max_marks: Number(e.target.value) }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-subject-pass">Pass Marks</Label>
+                <Input id="edit-subject-pass" type="number" value={form.pass_marks} onChange={e => setForm(f => ({ ...f, pass_marks: Number(e.target.value) }))} />
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-subject-pass">Pass Marks</Label>
-              <Input id="edit-subject-pass" type="number" value={form.pass_marks} onChange={e => setForm(f => ({ ...f, pass_marks: Number(e.target.value) }))} />
+          )}
+
+          <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+            <input type="checkbox" checked={split} onChange={e => setSplit(e.target.checked)} />
+            Split into Theory + Practical
+          </label>
+
+          {split && (
+            <div className="space-y-4 rounded-xl bg-muted/40 p-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-subject-practical-date">Practical Date</Label>
+                  <Input id="edit-subject-practical-date" type="date" value={form.practical_exam_date} onChange={e => setForm(f => ({ ...f, practical_exam_date: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Practical Time Slot</Label>
+                  <Select value={form.practical_start_time ? `${form.practical_start_time}-${form.practical_end_time}` : 'none'}
+                    onValueChange={v => {
+                      if (v === 'none') { setForm(f => ({ ...f, practical_start_time: '', practical_end_time: '' })); return }
+                      const slot = (timeSlots ?? []).find((s: any) => `${s.start_time}-${s.end_time}` === v)
+                      setForm(f => ({ ...f, practical_start_time: slot?.start_time ?? '', practical_end_time: slot?.end_time ?? '' }))
+                    }}>
+                    <SelectTrigger><SelectValue placeholder="No time slot" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No time slot</SelectItem>
+                      {(timeSlots ?? []).map((s: any) => (
+                        <SelectItem key={s.id} value={`${s.start_time}-${s.end_time}`}>
+                          {s.name} · {s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-theory-max">Theory Max</Label>
+                  <Input id="edit-theory-max" type="number" value={splitForm.theory_max_marks} onChange={e => setSplitForm(f => ({ ...f, theory_max_marks: Number(e.target.value) }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-theory-pass">Theory Pass</Label>
+                  <Input id="edit-theory-pass" type="number" value={splitForm.theory_pass_marks} onChange={e => setSplitForm(f => ({ ...f, theory_pass_marks: Number(e.target.value) }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-practical-max">Practical Max</Label>
+                  <Input id="edit-practical-max" type="number" value={splitForm.practical_max_marks} onChange={e => setSplitForm(f => ({ ...f, practical_max_marks: Number(e.target.value) }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-practical-pass">Practical Pass</Label>
+                  <Input id="edit-practical-pass" type="number" value={splitForm.practical_pass_marks} onChange={e => setSplitForm(f => ({ ...f, practical_pass_marks: Number(e.target.value) }))} />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Combined max marks: {splitForm.theory_max_marks + splitForm.practical_max_marks}
+              </p>
             </div>
-          </div>
+          )}
         </div>
         <DialogFooter className="sm:justify-between">
           <Button variant="ghost" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}

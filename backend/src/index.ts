@@ -38,6 +38,7 @@ import { runLeaveAccrual, runLeaveYearEnd } from './shared/utils/leavePolicy'
 import { runHrAlerts } from './shared/utils/hrAlerts'
 import { runAbscondedSweep } from './shared/utils/absconded'
 import { releaseExpiredSeatHolds, processExpiredWaitlistOffers } from './shared/utils/admissionSeatLedger'
+import { runExamAutoStart } from './shared/utils/examAutoStart'
 
 import authRoutes from './modules/auth/routes'
 import sisRoutes from './modules/sis/routes'
@@ -274,6 +275,18 @@ cron.schedule('15 8 * * *', () => {
   runAbscondedSweep()
     .then(result => console.log(`[absconded] flagged:${result.flagged} auto-set:${result.autoSet}`))
     .catch(err => console.error('[absconded] failed:', err))
+})
+
+// Daily exam auto-start sweep, 00:05 server time (just after midnight),
+// across every school. A Published exam whose start_date has arrived
+// moves itself to Ongoing without anyone needing to remember to click
+// Start on the day — Publish stays a real manual decision, Start no
+// longer needs to be one. POST /exams/auto-start/run is the per-school
+// manual equivalent.
+cron.schedule('5 0 * * *', () => {
+  runExamAutoStart()
+    .then(result => { if (result.started) console.log(`[exam-auto-start] started ${result.started} exam(s)`) })
+    .catch(err => console.error('[exam-auto-start] failed:', err))
 })
 
 // ── Timetable ───────────────────────────────────────────────────
