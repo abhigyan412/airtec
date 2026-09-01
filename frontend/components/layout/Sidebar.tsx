@@ -294,7 +294,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const searchParams = useSearchParams()
   const currentSearch = searchParams.toString()
   const { user, isRole } = useAuth()
-  const { can, canAny, isSuperRole, roles, moduleEnabled } = usePermissions()
+  const { can, canAny, isSuperRole, roles, moduleEnabled, isReady } = usePermissions()
   const isSubjectOnlyTeacher = user?.role === 'teacher' && !roles.includes('Class Teacher')
 
   /**
@@ -484,7 +484,26 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/70">
             Main Menu
           </p>
-          {NAV.map((item) => {
+          {/* Nothing real until the server has said who this is.
+              Every gate below answers "yes" while permissions are
+              unknown — deliberately, so page content does not blank —
+              which for a menu means drawing every entry and then taking
+              away the ones this user may not have. That is the flicker,
+              and for a moment it advertises links they cannot open. A
+              placeholder of the same shape holds the space instead. */}
+          {!isReady ? (
+            <div className="space-y-1.5 px-1 py-1" aria-busy="true" aria-label="Loading menu">
+              {Array.from({ length: 9 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2.5 px-2 py-1.5">
+                  <div className="h-4 w-4 shrink-0 animate-pulse rounded bg-muted" />
+                  <div
+                    className="h-3 animate-pulse rounded bg-muted"
+                    style={{ width: `${58 + ((i * 13) % 34)}%` }}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : NAV.map((item) => {
             if (!allowed(item)) return null
             // One level deeper than `.filter(allowed)` alone reaches — a
             // child that's itself a sub-group (Timetable/Examinations

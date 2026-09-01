@@ -97,6 +97,22 @@ export function usePermissions() {
     enabledModules: data?.enabled_modules ?? null,
     isSuperRole,
     isLoading,
+    /**
+     * Has the server actually answered?
+     *
+     * Distinct from `!isLoading`, and the distinction matters. The query
+     * is disabled until the session resolves, and a disabled query is
+     * not loading — it is simply not running. So `isLoading` is false
+     * with no data at all, during which every `can()` above answers
+     * true by design, to keep pages from blanking out.
+     *
+     * That default is right for page content and wrong for a menu: the
+     * sidebar renders every entry, then removes the ones the user may
+     * not have the moment permissions land. It reads as the menu
+     * flickering, and for a beat it shows a teacher the links they are
+     * not allowed. Anything gating on identity should wait for this.
+     */
+    isReady: !!data,
     can,
     canAny,
     moduleEnabled,
