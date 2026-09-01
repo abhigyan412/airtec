@@ -53,7 +53,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased`}>
         <Providers>
           {children}
-          <Toaster position="top-right" richColors theme="system" />
+          <Toaster position="top-right" richColors closeButton theme="system" />
         </Providers>
         <ServiceWorkerRegister />
       </body>
