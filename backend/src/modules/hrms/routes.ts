@@ -13,6 +13,8 @@ import { createNotification, createNotifications } from '../../shared/utils/noti
 import { runLeaveAccrual, runLeaveYearEnd } from '../../shared/utils/leavePolicy'
 import { runHrAlerts } from '../../shared/utils/hrAlerts'
 import { runAbscondedSweep } from '../../shared/utils/absconded'
+import { fetchSchoolknotDay, SchoolknotRow } from './schoolknot'
+import { getSchoolknotConfig } from './schoolknot.config'
 
 const router = Router()
 router.use(authenticate)
@@ -3582,6 +3584,235 @@ router.post('/attendance', requirePermissionV2('staff.attendance_mark'),
     await Promise.all(rows.map(r => syncUnpaidLeaveOnAttendanceChange(school_id, r.user_id, date, previousStatusByUser.get(r.user_id) ?? null, r.status)))
 
     res.json({ success: true, data, count: rows.length })
+  })
+)
+
+// ── SchoolKnot attendance sync (DEMO integration) ────────────────────
+//
+// Pulls one day from the school's biometric provider and upserts it into
+// staff_attendance, going through the exact same write path as manual
+// marking — including syncUnpaidLeaveOnAttendanceChange, so LOP/unpaid
+// leave never drifts from what the sheet would have produced.
+//
+// Scoping is config-driven and DB-schema-free: the school appears in
+// SCHOOLKNOT_CONFIG (schoolknot.config.ts) with its SchoolKnot id and an
+// email->reg_id map. No entry, no sync, no button. This keeps the week-long
+// demo removable by deleting the schoolknot.* files — nothing in the schema.
+//
+// Status derivation (holiday-aware, chosen deliberately):
+//   punched in                    -> present  (+ check_in/out from the device)
+//   no punch, working day         -> absent
+//   no punch, weekly-off/holiday  -> holiday
+// SchoolKnot's own `status` field is an employee CATEGORY, not present/absent,
+// so it is ignored; presence is derived from an in_time existing.
+
+interface SchoolknotSyncReport {
+  date: string
+  written: number
+  present: number
+  absent: number
+  holiday: number
+  workingDay: boolean
+  mappedStaff: number
+  unmappedStaff: number           // airtec staff with no reg_id — skipped
+  mappedNotInFeed: number         // mapped staff SchoolKnot didn't return for the day
+  unmatchedRegIds: string[]       // reg_ids in the feed with no airtec mapping
+  staleCover: StaleCover[]        // returned teachers who still have cover booked
+}
+
+// A teacher who was marked absent, had cover arranged, and has now checked
+// in on this sync. The arrangement won't self-cancel (a human assigned a
+// substitute, and the timetable deliberately never deletes assigned cover),
+// so it's surfaced for a one-click "teacher returned" cancel.
+interface StaleCover {
+  absenceId: string | null        // null => arrangement not tied to an absence; can't auto-cancel
+  teacherId: string
+  teacherName: string
+  periods: number[]
+  substitutes: string[]
+}
+
+/**
+ * Of the teachers who just flipped absent->present, which still have live
+ * cover booked for the day. Grouped one row per absence so the UI cancels
+ * the whole absence ("teacher returned"), which frees every period's sub at
+ * once and notifies them — the exact semantics of the existing cancel path.
+ */
+async function findStaleCover(schoolId: string, date: string, presentTeacherIds: string[]): Promise<StaleCover[]> {
+  if (!presentTeacherIds.length) return []
+
+  const { data: arrs } = await supabase.from('arrangements')
+    .select('absence_id, absent_teacher_id, substitute_teacher_id, period_number')
+    .eq('school_id', schoolId).eq('arrangement_date', date)
+    .in('absent_teacher_id', presentTeacherIds)
+    .not('substitute_teacher_id', 'is', null)   // only actually-assigned cover
+    .neq('status', 'cancelled')
+  const rows = (arrs ?? []) as any[]
+  if (!rows.length) return []
+
+  const ids = [...new Set(rows.flatMap(r => [r.absent_teacher_id, r.substitute_teacher_id]).filter(Boolean))]
+  const { data: users } = await supabase.from('users').select('id, full_name').in('id', ids)
+  const nameOf = new Map(((users ?? []) as any[]).map(u => [u.id, u.full_name]))
+
+  const byAbsence = new Map<string, StaleCover>()
+  for (const r of rows) {
+    const key = r.absence_id ?? `teacher:${r.absent_teacher_id}`
+    let entry = byAbsence.get(key)
+    if (!entry) {
+      entry = {
+        absenceId: r.absence_id ?? null,
+        teacherId: r.absent_teacher_id,
+        teacherName: nameOf.get(r.absent_teacher_id) ?? 'Unknown',
+        periods: [], substitutes: [],
+      }
+      byAbsence.set(key, entry)
+    }
+    if (r.period_number != null) entry.periods.push(r.period_number)
+    const sub = nameOf.get(r.substitute_teacher_id)
+    if (sub && !entry.substitutes.includes(sub)) entry.substitutes.push(sub)
+  }
+
+  return [...byAbsence.values()].map(e => ({ ...e, periods: [...new Set(e.periods)].sort((a, b) => a - b) }))
+}
+
+async function runSchoolknotAttendanceSync(
+  schoolId: string,
+  date: string,
+  markedBy: string,
+): Promise<SchoolknotSyncReport> {
+  const config = getSchoolknotConfig(schoolId)
+  if (!config) throw new Error('SchoolKnot is not configured for this school.')
+
+  // Resolve the config's email->reg_id map to the actual airtec users. An
+  // email that no longer exists (renamed/removed account) is simply dropped.
+  const emails = Object.keys(config.regByEmail)
+  const { data: users } = await supabase.from('users')
+    .select('id, email').eq('school_id', schoolId).in('email', emails)
+  const mappedRows = ((users ?? []) as { id: string; email: string }[]).map(u => ({
+    user_id: u.id,
+    schoolknot_reg_id: config.regByEmail[u.email],
+  }))
+
+  // How many staff exist at all, to report those left unmapped.
+  const { count: totalStaff } = await supabase.from('staff_profiles')
+    .select('*', { count: 'exact', head: true }).eq('school_id', schoolId)
+
+  const feed = await fetchSchoolknotDay(config.schoolknotSchoolId, date)
+  const byReg = new Map<string, SchoolknotRow>(feed.map(r => [String(r.reg_id), r]))
+
+  const sets = await getNonWorkingDaySets(schoolId, date, date)
+  const working = isWorkingDate(date, sets)
+
+  // A single punch is recorded by the device as in_time == out_time; that is
+  // one scan, not a real out, so it doesn't become a check_out.
+  const cleanOut = (r: SchoolknotRow) =>
+    r.out_time && r.out_time !== r.in_time ? r.out_time : null
+
+  const matchedRegs = new Set<string>()
+  let present = 0, absent = 0, holiday = 0, mappedNotInFeed = 0
+
+  const rows = mappedRows.map(m => {
+    const hit = byReg.get(String(m.schoolknot_reg_id))
+    if (hit) matchedRegs.add(String(m.schoolknot_reg_id))
+    else mappedNotInFeed++
+
+    let status: 'present' | 'absent' | 'holiday'
+    let check_in: string | null = null
+    let check_out: string | null = null
+
+    if (hit?.in_time) {
+      status = 'present'; check_in = hit.in_time; check_out = cleanOut(hit); present++
+    } else if (!working) {
+      status = 'holiday'; holiday++
+    } else {
+      status = 'absent'; absent++
+    }
+
+    return {
+      school_id: schoolId, user_id: m.user_id, date, status,
+      check_in, check_out, overtime_hours: 0,
+      remarks: 'Synced from SchoolKnot', marked_by: markedBy,
+    }
+  })
+
+  let staleCover: StaleCover[] = []
+  if (rows.length) {
+    const userIds = rows.map(r => r.user_id)
+    const { data: existing } = await supabase.from('staff_attendance')
+      .select('user_id, status').eq('school_id', schoolId).eq('date', date).in('user_id', userIds)
+    const prevByUser = new Map((existing ?? []).map(r => [r.user_id, r.status]))
+
+    const { error } = await supabase.from('staff_attendance').upsert(rows, { onConflict: 'user_id,date' })
+    if (error) throw new Error(error.message)
+
+    // Same LOP side-effect the manual marking path runs, per transition.
+    await Promise.all(rows.map(r =>
+      syncUnpaidLeaveOnAttendanceChange(schoolId, r.user_id, date, prevByUser.get(r.user_id) ?? null, r.status)))
+
+    // Reconcile with cover already arranged: a teacher who was absent on an
+    // earlier sync, had a substitute booked, and has now checked in. Their
+    // arrangement does NOT self-cancel, so hand the caller the list to
+    // action rather than leaving a sub standing in for someone who's here.
+    const returned = rows
+      .filter(r => r.status === 'present' && prevByUser.get(r.user_id) === 'absent')
+      .map(r => r.user_id)
+    staleCover = await findStaleCover(schoolId, date, returned)
+  }
+
+  const unmatchedRegIds = feed.map(r => String(r.reg_id)).filter(reg => !matchedRegs.has(reg))
+
+  return {
+    date, written: rows.length, present, absent, holiday, workingDay: working,
+    mappedStaff: mappedRows.length,
+    unmappedStaff: Math.max(0, (totalStaff ?? 0) - mappedRows.length),
+    mappedNotInFeed,
+    unmatchedRegIds,
+    staleCover,
+  }
+}
+
+// ── GET /hrms/attendance/sync/status — is SchoolKnot wired for this
+// school? Lets the UI show the Sync button only where it can work.
+router.get('/attendance/sync/status', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const config = getSchoolknotConfig(req.user!.school_id)
+  res.json({
+    success: true,
+    data: {
+      configured: !!config,
+      provider: config ? 'schoolknot' : null,
+      mappedStaff: config ? Object.keys(config.regByEmail).length : 0,
+    },
+  })
+}))
+
+// ── POST /hrms/attendance/sync — pull a day from SchoolKnot. Same
+// permission as manual marking; it writes the same table the same way.
+router.post('/attendance/sync', requirePermissionV2('staff.attendance_mark'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const date = (req.body?.date ?? '').trim() || toLocalDateStr(new Date())
+    // Format AND real-calendar-date: the regex alone accepts 2026-13-99,
+    // which would otherwise sail through to SchoolKnot and come back a 502.
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
+    const validDate = !!m && (() => {
+      const [, y, mo, d] = m.map(Number)
+      const dt = new Date(Date.UTC(y, mo - 1, d))
+      return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
+    })()
+    if (!validDate) {
+      return res.status(400).json({ success: false, error: 'date must be a real calendar date (YYYY-MM-DD)' })
+    }
+
+    if (!getSchoolknotConfig(req.user!.school_id)) {
+      return res.status(400).json({ success: false, error: 'SchoolKnot is not configured for this school.' })
+    }
+
+    try {
+      const report = await runSchoolknotAttendanceSync(req.user!.school_id, date, req.user!.id)
+      res.json({ success: true, data: report })
+    } catch (err: any) {
+      // A provider/transport failure is upstream, not a bad request.
+      res.status(502).json({ success: false, error: err?.message ?? 'SchoolKnot sync failed' })
+    }
   })
 )
 

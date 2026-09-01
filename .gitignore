@@ -16,3 +16,6 @@ credentials-*.txt
 
 # transient probe scripts
 backend/watch-cron-tick.ts
+
+# SchoolKnot attendance exports — contain staff PII, never commit.
+schoolknot_attendance_*.csv

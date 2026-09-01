@@ -2,8 +2,9 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi, calendarApi } from '@/lib/api'
+import { timetableApi } from '@/lib/timetableApi'
 import { cn } from '@/lib/utils'
-import { ArrowLeft, Loader2, ClipboardList, BarChart3, ChevronLeft, ChevronRight, Users, UserCheck, Inbox, Clock3, Plus, Trash2, Check, X, PartyPopper } from 'lucide-react'
+import { ArrowLeft, Loader2, ClipboardList, BarChart3, ChevronLeft, ChevronRight, Users, UserCheck, Inbox, Clock3, Plus, Trash2, Check, X, PartyPopper, RefreshCw } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -145,6 +146,45 @@ function MarkTab() {
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to save'),
   })
 
+  // SchoolKnot biometric sync — only shown where the backend says it's
+  // configured for this school (a demo integration, currently one school).
+  const { data: syncStatus } = useQuery({
+    queryKey: ['schoolknot-sync-status'],
+    queryFn: () => hrmsApi.attendance.syncStatus().then(r => r.data),
+    staleTime: 60 * 60 * 1000,
+  })
+  // Teachers who checked in on the latest sync but still have cover booked
+  // — surfaced by the sync so it can be cancelled in one click here.
+  const [staleCover, setStaleCover] = useState<any[]>([])
+
+  const syncMutation = useMutation({
+    mutationFn: () => hrmsApi.attendance.sync(date),
+    onSuccess: (res: any) => {
+      const d = res.data ?? {}
+      qc.invalidateQueries({ queryKey: ['staff-attendance'] })
+      setStaleCover(d.staleCover ?? [])
+      toast.success(
+        `Synced ${d.written ?? 0} from SchoolKnot — ${d.present ?? 0} present, ${d.absent ?? 0} absent` +
+        (d.holiday ? `, ${d.holiday} holiday` : ''),
+        { description: d.unmappedStaff ? `${d.unmappedStaff} staff not mapped to SchoolKnot were skipped.` : undefined },
+      )
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'SchoolKnot sync failed'),
+  })
+
+  // "Teacher returned" — cancels the whole absence, freeing every period's
+  // substitute at once and notifying them. Same path the arrangements screen
+  // uses; here it's driven off a returning teacher the sync just detected.
+  const cancelCoverMutation = useMutation({
+    mutationFn: (absenceId: string) => timetableApi.cancelAbsence(absenceId, 'Teacher checked in — synced from SchoolKnot'),
+    onSuccess: (_res: any, absenceId: string) => {
+      setStaleCover(prev => prev.filter(s => s.absenceId !== absenceId))
+      qc.invalidateQueries({ queryKey: ['staff-attendance'] })
+      toast.success('Cover cancelled — the substitute has been notified.')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Could not cancel cover'),
+  })
+
   const setStatus = (userId: string, status: string) => {
     setRecords(r => ({ ...r, [userId]: { ...r[userId], status } }))
   }
@@ -172,11 +212,59 @@ function MarkTab() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {syncStatus?.configured && (
+          <Button variant="outline" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending || saveMutation.isPending}
+            title="Pull this day's punches from the SchoolKnot biometric device">
+            {syncMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Sync from SchoolKnot
+          </Button>
+        )}
         <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || isNonWorkingDay}>
           {saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save Attendance
         </Button>
       </div>
+
+      {/* Returned-teacher reconciliation. A teacher who was covered but has
+          now checked in still has a substitute booked — the sync surfaces
+          them here so the stale cover can't be silently left in place. */}
+      {staleCover.length > 0 && (
+        <Card className="border-warning/40 bg-warning/5">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-sm text-warning-foreground">
+              <RefreshCw className="h-4 w-4" />
+              {staleCover.length} {staleCover.length === 1 ? 'teacher has' : 'teachers have'} checked in but still have cover arranged
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              They were marked absent and a substitute was booked. Cancel the cover to free the substitute and notify them.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            {staleCover.map((s: any) => (
+              <div key={s.absenceId ?? s.teacherId} className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground">{s.teacherName}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {s.periods?.length ? `Period${s.periods.length > 1 ? 's' : ''} ${s.periods.join(', ')}` : 'Cover'}
+                    {s.substitutes?.length ? ` · covered by ${s.substitutes.join(', ')}` : ''}
+                  </p>
+                </div>
+                {s.absenceId ? (
+                  <Button variant="outline" size="sm"
+                    onClick={() => cancelCoverMutation.mutate(s.absenceId)}
+                    disabled={cancelCoverMutation.isPending}>
+                    {cancelCoverMutation.isPending && cancelCoverMutation.variables === s.absenceId
+                      ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                    Cancel cover
+                  </Button>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Cancel manually in Arrangements</span>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Date selector + stats */}
       <Card>

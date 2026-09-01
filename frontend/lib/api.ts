@@ -885,6 +885,9 @@ export const hrmsApi = {
     save: (data: any) => api.post('/hrms/attendance', data).then(r => r.data),
     report: (month: number, year: number, department?: string) =>
       api.get('/hrms/attendance/report', { params: { month, year, department: department || undefined } }).then(r => r.data),
+    // SchoolKnot biometric sync (demo integration, config-gated per school).
+    syncStatus: () => api.get('/hrms/attendance/sync/status').then(r => r.data),
+    sync: (date: string) => api.post('/hrms/attendance/sync', { date }).then(r => r.data),
   },
   shifts: {
     list: () => api.get('/hrms/shifts').then(r => r.data),
