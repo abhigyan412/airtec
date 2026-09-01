@@ -191,6 +191,18 @@ export const timetableApi = {
     get<any>('/views/block', versionId ? { versionId } : undefined),
   cloneActive: (label?: string) =>
     post<any>('/versions/clone-active', label ? { label } : {}),
+  /** Download a version as the same .xlsx the import reads. */
+  exportVersion: async (versionId: string, filename: string) => {
+    const res = await api.get(`/timetable/versions/${versionId}/export`, { responseType: 'blob' })
+    const url = URL.createObjectURL(res.data as Blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  },
   updateDraftCell: (versionId: string, cellId: string, body: { teacherId?: string | null; roomId?: string | null; subjectId?: string | null }) =>
     patch<any>(`/draft/${versionId}/cells/${cellId}`, body),
   moveDraftCell: (versionId: string, cellId: string, target: { day: number; periodNumber: number }) =>

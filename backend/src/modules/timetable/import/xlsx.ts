@@ -260,3 +260,135 @@ export function readWorkbook(buf: Buffer): Sheet[] {
   if (!sheets.length) throw new Error('The workbook contains no readable sheets.')
   return sheets
 }
+
+// ── writing ─────────────────────────────────────────────────────
+//
+// The inverse of readWorkbook: a multi-sheet workbook of plain-string
+// grids, as a real .xlsx (ZIP of XML). Deliberately minimal — no styles,
+// no numbers, just shared-string cells — because its one job is to
+// reproduce the picture-grid layout parseWorkbook reads, so an export
+// round-trips back through the import. stdlib only (same reason the
+// reader is hand-rolled): no SheetJS.
+
+function zipStore(files: { name: string; content: string }[]): Buffer {
+  const locals: Buffer[] = []
+  const centrals: Buffer[] = []
+  let offset = 0
+  for (const file of files) {
+    const nameBuf = Buffer.from(file.name, 'utf8')
+    const data = Buffer.from(file.content, 'utf8')  // stored (method 0), no compression
+    const crc = crc32(data)
+
+    const local = Buffer.alloc(30 + nameBuf.length)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(0, 6)
+    local.writeUInt16LE(0, 8)      // stored
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(data.length, 18)
+    local.writeUInt32LE(data.length, 22)
+    local.writeUInt16LE(nameBuf.length, 26)
+    local.writeUInt16LE(0, 28)
+    nameBuf.copy(local, 30)
+
+    const central = Buffer.alloc(46 + nameBuf.length)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(0, 8)
+    central.writeUInt16LE(0, 10)   // stored
+    central.writeUInt32LE(crc, 16)
+    central.writeUInt32LE(data.length, 20)
+    central.writeUInt32LE(data.length, 24)
+    central.writeUInt16LE(nameBuf.length, 28)
+    central.writeUInt32LE(offset, 42)
+    nameBuf.copy(central, 46)
+
+    locals.push(local, data)
+    centrals.push(central)
+    offset += local.length + data.length
+  }
+  const centralBuf = Buffer.concat(centrals)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(files.length, 8)
+  eocd.writeUInt16LE(files.length, 10)
+  eocd.writeUInt32LE(centralBuf.length, 12)
+  eocd.writeUInt32LE(offset, 16)
+  return Buffer.concat([...locals, centralBuf, eocd])
+}
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    t[n] = c >>> 0
+  }
+  return t
+})()
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+export function writeWorkbook(sheets: { name: string; grid: string[][] }[]): Buffer {
+  const shared: string[] = []
+  const strIndex = (s: string) => {
+    let i = shared.indexOf(s)
+    if (i < 0) { shared.push(s); i = shared.length - 1 }
+    return i
+  }
+  const colName = (n: number) => {
+    let out = ''
+    n += 1
+    while (n > 0) { const r = (n - 1) % 26; out = String.fromCharCode(65 + r) + out; n = Math.floor((n - 1) / 26) }
+    return out
+  }
+  const esc = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+  const sheetXml = sheets.map(({ grid }) => {
+    const rows = grid.map((row, r) => {
+      const cells = row.map((value, c) =>
+        value ? `<c r="${colName(c)}${r + 1}" t="s"><v>${strIndex(value)}</v></c>` : `<c r="${colName(c)}${r + 1}"/>`
+      ).join('')
+      return `<row r="${r + 1}">${cells}</row>`
+    }).join('')
+    return `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows}</sheetData></worksheet>`
+  })
+
+  const files = [
+    {
+      name: '[Content_Types].xml',
+      content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>${
+        sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')
+      }</Types>`,
+    },
+    {
+      name: '_rels/.rels',
+      content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    },
+    {
+      name: 'xl/workbook.xml',
+      content: `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${
+        sheets.map((s, i) => `<sheet name="${esc(s.name).slice(0, 31)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')
+      }</sheets></workbook>`,
+    },
+    {
+      name: 'xl/_rels/workbook.xml.rels',
+      content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${
+        sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')
+      }<Relationship Id="rIdSS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>`,
+    },
+    {
+      name: 'xl/sharedStrings.xml',
+      content: `<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${shared.length}" uniqueCount="${shared.length}">${
+        shared.map(s => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')
+      }</sst>`,
+    },
+    ...sheetXml.map((xml, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, content: xml })),
+  ]
+  return zipStore(files)
+}

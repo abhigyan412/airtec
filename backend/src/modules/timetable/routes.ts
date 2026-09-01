@@ -20,6 +20,7 @@ import * as bookings from './services/bookings'
 import * as workload from './services/workload'
 import * as generate from './services/generate'
 import * as escalation from './services/escalation'
+import { exportVersionXlsx } from './services/exportGrid'
 
 const router = Router()
 router.use(authenticate)
@@ -515,6 +516,21 @@ router.post('/generate', requirePermissionV2('timetable.generate'),
 
 router.get('/versions', requirePermissionV2('timetable.view'),
   handle(async req => generate.listVersions(req.user!.school_id)))
+
+// Export a version as the same .xlsx the import reads (round-trips).
+// Binary response, so it can't go through handle()'s JSON envelope.
+router.get('/versions/:id/export', requirePermissionV2('timetable.export'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    try {
+      const versionId = req.params.id === 'active' ? null : req.params.id
+      const { filename, buffer } = await exportVersionXlsx(req.user!.school_id, versionId)
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+      res.send(buffer)
+    } catch (err) {
+      sendError(res, err)
+    }
+  }))
 
 router.get('/versions/:id/grid', requirePermissionV2('timetable.view'),
   handle(async req => generate.draftGrid(

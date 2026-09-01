@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  AlertTriangle, CheckCircle2, Eye, History, Loader2, RotateCcw, Trash2, Wand2,
+  AlertTriangle, CheckCircle2, Download, Eye, History, Loader2, RotateCcw, Trash2, Wand2,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -50,6 +50,13 @@ export default function GeneratePage() {
   const [previewing, setPreviewing] = useState<{ id: string; label: string } | null>(null)
 
   const canPublish = can('timetable.publish')
+  const canExport = can('timetable.export')
+
+  const exportVersion = useMutation({
+    mutationFn: (v: { id: string; label: string }) =>
+      timetableApi.exportVersion(v.id, `timetable-${(v.label || 'export').replace(/[^\w -]+/g, '').trim().replace(/\s+/g, '-') || 'export'}.xlsx`),
+    onError: (e) => toast.error(timetableError(e)),
+  })
 
   const feasibility = useQuery({
     queryKey: ['tt-feasibility'],
@@ -262,6 +269,18 @@ export default function GeneratePage() {
                     </div>
 
                     <div className="flex shrink-0 flex-wrap gap-2">
+                      {/* Archived versions keep no periods, so there's nothing to export. */}
+                      {canExport && version.status !== 'archived' && (
+                        <Button size="sm" variant="outline"
+                          onClick={() => exportVersion.mutate({ id: version.id, label: version.label })}
+                          disabled={exportVersion.isPending && exportVersion.variables?.id === version.id}
+                          title="Download as Excel, in the same format the import reads">
+                          {exportVersion.isPending && exportVersion.variables?.id === version.id
+                            ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                            : <Download className="mr-1.5 h-3.5 w-3.5" />}
+                          Export
+                        </Button>
+                      )}
                       {version.status === 'draft' && (
                         <Button size="sm" variant="outline"
                           onClick={() => setPreviewing({ id: version.id, label: version.label })}>
