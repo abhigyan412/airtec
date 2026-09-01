@@ -463,6 +463,18 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 ?.filter((c) => c.href === '/students')
                 .map((c) => ({ ...c, label: 'My Students' }))
             }
+            // /timetable renders a teacher their own schedule and their
+            // homeroom, never the class/teacher browser — the page
+            // returns early for them. So "Class View" is a lie about
+            // what they will get, and "Teacher View" is the very same
+            // component a second time, because ?view=teacher is an
+            // admin's "show me somebody else's timetable" switch and a
+            // teacher has nobody else to look at. One honest entry.
+            if (item.label === 'Timetable' && user?.role === 'teacher') {
+              children = children
+                ?.filter((c) => c.href !== '/timetable?view=teacher')
+                .map((c) => (c.href === '/timetable' ? { ...c, label: 'My Timetable' } : c))
+            }
             if (item.children && !children?.length) return null
             return (
               <NavEntry
