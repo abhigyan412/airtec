@@ -25,7 +25,7 @@ export const SCHOOLKNOT_CONFIG: Record<string, SchoolknotSchoolConfig> = {
   'd400bc23-9534-4410-af92-5563990f2b27': {
     schoolknotSchoolId: 'SC3102',
     regByEmail: {
-      'principal@rashtrabharti.school': '4680', // Mohd. Wajihul Islam
+      'principal@gmail.com': '4680', // Mohd. Wajihul Islam
       'krishna@gmail.com': '72',
       'basundhara@gmail.com': '73',
       'artipal@gmail.com': '4727',
