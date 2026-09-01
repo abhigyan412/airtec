@@ -269,12 +269,16 @@ export default function GeneratePage() {
                     </div>
 
                     <div className="flex shrink-0 flex-wrap gap-2">
-                      {/* Archived versions keep no periods, so there's nothing to export. */}
-                      {canExport && version.status !== 'archived' && (
+                      {/* Archived versions keep no periods (their rows are removed
+                          when they're superseded), so there's nothing to export —
+                          shown disabled with the reason rather than hidden. */}
+                      {canExport && (
                         <Button size="sm" variant="outline"
                           onClick={() => exportVersion.mutate({ id: version.id, label: version.label })}
-                          disabled={exportVersion.isPending && exportVersion.variables?.id === version.id}
-                          title="Download as Excel, in the same format the import reads">
+                          disabled={version.status === 'archived' || (exportVersion.isPending && exportVersion.variables?.id === version.id)}
+                          title={version.status === 'archived'
+                            ? 'Archived versions keep no periods to export. Export the live timetable or a draft.'
+                            : 'Download as Excel, in the same format the import reads'}>
                           {exportVersion.isPending && exportVersion.variables?.id === version.id
                             ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                             : <Download className="mr-1.5 h-3.5 w-3.5" />}
