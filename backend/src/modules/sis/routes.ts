@@ -359,12 +359,40 @@ router.get('/timetable', asyncHandler(async (req: AuthRequest, res: Response) =>
 const TIMETABLE_DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const timetableTargetKey = (p: any) => `${p.class_id}|${p.section_id ?? ''}|${p.day_of_week}|${p.period_number}`
 
+// ── Live timetable is read-only once versioning is in use ────────────
+//
+// This flat editor writes straight into timetable_periods. The moment a
+// school manages its timetable through the versioned module (an 'active'
+// timetable_versions row exists), those rows are the PUBLISHED output —
+// what the whole school reads, what the cover queue and printed sheet use.
+// Editing them here bypasses the version, so there is nothing to review or
+// roll back. The block view already refuses this in its UI ("read-only —
+// make a copy"); this is the same rule enforced on the server, so the
+// front door being locked doesn't leave the back door open.
+//
+// Schools that never adopted versioning (no active version) have no other
+// editor, so they keep this one untouched.
+async function liveTimetableLocked(schoolId: string): Promise<boolean> {
+  const { data } = await supabase.from('timetable_versions')
+    .select('id').eq('school_id', schoolId).eq('status', 'active').maybeSingle()
+  return !!data
+}
+
+function refuseLiveEdit(res: Response) {
+  return res.status(409).json({
+    success: false,
+    code: 'live_not_editable',
+    error: 'The live timetable is read-only. Open the block view, make a copy, change the copy, and publish it.',
+  })
+}
+
 router.post('/timetable', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { periods } = req.body
     const school_id = req.user!.school_id
     if (!Array.isArray(periods) || !periods.length)
       return res.status(400).json({ success: false, error: 'periods array required' })
+    if (await liveTimetableLocked(school_id)) return refuseLiveEdit(res)
 
     // Teacher double-booking guard (room guard follows below, same shape).
     // Nothing else in this app stops the same teacher being assigned to
@@ -507,6 +535,7 @@ router.post('/timetable', requirePermissionV2('timetable.manage'),
 router.delete('/timetable/:period_id', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { period_id } = req.params
+    if (await liveTimetableLocked(req.user!.school_id)) return refuseLiveEdit(res)
     const { error } = await supabase.from('timetable_periods').delete().eq('id', period_id).eq('school_id', req.user!.school_id)
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true })
@@ -537,6 +566,7 @@ router.post('/timetable/bulk-lunch', requirePermissionV2('timetable.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const body = BulkLunchSchema.parse(req.body)
     const school_id = req.user!.school_id
+    if (await liveTimetableLocked(school_id)) return refuseLiveEdit(res)
 
     let classIds = body.class_ids
     if (!classIds?.length) {
