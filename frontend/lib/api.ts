@@ -675,6 +675,9 @@ export const adhocFeeApi = {
 }
 export const timetableApi = {
   get: (params?: any) => api.get('/students/timetable', { params }).then(r => r.data),
+  // Whether the live timetable is locked (managed via the versioned block
+  // view), so this flat editor can render read-only instead of failing on save.
+  lockStatus: () => api.get('/students/timetable/lock-status').then(r => r.data),
   save: (periods: any[]) => api.post('/students/timetable', { periods }).then(r => r.data),
   bulkLunch: (data: { start_time: string; end_time: string; subject_name?: string; days?: number[]; class_ids?: string[] }) =>
     api.post('/students/timetable/bulk-lunch', data).then(r => r.data),

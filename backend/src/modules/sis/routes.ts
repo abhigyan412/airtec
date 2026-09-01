@@ -294,6 +294,12 @@ router.get('/houses', asyncHandler(async (req: AuthRequest, res: Response) => {
 // class_id — would get it too, since none of this was ever ownership-
 // checked. NON_STAFF_ROLES now hard-overrides every param with their
 // own resolved class/section, same pattern as GET /homework.
+// Whether this flat editor may write, so the page can present itself
+// read-only instead of offering edits that will 409 on save.
+router.get('/timetable/lock-status', asyncHandler(async (req: AuthRequest, res: Response) => {
+  res.json({ success: true, data: { locked: await liveTimetableLocked(req.user!.school_id) } })
+}))
+
 router.get('/timetable', asyncHandler(async (req: AuthRequest, res: Response) => {
   const school_id = req.user!.school_id
   let { class_id, section_id, teacher_id, academic_year_id } = req.query as Record<string, string | undefined>

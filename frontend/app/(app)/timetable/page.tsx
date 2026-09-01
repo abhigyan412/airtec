@@ -73,8 +73,20 @@ export default function TimetablePage() {
   const { user, isRole } = useAuth()
   const isTeacher = user?.role === 'teacher'
   const canView   = can('timetable.view')
-  const canManage = can('timetable.manage')
   const canSeeFreeFaculty = isRole('principal', 'school_admin')
+
+  // The live timetable is read-only once the school manages it through the
+  // versioned block view. This flat editor then only reads: showing edit
+  // controls that 409 on save is worse than not showing them. So editing
+  // needs BOTH the permission and an unlocked live timetable.
+  const { data: lockStatus } = useQuery({
+    queryKey: ['timetable-lock-status'],
+    queryFn: () => timetableApi.lockStatus().then(r => r.data),
+    enabled: !isTeacher,
+    staleTime: 5 * 60 * 1000,
+  })
+  const liveLocked = !!lockStatus?.locked
+  const canManage = can('timetable.manage') && !liveLocked
 
   // A teacher gets its own dedicated view below (own teaching schedule +
   // full homeroom timetable, nothing else) instead of this admin
@@ -272,6 +284,19 @@ export default function TimetablePage() {
           </>
         }
       />
+
+      {/* Live timetable is managed through the versioned block view — say so
+          here, where someone with edit rights would otherwise expect to edit. */}
+      {can('timetable.manage') && liveLocked && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-border bg-muted/40 px-4 py-3">
+          <ShieldOff className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="text-sm text-foreground">This is the live timetable and is read-only.</span>
+          <span className="text-sm text-muted-foreground">Make a copy in the block view to change it.</span>
+          <Button variant="outline" size="sm" className="ml-auto" onClick={() => router.push('/timetable/block')}>
+            <Grid3X3 className="h-4 w-4" /> Open block view
+          </Button>
+        </div>
+      )}
 
       {showBulkLunch && (
         <BulkLunchModal onClose={() => { setShowBulkLunch(false); qc.invalidateQueries({ queryKey: ['timetable'] }) }} />
