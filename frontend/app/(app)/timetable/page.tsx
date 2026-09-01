@@ -99,7 +99,12 @@ export default function TimetablePage() {
     ? classesData
     : Array.isArray((classesData as any)?.data) ? (classesData as any).data : []
   const selectedClassObj = classList.find((c: any) => c.id === selectedClass)
-  const sections = selectedClassObj?.sections ?? []
+  // One comparator for both the dropdown order and the auto-selection
+  // below, so "the first section" cannot mean two different things.
+  // Numeric-aware, so 2 sorts before 10.
+  const sortSections = (list: any[]) => [...list].sort((a, b) =>
+    String(a?.name ?? '').localeCompare(String(b?.name ?? ''), undefined, { numeric: true }))
+  const sections = sortSections(selectedClassObj?.sections ?? [])
 
   const { data: timetableData, isLoading } = useQuery({
     queryKey: ['timetable', selectedClass, selectedSection, selectedTeacher, viewMode],
@@ -272,7 +277,21 @@ export default function TimetablePage() {
           <>
             <div className="flex items-center gap-2">
               <Label className="shrink-0">Class</Label>
-              <Select value={selectedClass || undefined} onValueChange={v => { setSelectedClass(v); setSelectedSection('') }}>
+              {/* Landing on "All sections" merges every section of the
+                  class into one grid, which is the least useful thing to
+                  show first: nobody teaches "Class I", they teach I-A.
+                  Picking a class now lands on its first section, and
+                  "All sections" stays in the list for when the merged
+                  view is what you want. Sorted so "first" means A rather
+                  than whichever row the database returned first. */}
+              <Select
+                value={selectedClass || undefined}
+                onValueChange={v => {
+                  setSelectedClass(v)
+                  const secs = sortSections(classList.find((c: any) => c.id === v)?.sections ?? [])
+                  setSelectedSection(secs[0]?.id ?? '')
+                }}
+              >
                 <SelectTrigger className="h-9 min-w-[160px]"><SelectValue placeholder="Select class..." /></SelectTrigger>
                 <SelectContent>
                   {classList.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
