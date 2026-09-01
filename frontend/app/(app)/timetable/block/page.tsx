@@ -140,7 +140,6 @@ export default function BlockViewPage() {
               ['day', 'All classes, one day'],
               ['teachers', 'All teachers, whole week'],
               ['class', 'One class, whole week'],
-              ['teacher', 'One teacher, whole week'],
               ['edit', 'Edit a day'],
             ] as const).map(([mode, label]) => (
               <button
@@ -247,9 +246,6 @@ export default function BlockViewPage() {
               <ClassWeeks data={data} flagged={flagged} flaggedSlots={flaggedSlots}
                 editable={editable} onEdit={setEditing} versionId={versionId}
                 onChanged={() => qc.invalidateQueries({ queryKey: ['tt-block', versionId] })} />
-            )}
-            {layout === 'teacher' && (
-              <TeacherWeek data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
             )}
             {layout === 'edit' && (
               <DayEditor data={data} versionId={versionId} editable={editable}

@@ -507,7 +507,7 @@ export default function TimetablePage() {
                                   {hasConflict && <AlertTriangle className="w-3 h-3 text-destructive flex-shrink-0" />}
                                   {period.subject_name}
                                 </p>
-                                {viewMode === 'class' && !period.is_break && canManage && (
+                                {viewMode === 'class' && canManage && (
                                   <button onClick={() => deleteMutation.mutate(period.id)} aria-label={`Remove ${period.subject_name}`}
                                     className="-mr-1.5 -mt-1 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-destructive/70 opacity-0 transition-all hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100">
                                     <Trash2 className="w-3 h-3" />
@@ -606,7 +606,7 @@ export default function TimetablePage() {
                               {hasConflict && <AlertTriangle className="w-3 h-3 text-destructive" />}
                               {p.subject_name}
                             </span>
-                            {viewMode === 'class' && !p.is_break && canManage && (
+                            {viewMode === 'class' && canManage && (
                               <button onClick={() => deleteMutation.mutate(p.id)} aria-label={`Remove ${p.subject_name}`}
                                 className="-mr-1.5 -my-1 flex h-8 w-8 items-center justify-center rounded-md text-destructive/70 opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100">
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -661,8 +661,16 @@ function AddPeriodModal({ classId, sectionId, dayOfWeek, existingPeriods, locked
   lockedPeriod?: { number: number; start: string; end: string } | null; onClose: () => void
 }) {
   const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
-  const nextPeriod = existingPeriods.length > 0 ? Math.max(...existingPeriods.map(p => p.period_number)) + 1 : 1
-  const lastEnd = existingPeriods.length > 0 ? existingPeriods[existingPeriods.length-1]?.end_time?.slice(0,5) ?? '08:00' : '08:00'
+  // Breaks are stored with a sentinel period_number (e.g. 105) so they sort
+  // last — counting them here is what produced "next period = 106". The next
+  // teaching period follows the real teaching periods only.
+  const teachingPeriods = existingPeriods.filter(p => !p.is_break)
+  const nextPeriod = teachingPeriods.length > 0 ? Math.max(...teachingPeriods.map(p => p.period_number)) + 1 : 1
+  // Start the new period where the day currently ends (latest end time),
+  // not at whichever row happens to be last in the array.
+  const lastEnd = existingPeriods.length > 0
+    ? (existingPeriods.map(p => p.end_time?.slice(0, 5)).filter(Boolean).sort().pop() ?? '08:00')
+    : '08:00'
 
   const [form, setForm] = useState(lockedPeriod
     ? { day_of_week: dayOfWeek, period_number: lockedPeriod.number, start_time: lockedPeriod.start, end_time: lockedPeriod.end, subject_name: '', room: '', is_break: false }
