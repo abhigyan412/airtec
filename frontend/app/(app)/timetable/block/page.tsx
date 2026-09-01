@@ -3,7 +3,7 @@ import { Fragment, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  AlertTriangle, Check, Copy, Grid3x3, Loader2, Lock, Printer, X,
+  AlertTriangle, Check, Copy, Grid3x3, Loader2, Lock, Printer, UserCog, X,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -22,6 +22,7 @@ import { DAYS, DAY_SHORT } from '../shared'
 import { CellEditor } from './CellEditor'
 import { PrintSheets } from './PrintSheets'
 import { DayEditor } from './DayEditor'
+import { ReassignDialog } from './ReassignDialog'
 
 // ═══════════════════════════════════════════════════════════════
 // The block view — every class's week, in one place
@@ -50,6 +51,7 @@ export default function BlockViewPage() {
   const [editing, setEditing] = useState<any>(null)
   const [showConflicts, setShowConflicts] = useState(true)
   const [teacherFormat, setTeacherFormat] = useState<'grid' | 'sheets'>('grid')
+  const [reassignOpen, setReassignOpen] = useState(false)
 
   const canEdit = can('timetable.manage')
 
@@ -205,6 +207,14 @@ export default function BlockViewPage() {
           <>
             <SummaryStrip data={data} isDraft={isDraft} editable={editable} />
 
+            {editable && (
+              <div className="mb-3 flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setReassignOpen(true)}>
+                  <UserCog className="h-4 w-4" /> Reassign teacher
+                </Button>
+              </div>
+            )}
+
             {data.conflicts.length > 0 && (
               <ConflictPanel
                 conflicts={data.conflicts}
@@ -262,6 +272,16 @@ export default function BlockViewPage() {
             setEditing(null)
             qc.invalidateQueries({ queryKey: ['tt-block', versionId] })
           }}
+        />
+      )}
+
+      {editable && data && (
+        <ReassignDialog
+          versionId={versionId}
+          data={data}
+          open={reassignOpen}
+          onOpenChange={setReassignOpen}
+          onDone={() => qc.invalidateQueries({ queryKey: ['tt-block', versionId] })}
         />
       )}
     </div>

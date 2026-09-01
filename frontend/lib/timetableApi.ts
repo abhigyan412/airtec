@@ -195,6 +195,11 @@ export const timetableApi = {
     patch<any>(`/draft/${versionId}/cells/${cellId}`, body),
   moveDraftCell: (versionId: string, cellId: string, target: { day: number; periodNumber: number }) =>
     post<any>(`/draft/${versionId}/cells/${cellId}/move`, target),
+  /** Bulk-reassign one teacher's periods to another in a draft. dryRun previews. */
+  reassignTeacher: (versionId: string, body: {
+    fromTeacherId: string; toTeacherId: string; dryRun?: boolean;
+    filter: { dayOfWeek?: number; periodNumber?: number; classId?: string; sectionId?: string; subjectId?: string };
+  }) => post<any>(`/draft/${versionId}/reassign-teacher`, body),
   freeTeachers: (day: number, date?: string) =>
     get<any>('/views/free-teachers', { day, ...(date ? { date } : {}) }),
 

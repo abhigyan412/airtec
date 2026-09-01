@@ -545,6 +545,23 @@ router.post('/draft/:versionId/cells/:cellId/move', requirePermissionV2('timetab
       periodNumber: Number(req.body?.periodNumber),
     })))
 
+// Bulk-reassign one teacher's periods to another within a draft. Pass
+// dryRun:true to preview the matched set + clashes before committing.
+router.post('/draft/:versionId/reassign-teacher', requirePermissionV2('timetable.manage'),
+  handle(async req => generate.reassignTeacherInDraft(
+    req.user!.school_id, req.user!.id, req.params.versionId, {
+      fromTeacherId: String(req.body?.fromTeacherId ?? ''),
+      toTeacherId: String(req.body?.toTeacherId ?? ''),
+      dryRun: req.body?.dryRun === true,
+      filter: {
+        dayOfWeek: req.body?.filter?.dayOfWeek != null ? Number(req.body.filter.dayOfWeek) : undefined,
+        periodNumber: req.body?.filter?.periodNumber != null ? Number(req.body.filter.periodNumber) : undefined,
+        classId: req.body?.filter?.classId || undefined,
+        sectionId: req.body?.filter?.sectionId || undefined,
+        subjectId: req.body?.filter?.subjectId || undefined,
+      },
+    })))
+
 router.post('/versions/:id/publish', requirePermissionV2('timetable.publish'),
   handle(async req => generate.publishVersion(req.user!.school_id, req.user!.id, req.params.id)))
 

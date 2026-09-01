@@ -1196,6 +1196,130 @@ export async function updateDraftCell(
 }
 
 /**
+ * Hand every period matching a filter from one teacher to another, on a draft.
+ *
+ * The permanent counterpart to arrangement cover: cover leaves the base grid
+ * alone and stands somebody in for a day; this rewrites the grid itself, so
+ * it lives on a draft that gets published, never on the live timetable.
+ *
+ * The filter is a set of optional narrowers that AND together, so one call
+ * expresses everything from "this exact period" to "all of their classes":
+ *   {}                                   → every period they hold
+ *   { dayOfWeek: 2 }                     → their whole Tuesday
+ *   { classId }                          → everything they take for a class
+ *   { sectionId, periodNumber, dayOfWeek } → one specific slot
+ *   { subjectId }                        → every period of a subject
+ *
+ * A move is refused for any slot where the new teacher is already teaching
+ * (double-booking) — those are reported, the rest still go through. Nothing
+ * is written on a dry run, which is how the UI previews the exact set and its
+ * clashes before anyone commits.
+ */
+export interface ReassignFilter {
+  dayOfWeek?: number
+  periodNumber?: number
+  classId?: string
+  sectionId?: string
+  subjectId?: string
+}
+
+export async function reassignTeacherInDraft(
+  schoolId: string, actorId: string, versionId: string,
+  params: { fromTeacherId: string; toTeacherId: string; filter: ReassignFilter; dryRun?: boolean },
+) {
+  await editableDraft(schoolId, versionId)
+  const { fromTeacherId, toTeacherId, filter } = params
+  if (!fromTeacherId || !toTeacherId) throw badRequest('missing_teacher', 'Both a from- and a to-teacher are required.')
+  if (fromTeacherId === toTeacherId) throw badRequest('same_teacher', 'The two teachers are the same person.')
+
+  const [{ data: fromU }, { data: toU }] = await Promise.all([
+    supabase.from('users').select('id, full_name').eq('id', fromTeacherId).eq('school_id', schoolId).maybeSingle(),
+    supabase.from('users').select('id, full_name').eq('id', toTeacherId).eq('school_id', schoolId).maybeSingle(),
+  ])
+  if (!fromU) throw badRequest('from_not_found', 'The teacher being moved from was not found at this school.')
+  if (!toU) throw badRequest('to_not_found', 'The teacher being moved to was not found at this school.')
+
+  // The source teacher's periods in this draft, narrowed by whatever filters
+  // were supplied.
+  let q = supabase.from('timetable_draft_periods')
+    .select('id, day_of_week, period_number, subject_name, class_id, section_id, classes(name), sections(name)')
+    .eq('version_id', versionId).eq('school_id', schoolId)
+    .eq('teacher_id', fromTeacherId).eq('is_break', false)
+  if (filter.dayOfWeek != null) q = q.eq('day_of_week', filter.dayOfWeek)
+  if (filter.periodNumber != null) q = q.eq('period_number', filter.periodNumber)
+  if (filter.classId) q = q.eq('class_id', filter.classId)
+  if (filter.sectionId) q = q.eq('section_id', filter.sectionId)
+  if (filter.subjectId) q = q.eq('subject_id', filter.subjectId)
+  const { data: matchedRaw, error } = await q
+  if (error) throw badRequest('match_failed', error.message)
+  const matched = (matchedRaw ?? []) as any[]
+
+  // Where the target teacher is already occupied in this draft — one query,
+  // then a day:period lookup, so N matched rows don't become N queries.
+  const { data: busy } = await supabase.from('timetable_draft_periods')
+    .select('day_of_week, period_number, subject_name, classes(name), sections(name)')
+    .eq('version_id', versionId).eq('teacher_id', toTeacherId).eq('is_break', false)
+  const busyAt = new Map<string, any>((busy ?? []).map((b: any) => [`${b.day_of_week}:${b.period_number}`, b]))
+
+  const label = (r: any) => [r.classes?.name, r.sections?.name].filter(Boolean).join('-') || 'a class'
+  const rows = matched.map(r => {
+    const clash = busyAt.get(`${r.day_of_week}:${r.period_number}`)
+    return {
+      id: r.id, dayOfWeek: r.day_of_week, periodNumber: r.period_number,
+      day: DAY_NAMES[r.day_of_week], where: label(r), subject: r.subject_name,
+      clash: clash ? { subject: clash.subject_name, where: [clash.classes?.name, clash.sections?.name].filter(Boolean).join('-') } : null,
+    }
+  }).sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.periodNumber - b.periodNumber)
+
+  const movable = rows.filter(r => !r.clash)
+  const clashes = rows.filter(r => r.clash)
+
+  const preview = {
+    from: { id: fromTeacherId, name: fromU.full_name },
+    to: { id: toTeacherId, name: toU.full_name },
+    matched: rows.length,
+    willReassign: movable.length,
+    skipped: clashes.length,
+    periods: rows,
+  }
+  if (params.dryRun || !movable.length) {
+    return { ...preview, reassigned: 0, committed: false }
+  }
+
+  const { error: upErr } = await supabase.from('timetable_draft_periods')
+    .update({ teacher_id: toTeacherId }).in('id', movable.map(r => r.id))
+  if (upErr) throw badRequest('reassign_failed', upErr.message)
+
+  // Both sides told once, with the count — not one notification per period.
+  const summary = describeReassignment(movable)
+  await notify({
+    schoolId, userIds: [toTeacherId], type: 'timetable_changed',
+    title: 'Classes added to your timetable',
+    message: `You now take ${movable.length} period${movable.length === 1 ? '' : 's'} (${summary}) in a pending timetable update.`,
+    link: '/timetable/my-week', relatedEntityType: 'timetable_version', relatedEntityId: versionId,
+  })
+  await notify({
+    schoolId, userIds: [fromTeacherId], type: 'timetable_changed',
+    title: 'Classes moved off your timetable',
+    message: `${movable.length} period${movable.length === 1 ? '' : 's'} (${summary}) will move to ${toU.full_name} when the update is published.`,
+    link: '/timetable/my-week', relatedEntityType: 'timetable_version', relatedEntityId: versionId,
+  })
+
+  await audit(schoolId, actorId, 'reassign_teacher_bulk', 'timetable_version', versionId, {
+    from: fromTeacherId, to: toTeacherId, filter, reassigned: movable.length, skipped: clashes.length,
+  })
+
+  return { ...preview, reassigned: movable.length, committed: true }
+}
+
+/** A short human summary like "Maths for VI-B, Science for VII-A" (capped). */
+function describeReassignment(rows: { subject: string; where: string }[]): string {
+  const parts = rows.slice(0, 3).map(r => `${r.subject} for ${r.where}`)
+  if (rows.length > 3) parts.push(`+${rows.length - 3} more`)
+  return parts.join(', ')
+}
+
+/**
  * Move a period to another slot in the same section, swapping with
  * whatever is already there.
  *
