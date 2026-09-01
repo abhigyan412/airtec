@@ -78,8 +78,14 @@ async function fail(row: any, message: string) {
   await settle(row.id, { status: 'pending', last_error: message.slice(0, 500), next_attempt_at: next.toISOString() })
 }
 
-async function deliverPush(row: any, notification: any): Promise<void> {
-  if (!configureVapid()) { await settle(row.id, { status: 'skipped', last_error: 'VAPID keys not configured' }); return }
+/**
+ * Returns true only when a push actually reached at least one endpoint.
+ * The caller counts real deliveries with it: "processed" and "delivered"
+ * are different numbers, and conflating them is how a test-push button
+ * reports success while the notification went nowhere.
+ */
+async function deliverPush(row: any, notification: any): Promise<boolean> {
+  if (!configureVapid()) { await settle(row.id, { status: 'skipped', last_error: 'VAPID keys not configured' }); return false }
 
   const { data: subs } = await supabase
     .from('push_subscriptions')
@@ -87,7 +93,7 @@ async function deliverPush(row: any, notification: any): Promise<void> {
     .eq('user_id', notification.user_id)
     .is('failed_at', null)
 
-  if (!subs?.length) { await settle(row.id, { status: 'skipped', last_error: 'no active subscription' }); return }
+  if (!subs?.length) { await settle(row.id, { status: 'skipped', last_error: 'no active subscription' }); return false }
 
   const payload = JSON.stringify({
     title: notification.title,
@@ -121,22 +127,27 @@ async function deliverPush(row: any, notification: any): Promise<void> {
     }
   }
 
-  if (delivered) { await settle(row.id, { status: 'sent', sent_at: new Date().toISOString() }); return }
-  if (errors.length) { await fail(row, errors.join('; ')); return }
+  if (delivered) { await settle(row.id, { status: 'sent', sent_at: new Date().toISOString() }); return true }
+  if (errors.length) { await fail(row, errors.join('; ')); return false }
   // Every subscription was expired — nothing to retry.
   await settle(row.id, { status: 'skipped', last_error: 'all subscriptions expired' })
+  return false
 }
 
-async function deliverEmail(row: any, _notification: any): Promise<void> {
+async function deliverEmail(row: any, _notification: any): Promise<boolean> {
   // No provider wired yet (design.md §8 puts email in phase 3). Marked
   // skipped rather than left pending so the outbox doesn't accumulate rows
   // that can never succeed and the backlog stays an honest signal.
   await settle(row.id, { status: 'skipped', last_error: 'email provider not configured' })
+  return false
 }
 
 /**
  * Claim a bounded batch and dispatch it. Safe to run concurrently: the
  * claim happens inside a SQL function using FOR UPDATE SKIP LOCKED.
+ *
+ * `sent` counts deliveries that actually reached a provider, not rows
+ * taken off the queue — a batch that is entirely skipped reports 0.
  */
 export async function runDeliveries(batchSize = 100): Promise<{ claimed: number; sent: number }> {
   // Return anything a previous crash stranded mid-flight.
@@ -156,9 +167,10 @@ export async function runDeliveries(batchSize = 100): Promise<{ claimed: number;
     const notification = byId.get(row.notification_id)
     if (!notification) { await settle(row.id, { status: 'skipped', last_error: 'notification deleted' }); continue }
     try {
-      if (row.channel === 'push') await deliverPush(row, notification)
-      else await deliverEmail(row, notification)
-      sent++
+      const ok = row.channel === 'push'
+        ? await deliverPush(row, notification)
+        : await deliverEmail(row, notification)
+      if (ok) sent++
     } catch (err: any) {
       await fail(row, err?.message ?? 'unknown error')
     }

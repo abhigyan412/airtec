@@ -1,6 +1,6 @@
 'use client'
 
-import { BellRing, Share, X, Loader2 } from 'lucide-react'
+import { BellRing, X, Loader2 } from 'lucide-react'
 import { usePushSubscription } from '@/lib/usePushSubscription'
 import { Button } from '@/components/ui/button'
 
@@ -19,24 +19,13 @@ export function PushPrompt({ app, copy }: {
 }) {
   const { shouldOffer, needsHomeScreenInstall, busy, error, subscribe, dismiss } = usePushSubscription(app)
 
-  if (!shouldOffer) return null
-
-  // iOS Safari outside standalone: pushManager doesn't exist, so a
-  // "Turn on" button would be a lie. Explain the one path that works.
-  if (needsHomeScreenInstall) {
-    return (
-      <div className="relative border-b bg-primary/5 px-4 py-3">
-        <DismissButton label="Dismiss" onClick={dismiss} />
-        <p className="pr-12 text-sm font-semibold text-foreground">Get alerts on your phone</p>
-        <p className="mt-1 pr-12 text-xs leading-relaxed text-muted-foreground">
-          On iPhone, add this app to your home screen first: tap
-          <Share className="mx-1 inline h-3.5 w-3.5 align-text-bottom" />
-          <span className="font-medium text-foreground">Share</span> then{' '}
-          <span className="font-medium text-foreground">Add to Home Screen</span>, and open it from there.
-        </p>
-      </div>
-    )
-  }
+  // Only the sell, and only when there is something to sell. Every other
+  // state — an iPhone that must be installed first, an insecure origin, a
+  // site the user has blocked, push already on — is PushStatus's job, and
+  // PushStatus is always rendered. That split is deliberate: this card is
+  // dismissible, and dismissing it must never be what hides the controls
+  // or the reason notifications aren't arriving.
+  if (!shouldOffer || needsHomeScreenInstall) return null
 
   return (
     <div className="relative border-b bg-primary/5 px-4 py-3">

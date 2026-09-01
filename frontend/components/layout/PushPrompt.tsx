@@ -1,6 +1,6 @@
 'use client'
 
-import { BellRing, Share, X, Loader2 } from 'lucide-react'
+import { BellRing, X, Loader2 } from 'lucide-react'
 import { usePushSubscription } from '@/lib/usePushSubscription'
 
 // ── Permission pre-prompt (design.md §6.2) ──────────────────────────
@@ -18,27 +18,13 @@ export function PushPrompt({ app, copy }: {
 }) {
   const { shouldOffer, needsHomeScreenInstall, busy, error, subscribe, dismiss } = usePushSubscription(app)
 
-  if (!shouldOffer) return null
-
-  // iOS Safari outside standalone: pushManager doesn't exist, so a
-  // "Turn on" button would be a lie. Explain the one path that works.
-  if (needsHomeScreenInstall) {
-    return (
-      <div className="relative border-b border-border bg-primary/5 px-4 py-3">
-        <button onClick={dismiss} aria-label="Dismiss"
-          className="absolute right-1 top-1 flex h-9 w-9 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <X className="h-3.5 w-3.5" />
-        </button>
-        <p className="pr-9 text-sm font-semibold text-foreground">Get alerts on your phone</p>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          On iPhone, add this app to your home screen first: tap
-          <Share className="mx-1 inline h-3.5 w-3.5 align-text-bottom" />
-          <span className="font-medium">Share</span> then{' '}
-          <span className="font-medium">Add to Home Screen</span>, and open it from there.
-        </p>
-      </div>
-    )
-  }
+  // Only the sell, and only when there is something to sell. Every other
+  // state — an iPhone that must be installed first, an insecure origin, a
+  // site the user has blocked, push already on — is PushStatus's job, and
+  // PushStatus is always rendered. That split is deliberate: this card is
+  // dismissible, and dismissing it must never be what hides the controls
+  // or the reason notifications aren't arriving.
+  if (!shouldOffer || needsHomeScreenInstall) return null
 
   return (
     <div className="relative border-b border-border bg-primary/5 px-4 py-3">

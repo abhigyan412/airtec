@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { PushPrompt } from './PushPrompt'
+import { PushStatus } from './PushStatus'
 
 function timeAgo(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime()
@@ -133,7 +134,7 @@ export function NotificationBell(_props: NotificationBellProps = {}) {
             )}
           </div>
           <PushPrompt app="family" copy={{ headline: 'Never miss a fee or absence alert', detail: "Fee reminders, attendance alerts and results for your child — even when the app is closed." }} />
-          <div className="overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {isLoading ? (
               // Same row shape as the real list, so nothing jumps when it lands.
               <div className="divide-y divide-border">
@@ -175,6 +176,7 @@ export function NotificationBell(_props: NotificationBellProps = {}) {
               </div>
             )}
           </div>
+          <PushStatus app="family" />
         </div>
       )}
     </div>

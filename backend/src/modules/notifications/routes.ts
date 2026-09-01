@@ -154,15 +154,65 @@ router.put('/preferences', asyncHandler(async (req: AuthRequest, res: Response) 
   res.json({ success: true, data: { muted: rows.length } })
 }))
 
+// ── GET /notifications/push/subscriptions ───────────────────────
+// What the server actually believes about this user's devices. The
+// browser knowing it has a subscription proves nothing on its own: if
+// the POST that registers it ever failed, the browser reports "on" while
+// the server has no row and every push is silently skipped. The UI
+// compares the two, so that mismatch becomes visible instead of fatal.
+router.get('/push/subscriptions', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { data, error } = await supabase.from('push_subscriptions')
+    .select('id, app, endpoint, user_agent, last_used_at, created_at')
+    .eq('user_id', req.user!.id).is('failed_at', null)
+    .order('created_at', { ascending: false })
+  if (error) return res.status(400).json({ success: false, error: error.message })
+
+  const subs = (data ?? []) as any[]
+  const endpoint = typeof req.query.endpoint === 'string' ? req.query.endpoint : null
+  res.json({
+    success: true,
+    data: {
+      active: subs.length,
+      // Whether *this* browser's subscription is one the server knows about.
+      thisDevice: endpoint ? subs.some(s => s.endpoint === endpoint) : null,
+      configured: !!process.env.VAPID_PUBLIC_KEY && !!process.env.VAPID_PRIVATE_KEY,
+      devices: subs.map(s => ({
+        id: s.id, app: s.app, user_agent: s.user_agent,
+        last_used_at: s.last_used_at, created_at: s.created_at,
+      })),
+    },
+  })
+}))
+
 // ── POST /notifications/test-push ───────────────────────────────
 // Sends the caller a notification addressed to themselves and drains the
 // outbox synchronously. This is how someone confirms push actually works
 // after enabling it — "did it work?" is otherwise unanswerable until the
 // next real event, which might be days away.
 //
+// The answer has to be the truth about *this* notification, so the
+// response reports the delivery row's own status rather than a queue-wide
+// counter. Reporting success while the push was skipped for want of a
+// subscription is exactly the failure this endpoint exists to catch.
+//
 // Not gated by role: it can only ever notify the caller.
 router.post('/test-push', asyncHandler(async (req: AuthRequest, res: Response) => {
-  await createNotification({
+  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+    return res.status(503).json({ success: false, error: 'Push is not configured on this server (no VAPID keys).' })
+  }
+
+  const { count: subs } = await supabase.from('push_subscriptions')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', req.user!.id).is('failed_at', null)
+
+  if (!subs) {
+    return res.status(409).json({
+      success: false,
+      error: 'No device is registered for push on this account. Turn on notifications first, then try again.',
+    })
+  }
+
+  const { ids } = await createNotification({
     schoolId: req.user!.school_id,
     userId: req.user!.id,
     type: 'attendance_absent',   // a real union member; content below says otherwise
@@ -171,7 +221,26 @@ router.post('/test-push', asyncHandler(async (req: AuthRequest, res: Response) =
     link: '/',
   })
   const result = await runDeliveries(20)
-  res.json({ success: true, data: result })
+
+  // kickDeliveries() may have raced us to this row; either way its final
+  // status is the honest answer.
+  const { data: deliveries } = ids.length
+    ? await supabase.from('notification_deliveries')
+        .select('status, last_error').eq('channel', 'push').in('notification_id', ids)
+    : { data: [] as any[] }
+
+  const push = ((deliveries ?? []) as any[])[0]
+  const delivered = push?.status === 'sent'
+  res.json({
+    success: true,
+    data: {
+      ...result,
+      subscriptions: subs,
+      delivered,
+      status: push?.status ?? 'unknown',
+      reason: delivered ? null : (push?.last_error ?? 'Delivery is still queued; it should arrive shortly.'),
+    },
+  })
 }))
 
 // ── POST /notifications/run-deliveries ──────────────────────────

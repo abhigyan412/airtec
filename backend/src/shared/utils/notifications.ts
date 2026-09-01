@@ -44,12 +44,15 @@ interface CreateNotificationParams {
 
 export async function createNotification(params: CreateNotificationParams) {
   const { created } = await writeNotifications([params.userId], params)
-  return { count: created.length }
+  // ids come back so a caller that needs to know what happened to *this*
+  // notification (the push self-test) can look up its delivery rows
+  // instead of guessing from a queue-wide counter.
+  return { count: created.length, ids: created.map((n: any) => n.id as string) }
 }
 
 export async function createNotifications(userIds: string[], params: Omit<CreateNotificationParams, 'userId'>) {
   const { created } = await writeNotifications(userIds, params)
-  return { count: created.length }
+  return { count: created.length, ids: created.map((n: any) => n.id as string) }
 }
 
 /**

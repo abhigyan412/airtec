@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PushPrompt } from './PushPrompt'
+import { PushStatus } from './PushStatus'
 
 function timeAgo(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime()
@@ -109,7 +110,7 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
             )}
           </div>
           <PushPrompt app="staff" copy={{ headline: 'Get notified without checking', detail: 'Leave requests, approvals and fee alerts, even when this tab is closed.' }} />
-          <div className="overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {isLoading ? (
               <div className="divide-y divide-border">
                 {Array.from({ length: 4 }).map((_, i) => (
@@ -149,6 +150,7 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
               </div>
             )}
           </div>
+          <PushStatus app="staff" />
         </div>
       )}
     </div>
