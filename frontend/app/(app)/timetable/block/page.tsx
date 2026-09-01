@@ -1,5 +1,5 @@
 'use client'
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useState, type DragEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
@@ -245,7 +245,8 @@ export default function BlockViewPage() {
             )}
             {layout === 'class' && (
               <ClassWeeks data={data} flagged={flagged} flaggedSlots={flaggedSlots}
-                editable={editable} onEdit={setEditing} />
+                editable={editable} onEdit={setEditing} versionId={versionId}
+                onChanged={() => qc.invalidateQueries({ queryKey: ['tt-block', versionId] })} />
             )}
             {layout === 'teacher' && (
               <TeacherWeek data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
@@ -430,23 +431,42 @@ function DayBlock({ data, day, flagged, flaggedSlots, editable, onEdit }: {
 
 // ── one class, whole week ───────────────────────────────────────
 
-function ClassWeeks({ data, flagged, flaggedSlots, editable, onEdit }: {
+function ClassWeeks({ data, flagged, flaggedSlots, editable, onEdit, versionId, onChanged }: {
   data: any; flagged: Map<string, string>; flaggedSlots: Map<string, string>
   editable: boolean; onEdit: (c: any) => void
+  versionId: string; onChanged: () => void
 }) {
   const [sectionId, setSectionId] = useState<string>(data.sections[0]?.sectionId ?? '')
   const teaching = data.slots.filter((s: any) => !s.isBreak)
 
+  // Drag-and-drop swap, within this one section's week. moveDraftCell
+  // swaps the dragged period with whatever sits in the target slot (or
+  // moves it into an empty one), then the server re-derives conflicts.
+  const [drag, setDrag] = useState<{ cellId: string; day: number; period: number } | null>(null)
+  const [over, setOver] = useState<string | null>(null)
+  const move = useMutation({
+    mutationFn: (a: { cellId: string; day: number; periodNumber: number }) =>
+      timetableApi.moveDraftCell(versionId, a.cellId, { day: a.day, periodNumber: a.periodNumber }),
+    onSuccess: () => { toast.success('Period moved'); onChanged() },
+    onError: (e) => toast.error(timetableError(e)),
+  })
+  const endDrag = () => { setDrag(null); setOver(null) }
+
   return (
     <div className="space-y-3">
-      <Select value={sectionId} onValueChange={setSectionId}>
-        <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          {data.sections.map((s: any) => (
-            <SelectItem key={s.sectionId} value={s.sectionId}>{s.label}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="flex flex-wrap items-center gap-3">
+        <Select value={sectionId} onValueChange={setSectionId}>
+          <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {data.sections.map((s: any) => (
+              <SelectItem key={s.sectionId} value={s.sectionId}>{s.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {editable && (
+          <span className="text-xs text-muted-foreground">Drag a period onto another slot to move or swap it.</span>
+        )}
+      </div>
 
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full border-collapse text-sm" style={{ minWidth: 720 }}>
@@ -471,8 +491,22 @@ function ClassWeeks({ data, flagged, flaggedSlots, editable, onEdit }: {
                 </td>
                 {data.days.map((d: number) => {
                   const key = `${sectionId}:${d}:${slot.periodNumber}`
-                  return <Cell key={d} cell={data.cells[key]} flagged={flagged}
-                    slotSeverity={flaggedSlots.get(key)} editable={editable} onEdit={onEdit} />
+                  const cell = data.cells[key]
+                  const isSource = drag != null && drag.day === d && drag.period === slot.periodNumber
+                  const dnd: CellDnd | undefined = editable ? {
+                    canDrag: !!cell && !cell.isBreak,
+                    dragging: !!(cell && drag?.cellId === cell.id),
+                    dropActive: over === key && drag != null && !isSource,
+                    onDragStart: () => cell && setDrag({ cellId: cell.id, day: d, period: slot.periodNumber }),
+                    onDragEnter: () => setOver(key),
+                    onDragEnd: endDrag,
+                    onDrop: () => {
+                      if (drag && !isSource) move.mutate({ cellId: drag.cellId, day: d, periodNumber: slot.periodNumber })
+                      endDrag()
+                    },
+                  } : undefined
+                  return <Cell key={d} cell={cell} flagged={flagged}
+                    slotSeverity={flaggedSlots.get(key)} editable={editable} onEdit={onEdit} dnd={dnd} />
                 })}
               </tr>
             ))}
@@ -831,15 +865,36 @@ function TeacherBlock({ data, flagged, editable, onEdit }: {
 
 // ── a cell ──────────────────────────────────────────────────────
 
-function Cell({ cell, flagged, slotSeverity, editable, onEdit, compact }: {
+// Drag-and-drop swap, used only by the single-section week grid where a
+// move stays within one section (which is all moveDraftCell allows). The
+// other views pass no `dnd`, so nothing about them changes.
+interface CellDnd {
+  canDrag: boolean       // filled, non-break: can be picked up
+  dragging: boolean      // this cell is the one being dragged
+  dropActive: boolean    // this slot is the hovered drop target
+  onDragStart: () => void
+  onDragEnter: () => void
+  onDragEnd: () => void
+  onDrop: () => void
+}
+
+function Cell({ cell, flagged, slotSeverity, editable, onEdit, compact, dnd }: {
   cell: any; flagged: Map<string, string>; slotSeverity?: string
-  editable: boolean; onEdit: (c: any) => void; compact?: boolean
+  editable: boolean; onEdit: (c: any) => void; compact?: boolean; dnd?: CellDnd
 }) {
+  // Every slot (filled or empty) is a drop target when DnD is on, so a
+  // period can be dropped onto an empty slot as well as swapped with one.
+  const tdDnd = dnd ? {
+    onDragOver: (e: DragEvent) => { e.preventDefault(); dnd.onDragEnter() },
+    onDrop: (e: DragEvent) => { e.preventDefault(); dnd.onDrop() },
+  } : {}
+  const dropRing = dnd?.dropActive ? 'rounded-md ring-2 ring-inset ring-primary' : ''
+
   if (!cell) {
     // An empty slot is only a fault if the day carries on past it; the
     // server decides that, and says so through slotKeys.
     return (
-      <td className="border-b border-l border-border p-1.5 align-top">
+      <td className={cn('border-b border-l border-border p-1.5 align-top', dropRing)} {...tdDnd}>
         <div className={cn('rounded-md px-1.5 py-1 text-xs',
           slotSeverity
             ? 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/30'
@@ -873,10 +928,20 @@ function Cell({ cell, flagged, slotSeverity, editable, onEdit, compact }: {
     </div>
   )
 
+  const canDrag = !!dnd?.canDrag
   return (
-    <td className="border-b border-l border-border p-1.5 align-top">
+    <td className={cn('border-b border-l border-border p-1.5 align-top', dropRing)} {...tdDnd}>
       {editable && !cell.isBreak ? (
-        <button onClick={() => onEdit(cell)} className="w-full text-left hover:opacity-80">
+        <button
+          onClick={() => onEdit(cell)}
+          draggable={canDrag}
+          onDragStart={canDrag ? dnd!.onDragStart : undefined}
+          onDragEnd={canDrag ? dnd!.onDragEnd : undefined}
+          title={canDrag ? 'Click to edit · drag to move or swap' : undefined}
+          className={cn('w-full text-left hover:opacity-80',
+            canDrag && 'cursor-grab active:cursor-grabbing',
+            dnd?.dragging && 'opacity-40')}
+        >
           {body}
         </button>
       ) : body}
