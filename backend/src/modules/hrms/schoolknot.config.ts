@@ -25,29 +25,29 @@ export const SCHOOLKNOT_CONFIG: Record<string, SchoolknotSchoolConfig> = {
   'd400bc23-9534-4410-af92-5563990f2b27': {
     schoolknotSchoolId: 'SC3102',
     regByEmail: {
-      'principal@gmail.com': '4680', // Mohd. Wajihul Islam
-      'krishna@gmail.com': '72',
-      'basundhara@gmail.com': '73',
-      'artipal@gmail.com': '4727',
-      'payal@gmail.com': '4728',
-      'poojarai@gmail.com': '90',
-      'reetika@gmail.com': '4726',
-      'heena@gmail.com': '95',
-      'nehajoshi@gmail.com': '74',
-      'nehamishra@gmail.com': '87',
-      'sajida@gmail.com': '63',
-      'mamta@gmail.com': '4707',
-      'nehasingh@gmail.com': '91',
-      'mrinalini@gmail.com': '85',
-      'nupur@gmail.com': '4697',
-      'shivam@gmail.com': '86',
-      'kunal@gmail.com': '4725',
-      'komal@gmail.com': '79',
-      'ayushi@gmail.com': '59',
-      'priyanka@gmail.com': '45',
-      'vishnu@gmail.com': '56',
-      'nehasri@gmail.com': '20',   // NEHA SRIVASTAVA (vs the other Nehas)
-      'shabeena@gmail.com': '449', // SHABEENA SHAHNAZ (vs SHABEENA, TA013)
+      'principal.rashtrabharti@gmail.com': '4680', // Mohd. Wajihul Islam
+      'krishna.rashtrabharti@gmail.com': '72',
+      'basundhara.rashtrabharti@gmail.com': '73',
+      'artipal.rashtrabharti@gmail.com': '4727',
+      'payal.rashtrabharti@gmail.com': '4728',
+      'poojarai.rashtrabharti@gmail.com': '90',
+      'reetika.rashtrabharti@gmail.com': '4726',
+      'heena.rashtrabharti@gmail.com': '95',
+      'nehajoshi.rashtrabharti@gmail.com': '74',
+      'nehamishra.rashtrabharti@gmail.com': '87',
+      'sajida.rashtrabharti@gmail.com': '63',
+      'mamta.rashtrabharti@gmail.com': '4707',
+      'nehasingh.rashtrabharti@gmail.com': '91',
+      'mrinalini.rashtrabharti@gmail.com': '85',
+      'nupur.rashtrabharti@gmail.com': '4697',
+      'shivam.rashtrabharti@gmail.com': '86',
+      'kunal.rashtrabharti@gmail.com': '4725',
+      'komal.rashtrabharti@gmail.com': '79',
+      'ayushi.rashtrabharti@gmail.com': '59',
+      'priyanka.rashtrabharti@gmail.com': '45',
+      'vishnu.rashtrabharti@gmail.com': '56',
+      'nehasri.rashtrabharti@gmail.com': '20',   // NEHA SRIVASTAVA (vs the other Nehas)
+      'shabeena.rashtrabharti@gmail.com': '449', // SHABEENA SHAHNAZ (vs SHABEENA, TA013)
     },
   },
 }
