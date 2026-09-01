@@ -113,7 +113,13 @@ export default function TimetablePage() {
       section_id: viewMode === 'class' && selectedSection ? selectedSection : undefined,
       teacher_id: viewMode === 'teacher' ? selectedTeacher : undefined,
     }).then(r => r.data),
-    enabled: !isTeacher && (viewMode === 'class' ? !!selectedClass : !!selectedTeacher),
+    // Where a class has sections, wait for one. Firing on the class
+    // alone would fetch the merged all-sections grid that was just
+    // taken out of the dropdown — reachable again through the back
+    // door. A class with no sections has nothing to wait for.
+    enabled: !isTeacher && (viewMode === 'class'
+      ? !!selectedClass && (sections.length === 0 || !!selectedSection)
+      : !!selectedTeacher),
   })
 
   const deleteMutation = useMutation({
@@ -277,13 +283,10 @@ export default function TimetablePage() {
           <>
             <div className="flex items-center gap-2">
               <Label className="shrink-0">Class</Label>
-              {/* Landing on "All sections" merges every section of the
-                  class into one grid, which is the least useful thing to
-                  show first: nobody teaches "Class I", they teach I-A.
-                  Picking a class now lands on its first section, and
-                  "All sections" stays in the list for when the merged
-                  view is what you want. Sorted so "first" means A rather
-                  than whichever row the database returned first. */}
+              {/* Picking a class lands on its first section, because a
+                  timetable belongs to I-A, never to "Class I". Sorted so
+                  "first" means A rather than whichever row the database
+                  happened to return first. */}
               <Select
                 value={selectedClass || undefined}
                 onValueChange={v => {
@@ -301,10 +304,17 @@ export default function TimetablePage() {
             {sections.length > 0 && (
               <div className="flex items-center gap-2">
                 <Label className="shrink-0">Section</Label>
-                <Select value={selectedSection || 'all'} onValueChange={v => setSelectedSection(v === 'all' ? '' : v)}>
-                  <SelectTrigger className="h-9 min-w-[160px]"><SelectValue /></SelectTrigger>
+                {/* Real sections only. "All sections" stacked every
+                    section of the class into one grid, which shows two
+                    or three different lessons in the same cell and is
+                    nobody's timetable — a period belongs to I-A or to
+                    I-B, never to "Class I". The block view is where the
+                    whole school at once belongs. */}
+                <Select value={selectedSection || undefined} onValueChange={setSelectedSection}>
+                  <SelectTrigger className="h-9 min-w-[160px]">
+                    <SelectValue placeholder="Select section..." />
+                  </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All sections</SelectItem>
                     {sections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
