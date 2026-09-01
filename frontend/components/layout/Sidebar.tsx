@@ -297,6 +297,47 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const { can, canAny, isSuperRole, roles, moduleEnabled } = usePermissions()
   const isSubjectOnlyTeacher = user?.role === 'teacher' && !roles.includes('Class Teacher')
 
+  /**
+   * Groups that mean something narrower to a teacher than to everyone
+   * else. Takes the group and its already-permission-filtered children
+   * and returns what a teacher should actually be offered.
+   *
+   * Keyed on the group's label rather than its position, and applied at
+   * every depth, because these groups move: Timetable was top-level
+   * until Academics was introduced, and a rule written against the top
+   * level alone stopped matching the day it moved — silently, since
+   * there is nothing to fail, only a menu that quietly goes back to
+   * being wrong.
+   */
+  const forTeacher = React.useCallback(
+    (group: NavItem, kids: NavItem[] | undefined): NavItem[] | undefined => {
+      if (user?.role !== 'teacher' || !kids) return kids
+
+      // Their "Students" is their own scoped roster — the backend forces
+      // that regardless of query params, see GET /students — so the
+      // admin bulk-management children do not belong, even where a class
+      // teacher happens to hold the underlying permission.
+      if (group.label === 'Students') {
+        return kids.filter(c => c.href === '/students').map(c => ({ ...c, label: 'My Students' }))
+      }
+
+      // /timetable returns early for a teacher and renders their own
+      // schedule and homeroom, never the class/teacher browser. So
+      // "Class View" promises something they are never shown, and
+      // "Teacher View" is that identical component a second time —
+      // ?view=teacher is an administrator's "show me somebody else's
+      // timetable", and a teacher has nobody else to look at.
+      if (group.label === 'Timetable') {
+        return kids
+          .filter(c => c.href !== '/timetable?view=teacher')
+          .map(c => (c.href === '/timetable' ? { ...c, label: 'My Timetable' } : c))
+      }
+
+      return kids
+    },
+    [user?.role],
+  )
+
   const allowed = React.useCallback(
     (item: NavItem): boolean => {
       // Module first, and before the children check: a group the school
@@ -451,30 +492,14 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             // an item hidden from this user (e.g. Examination Settings
             // without exam.schedule) would still render inside it.
             let children = item.children?.filter(allowed).map((c) =>
-              c.children ? { ...c, children: c.children.filter(allowed) } : c
+              c.children ? { ...c, children: forTeacher(c, c.children.filter(allowed)) } : c
             )
-            // A teacher's "Students" group is just their own scoped
-            // roster (the backend forces this regardless of query params
-            // — see GET /students) — the admin bulk-management children
-            // (Add/Promote/Bulk Edit) don't belong here even where a
-            // class teacher happens to hold the underlying permission.
-            if (item.label === 'Students' && user?.role === 'teacher') {
-              children = children
-                ?.filter((c) => c.href === '/students')
-                .map((c) => ({ ...c, label: 'My Students' }))
-            }
-            // /timetable renders a teacher their own schedule and their
-            // homeroom, never the class/teacher browser — the page
-            // returns early for them. So "Class View" is a lie about
-            // what they will get, and "Teacher View" is the very same
-            // component a second time, because ?view=teacher is an
-            // admin's "show me somebody else's timetable" switch and a
-            // teacher has nobody else to look at. One honest entry.
-            if (item.label === 'Timetable' && user?.role === 'teacher') {
-              children = children
-                ?.filter((c) => c.href !== '/timetable?view=teacher')
-                .map((c) => (c.href === '/timetable' ? { ...c, label: 'My Timetable' } : c))
-            }
+            // Applied at both depths on purpose. Timetable used to be a
+            // top-level group and is now a child of Academics; a check
+            // written against the top level alone silently stopped
+            // matching the day it moved, and the sidebar went back to
+            // showing a teacher the same page twice.
+            children = forTeacher(item, children)
             if (item.children && !children?.length) return null
             return (
               <NavEntry
