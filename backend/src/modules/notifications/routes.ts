@@ -55,6 +55,21 @@ router.patch('/read-all', asyncHandler(async (req: AuthRequest, res: Response) =
   res.json({ success: true })
 }))
 
+// ── DELETE /notifications/:id — dismiss one notification. Scoped to the
+// caller's own id, so a user can only ever remove their own. The delivery
+// rows go with it via ON DELETE CASCADE on notification_deliveries.
+router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
+  // .select() (not .single()) so a no-match returns [] cleanly as a 404,
+  // rather than .single() raising a "no rows" error we'd mislabel a 400.
+  const { data, error } = await supabase.from('notifications')
+    .delete()
+    .eq('id', req.params.id).eq('user_id', req.user!.id)
+    .select('id')
+  if (error) return res.status(400).json({ success: false, error: error.message })
+  if (!data || data.length === 0) return res.status(404).json({ success: false, error: 'Notification not found' })
+  res.json({ success: true })
+}))
+
 // ── POST /notifications/run-fee-reminders — manual trigger for the
 // same job the daily cron runs, scoped to the caller's own school.
 // Useful for testing, and as a fallback if the school doesn't trust

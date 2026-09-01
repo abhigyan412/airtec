@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
-import { Bell, CheckCheck } from 'lucide-react'
+import { Bell, CheckCheck, X } from 'lucide-react'
 import { notificationsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -64,6 +64,14 @@ export function NotificationBell(_props: NotificationBellProps = {}) {
 
   const markAllReadMutation = useMutation({
     mutationFn: () => notificationsApi.markAllRead(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['notifications-unread-count'] })
+      qc.invalidateQueries({ queryKey: ['notifications-list'] })
+    },
+  })
+
+  const dismissMutation = useMutation({
+    mutationFn: (id: string) => notificationsApi.dismiss(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['notifications-unread-count'] })
       qc.invalidateQueries({ queryKey: ['notifications-list'] })
@@ -159,19 +167,28 @@ export function NotificationBell(_props: NotificationBellProps = {}) {
             ) : (
               <div className="divide-y divide-border">
                 {notifications.map((n: any) => (
-                  <button key={n.id} onClick={() => handleClick(n)}
-                    className={cn('flex w-full min-h-[3.25rem] gap-2.5 px-4 py-3 text-left transition-colors hover:bg-accent',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                      !n.is_read && 'bg-primary/5')}>
-                    <span className={cn('mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full', !n.is_read ? 'bg-primary' : 'bg-transparent')} />
-                    <div className="min-w-0 flex-1">
-                      <p className={cn('text-sm leading-tight', !n.is_read ? 'font-semibold text-foreground' : 'font-medium text-muted-foreground')}>
-                        {n.title}
-                      </p>
-                      <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{n.message}</p>
-                      <p className="mt-1 text-[11px] text-muted-foreground/60">{timeAgo(n.created_at)}</p>
-                    </div>
-                  </button>
+                  <div key={n.id}
+                    className={cn('group relative flex min-h-[3.25rem] transition-colors hover:bg-accent', !n.is_read && 'bg-primary/5')}>
+                    <button onClick={() => handleClick(n)}
+                      className={cn('flex min-w-0 flex-1 gap-2.5 px-4 py-3 text-left',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring')}>
+                      <span className={cn('mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full', !n.is_read ? 'bg-primary' : 'bg-transparent')} />
+                      <div className="min-w-0 flex-1 pr-6">
+                        <p className={cn('text-sm leading-tight', !n.is_read ? 'font-semibold text-foreground' : 'font-medium text-muted-foreground')}>
+                          {n.title}
+                        </p>
+                        <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{n.message}</p>
+                        <p className="mt-1 text-[11px] text-muted-foreground/60">{timeAgo(n.created_at)}</p>
+                      </div>
+                    </button>
+                    {/* Dismiss — hidden until row hover / keyboard focus. */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); dismissMutation.mutate(n.id) }}
+                      aria-label="Dismiss notification"
+                      className="absolute right-1.5 top-2 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}

@@ -716,6 +716,7 @@ export const notificationsApi = {
   unreadCount: () => api.get('/notifications/unread-count').then(r => r.data),
   markRead: (id: string) => api.patch(`/notifications/${id}/read`).then(r => r.data),
   markAllRead: () => api.patch('/notifications/read-all').then(r => r.data),
+  dismiss: (id: string) => api.delete(`/notifications/${id}`).then(r => r.data),
   runFeeReminders: () => api.post('/notifications/run-fee-reminders').then(r => r.data),
 }
 

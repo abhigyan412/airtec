@@ -46,8 +46,8 @@ export const SCHOOLKNOT_CONFIG: Record<string, SchoolknotSchoolConfig> = {
       'ayushi.rashtrabharti@gmail.com': '59',
       'priyanka.rashtrabharti@gmail.com': '45',
       'vishnu.rashtrabharti@gmail.com': '56',
-      'nehasri.rashtrabharti@gmail.com': '20',   // NEHA SRIVASTAVA (vs the other Nehas)
-      'shabeena.rashtrabharti@gmail.com': '449', // SHABEENA SHAHNAZ (vs SHABEENA, TA013)
+      'nehasri.rashtrabharti@gmail.com': '20',
+      'shabeena.rashtrabharti@gmail.com': '449',
     },
   },
 }
