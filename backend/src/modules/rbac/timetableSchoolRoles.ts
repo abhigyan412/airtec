@@ -88,16 +88,24 @@ export const TIMETABLE_SCHOOL_ROLES: Record<string, string[]> = {
   // the token and ignores any id in the request, so none of them widens
   // to a colleague's data.
   //
-  // arrangement.view is included on purpose: the day's cover sheet is
-  // pinned up in the staffroom of every school that has ever existed, and
-  // a teacher who cannot see it has to ask somebody. The page's manager
-  // actions are gated separately on arrangement.manage.
+  // arrangement.view was here, on the reasoning that the day's cover
+  // sheet is pinned up in every staffroom. That holds for a paper sheet
+  // saying who is covering what; it does not hold for this page, which
+  // now gives the reason each teacher is not in — "is suspended", "has
+  // been terminated". Every teacher in the school could read a
+  // colleague's disciplinary and employment history off it.
+  //
+  // Nothing was lost by removing it. My Week gives a teacher the cover
+  // they have been given, naming who they are covering for and whether
+  // they still need to accept it, and shows a substitute against their
+  // own periods when they are the one away. Both checked as the two
+  // people involved, not assumed.
   'Teacher': [
-    'timetable.view', 'arrangement.view', 'arrangement.acknowledge', 'booking.manage_own',
+    'timetable.view', 'arrangement.acknowledge', 'booking.manage_own',
   ],
 
   'Class Teacher': [
-    'timetable.view', 'arrangement.view', 'arrangement.acknowledge', 'booking.manage_own',
+    'timetable.view', 'arrangement.acknowledge', 'booking.manage_own',
   ],
 }
 

@@ -68,7 +68,24 @@ const TIMETABLE_SENIOR = [
 // Deliberately does NOT repeat arrangement.view: the senior set already
 // grants it, and seedDefaultRoles dedupes, but keeping the two lists
 // disjoint makes it obvious which grant a role gets it from.
-const TIMETABLE_TEACHER = ['arrangement.view', 'arrangement.acknowledge', 'booking.manage_own']
+// What a member of staff needs for their OWN timetable: accept the cover
+// they are given, reserve their own free periods. Nothing about anybody
+// else.
+//
+// arrangement.view used to be in here, on the reasoning that the day's
+// cover sheet is pinned up in every staffroom. That was true of a paper
+// sheet listing who is covering what. It is not true of this page, which
+// now says WHY each teacher is not in — "is suspended", "has been
+// terminated" — so every teacher in the school could read a colleague's
+// disciplinary and employment history from the timetable app.
+//
+// And they never needed it: My Week already gives a teacher the cover
+// they must take, naming who they are covering for, and shows a
+// substitute against their own periods when they are the one away.
+// Verified both, as the two people involved. The senior roles below take
+// arrangement.view from TIMETABLE_SENIOR, which is where seeing the
+// whole queue belongs.
+const TIMETABLE_TEACHER = ['arrangement.acknowledge', 'booking.manage_own']
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   'School Admin': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],

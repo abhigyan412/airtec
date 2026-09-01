@@ -129,9 +129,16 @@ const NAV: NavItem[] = [
           { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view' },
           { label: 'Teacher View', href: '/timetable?view=teacher', icon: User, permission: 'timetable.view' },
           // Every class at once, live or draft, and the thing that prints
-          // the whole set. timetable.view because printing the timetables is
-          // an office job, not a manager's.
-          { label: 'Block View', href: '/timetable/block', icon: LayoutGrid, permission: 'timetable.view' },
+          // the whole set.
+          //
+          // timetable.manage, not timetable.view. It was the latter on the
+          // argument that printing is clerical work — but the page hands over
+          // the entire school's week, 47 classes and two thousand periods at
+          // the demo school, next to a conflict report naming individual
+          // colleagues and why they are not teaching. A teacher has My Week
+          // for their own timetable and Class View for any class; the master
+          // planning sheet is not theirs.
+          { label: 'Block View', href: '/timetable/block', icon: LayoutGrid, permission: 'timetable.manage' },
 
           // Who is away, who is covering, who is free, and what needs
           // attention right now. "Who's free" used to be a separate Free

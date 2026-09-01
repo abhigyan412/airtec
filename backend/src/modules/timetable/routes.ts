@@ -286,9 +286,14 @@ router.get('/views/master', requirePermissionV2('timetable.view'),
   }))
 
 // Every section's week at once, from the live timetable or any draft.
-// timetable.view rather than a manage permission: this is the sheet
-// pinned up in the staffroom, and printing it is the point.
-router.get('/views/block', requirePermissionV2('timetable.view'),
+//
+// timetable.manage, not timetable.view. It was the latter on the
+// argument that printing the timetables is clerical work — but this
+// returns the entire school's week together with a conflict report that
+// names individual colleagues and why they are not teaching. The gate
+// has to match what the payload actually contains, not what the button
+// on top of it does.
+router.get('/views/block', requirePermissionV2('timetable.manage'),
   handle(async req => views.blockGrid(req.user!.school_id, {
     versionId: typeof req.query.versionId === 'string' ? req.query.versionId : null,
   })))
