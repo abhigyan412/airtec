@@ -663,8 +663,8 @@ function CandidateList({
   const candidates = data ?? []
 
   return (
-    <div className="rounded-lg border border-border bg-muted/20 p-3">
-      <div className="mb-2 flex items-center justify-between">
+    <div className="rounded-lg border border-border bg-muted/20 p-2 sm:p-3">
+      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-1.5 sm:mb-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Suggested cover · best first
         </p>
@@ -683,21 +683,21 @@ function CandidateList({
           </p>
         </div>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           {candidates.map((candidate, index) => (
             <div
               key={candidate.teacherId}
               className={cn(
-                'flex flex-wrap items-center gap-2 rounded-lg border bg-background px-3 py-2',
+                'flex flex-wrap items-center gap-1.5 rounded-lg border bg-background px-2 py-1.5 sm:gap-2 sm:px-3 sm:py-2',
                 index === 0 ? 'border-primary/40 ring-1 ring-primary/20' : 'border-border',
               )}
             >
               <div className="min-w-[9rem] flex-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2">
                   <p className="text-sm font-medium text-foreground">{candidate.fullName}</p>
                   {index === 0 && <Chip tone="info">Best match</Chip>}
                 </div>
-                <div className="mt-1 flex flex-wrap gap-1">
+                <div className="mt-0.5 flex flex-wrap gap-1 sm:mt-1">
                   {candidate.reasons.map((reason, i) => (
                     <Chip key={i} tone={i === 0 ? 'good' : 'neutral'}>{reason}</Chip>
                   ))}
