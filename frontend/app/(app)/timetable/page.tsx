@@ -408,8 +408,7 @@ export default function TimetablePage() {
           so rather than letting an empty banner read as "all clear". */}
       {viewMode === 'class' && selectedClass && selectedSection && clashes.length === 0 && (
         <p className="px-1 text-xs text-muted-foreground">
-          Checked for clashes within this section only. To catch a teacher booked against another
-          section of the same class, clear the section filter.
+          Checked for clashes within this section only.
         </p>
       )}
 
