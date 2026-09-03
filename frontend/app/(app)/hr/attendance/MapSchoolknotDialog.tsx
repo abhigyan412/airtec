@@ -25,6 +25,10 @@ import { hrmsApi } from '@/lib/api'
 const LS_KEY = 'schoolknot_mapping'
 type Mapping = Record<string, { school: string; reg: string }>
 
+// SchoolKnot school codes are opaque; show the school's name in the UI.
+const SCHOOL_LABELS: Record<string, string> = { SC3102: 'RBPIC', SC3104: 'Trinity' }
+const schoolLabel = (sk: string) => SCHOOL_LABELS[sk] ?? sk
+
 export function loadMapping(): Mapping {
   try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') } catch { return {} }
 }
@@ -144,7 +148,7 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
           <DialogTitle className="flex items-center gap-2"><Link2 className="h-4 w-4" /> Map staff to SchoolKnot devices</DialogTitle>
           <p className="text-xs text-muted-foreground">
             Pick each person's biometric device. Saved in this browser only — nothing is written to the database.
-            {schools.length > 0 && <> Schools: {schools.join(', ')}.</>}
+            {schools.length > 0 && <> Schools: {schools.map(schoolLabel).join(', ')}.</>}
           </p>
         </DialogHeader>
 
@@ -184,14 +188,14 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
                         <Select value={curKey} onValueChange={v => set(s.email, v)}>
                           <SelectTrigger className="h-8 w-[230px] text-xs">
                             <SelectValue>
-                              {cur ? `${cur.school} · ${cur.reg}${hit ? ` · ${hit.name}` : ''}` : <span className="text-muted-foreground">Not on a device</span>}
+                              {cur ? `${schoolLabel(cur.school)} · ${cur.reg}${hit ? ` · ${hit.name}` : ''}` : <span className="text-muted-foreground">Not on a device</span>}
                             </SelectValue>
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="none"><span className="flex items-center gap-1.5"><Link2Off className="h-3 w-3" /> Not on a device</span></SelectItem>
                             {schools.map(sk => (
                               <SelectGroup key={sk}>
-                                <SelectLabel>{sk}</SelectLabel>
+                                <SelectLabel>{schoolLabel(sk)}</SelectLabel>
                                 {(rosterBySchool.get(sk) ?? []).map(r => (
                                   <SelectItem key={`${sk}:${r.reg}`} value={`${sk}:${r.reg}`}>
                                     {r.reg} · {r.name || '—'}{r.punchedToday ? ' ●' : ''}
