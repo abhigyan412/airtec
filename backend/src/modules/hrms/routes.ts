@@ -3690,15 +3690,22 @@ async function runSchoolknotAttendanceSync(
     .select('id, email').eq('school_id', schoolId).in('email', emails)
   const mappedRows = ((users ?? []) as { id: string; email: string }[]).map(u => ({
     user_id: u.id,
-    schoolknot_reg_id: config.regByEmail[u.email],
+    school: config.regByEmail[u.email].school,
+    reg: config.regByEmail[u.email].reg,
   }))
 
   // How many staff exist at all, to report those left unmapped.
   const { count: totalStaff } = await supabase.from('staff_profiles')
     .select('*', { count: 'exact', head: true }).eq('school_id', schoolId)
 
-  const feed = await fetchSchoolknotDay(config.schoolknotSchoolId, date)
-  const byReg = new Map<string, SchoolknotRow>(feed.map(r => [String(r.reg_id), r]))
+  // A school's staff can punch across more than one SchoolKnot school (some
+  // at RBPIC, some at Trinity). Fetch each, then key the combined feed by
+  // school:reg so a reg number can't collide between the two.
+  const feeds = await Promise.all(config.schoolknotSchoolIds.map(async sk => ({
+    sk, rows: await fetchSchoolknotDay(sk, date),
+  })))
+  const byKey = new Map<string, SchoolknotRow>()
+  for (const f of feeds) for (const r of f.rows) byKey.set(`${f.sk}:${r.reg_id}`, r)
 
   const sets = await getNonWorkingDaySets(schoolId, date, date)
   const working = isWorkingDate(date, sets)
@@ -3712,8 +3719,9 @@ async function runSchoolknotAttendanceSync(
   let present = 0, absent = 0, holiday = 0, mappedNotInFeed = 0
 
   const rows = mappedRows.map(m => {
-    const hit = byReg.get(String(m.schoolknot_reg_id))
-    if (hit) matchedRegs.add(String(m.schoolknot_reg_id))
+    const key = `${m.school}:${m.reg}`
+    const hit = byKey.get(key)
+    if (hit) matchedRegs.add(key)
     else mappedNotInFeed++
 
     let status: 'present' | 'absent' | 'holiday'
@@ -3759,7 +3767,9 @@ async function runSchoolknotAttendanceSync(
     staleCover = await findStaleCover(schoolId, date, returned)
   }
 
-  const unmatchedRegIds = feed.map(r => String(r.reg_id)).filter(reg => !matchedRegs.has(reg))
+  const unmatchedRegIds = feeds
+    .flatMap(f => f.rows.map(r => `${f.sk}:${r.reg_id}`))
+    .filter(key => !matchedRegs.has(key))
 
   return {
     date, written: rows.length, present, absent, holiday, workingDay: working,

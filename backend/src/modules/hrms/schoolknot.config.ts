@@ -1,89 +1,78 @@
 // ── SchoolKnot sync config (DEMO — code-level, no DB schema) ──────────
 //
-// This is a temporary integration for a week-long demo. Deliberately a code
-// file, not database columns: teardown is `git rm` of the three schoolknot.*
-// files + the route/api/UI hooks, with nothing left behind in the schema.
+// Rashtra Bharti's staff punch across TWO SchoolKnot schools — RBPIC (SC3102)
+// and Trinity (SC3104). Each mapping carries which school the reg_id belongs
+// to, so the sync fetches both feeds and reads each person from where they
+// actually punch. Built by hand from a month of biometric data (see the
+// verify_punch_schools run): every reg_id below is a person who genuinely
+// punched under it. Staff who punch at neither (or have no device) are simply
+// omitted and skipped by the sync.
 //
-// Keyed by airtec school_id. A school appears here ONLY if it should sync,
-// which is what scopes the feature to Rashtra Bharti — no entry, no button.
-//
-// `regByEmail` maps an airtec staff login email -> SchoolKnot device reg_id.
-// Email (not user_id) so the map stays readable and portable across environments.
-// The 21 entries below are the confident name matches; the handful of airtec
-// staff with no clean SchoolKnot counterpart (and the ambiguous Neha/Shabeena
-// rows) are intentionally omitted — an unmapped person is simply skipped.
+// Keyed by airtec school_id; no entry, no sync.
 
 export interface SchoolknotSchoolConfig {
-  /** SchoolKnot's own school id, e.g. "SC3102". */
-  schoolknotSchoolId: string
-  /** airtec staff email -> SchoolKnot reg_id. */
-  regByEmail: Record<string, string>
+  /** Every SchoolKnot school this airtec school's staff punch at. */
+  schoolknotSchoolIds: string[]
+  /** airtec staff login email -> the SchoolKnot school + device reg_id. */
+  regByEmail: Record<string, { school: string; reg: string }>
 }
 
 export const SCHOOLKNOT_CONFIG: Record<string, SchoolknotSchoolConfig> = {
   // Rashtra Bharti Public Inter College
   'd400bc23-9534-4410-af92-5563990f2b27': {
-    schoolknotSchoolId: 'SC3102',
+    schoolknotSchoolIds: ['SC3102', 'SC3104'],
     regByEmail: {
-      'principal.rashtrabharti@gmail.com': '4680', // Mohd. Wajihul Islam
-      'krishna.rashtrabharti@gmail.com': '72',
-      'basundhara.rashtrabharti@gmail.com': '73',
-      'artipal.rashtrabharti@gmail.com': '4727',
-      'payal.rashtrabharti@gmail.com': '4728',
-      'poojarai.rashtrabharti@gmail.com': '90',
-      'reetika.rashtrabharti@gmail.com': '4726',
-      'heena.rashtrabharti@gmail.com': '95',
-      'nehajoshi.rashtrabharti@gmail.com': '74',
-      'nehamishra.rashtrabharti@gmail.com': '87',
-      'sajida.rashtrabharti@gmail.com': '63',
-      'mamta.rashtrabharti@gmail.com': '4707',
-      'nehasingh.rashtrabharti@gmail.com': '91',
-      'mrinalini.rashtrabharti@gmail.com': '85',
-      'nupur.rashtrabharti@gmail.com': '4697',
-      'shivam.rashtrabharti@gmail.com': '86',
-      'kunal.rashtrabharti@gmail.com': '4725',
-      'komal.rashtrabharti@gmail.com': '79',
-      'ayushi.rashtrabharti@gmail.com': '59',
-      'priyanka.rashtrabharti@gmail.com': '45',
-      'vishnu.rashtrabharti@gmail.com': '56',
-      'nehasri.rashtrabharti@gmail.com': '20',
-      'shabeena.rashtrabharti@gmail.com': '449',
-      // Added from SchoolKnot roster — the 35 previously-unmapped active staff.
-      'latasingh.rashtrabharti@gmail.com': '92',
-      'mariyam.rashtrabharti@gmail.com': '75',
-      'shraddhakushwaha.rashtrabharti@gmail.com': '71',
-      'mayankawasthi.rashtrabharti@gmail.com': '68',
-      'ankitsingh.rashtrabharti@gmail.com': '66',
-      'vivekkumarshukla.rashtrabharti@gmail.com': '64',
-      'vijayranjana.rashtrabharti@gmail.com': '21',
-      'aashwini.rashtrabharti@gmail.com': '47',
-      'shanti.rashtrabharti@gmail.com': '35',
-      'deepika.rashtrabharti@gmail.com': '36',
-      'vandana.rashtrabharti@gmail.com': 'TA006',
-      'surjeetyadav.rashtrabharti@gmail.com': 'TA007',
-      'rajendrashukla.rashtrabharti@gmail.com': 'TA008',
-      'sambhavi.rashtrabharti@gmail.com': 'TA009',
-      'prabhaawasthi.rashtrabharti@gmail.com': 'TA011',
-      'yashsaxena.rashtrabharti@gmail.com': 'TA012',
-      'arundhati.rashtrabharti@gmail.com': 'TA017',
-      'artiyadav.rashtrabharti@gmail.com': '30',
-      'beenatiwari.rashtrabharti@gmail.com': '25',
-      'chhayatrivedi.rashtrabharti@gmail.com': '27',
-      'deepikashukla.rashtrabharti@gmail.com': '4702',
-      'ektapathak.rashtrabharti@gmail.com': '94',
-      'jagriti.rashtrabharti@gmail.com': '4710',
-      'mansijaiswal.rashtrabharti@gmail.com': '39',
-      'narendranathchaturvedi.rashtrabharti@gmail.com': '458',
-      'anshuk.rashtrabharti@gmail.com': '4731',
-      'prashantsrivastava.rashtrabharti@gmail.com': '16',
-      'pratiksha.rashtrabharti@gmail.com': '4708',
-      'rahultiwari.rashtrabharti@gmail.com': '4692',
-      'ruchigupta.rashtrabharti@gmail.com': '4695',
-      'shalinipandey.rashtrabharti@gmail.com': '15',
-      'shikharshukla.rashtrabharti@gmail.com': '12',
-      'swatipandey.rashtrabharti@gmail.com': '4723',
-      'swatisrivastava.rashtrabharti@gmail.com': '4696',
-      'umasingh.rashtrabharti@gmail.com': '4678',
+      // ── RBPIC (SC3102) ──────────────────────────────────────────
+      'ankitsingh.rashtrabharti@gmail.com': { school: 'SC3102', reg: '66' },        // Ankit Singh
+      'anshuk.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4731' },          // Anshuk
+      'ayushi.rashtrabharti@gmail.com': { school: 'SC3102', reg: '59' },            // Ayushi Awasthi
+      'deepikashukla.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4702' },   // Deepika Shukla
+      'komal.rashtrabharti@gmail.com': { school: 'SC3102', reg: '79' },             // Komal Rai
+      'krishna.rashtrabharti@gmail.com': { school: 'SC3102', reg: '72' },           // Krishna Sharma
+      'kunal.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4725' },           // Kunal Vishwakarma
+      'latasingh.rashtrabharti@gmail.com': { school: 'SC3102', reg: '92' },         // Lata Singh
+      'mamta.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4707' },           // Mamta Srivastava
+      'mansijaiswal.rashtrabharti@gmail.com': { school: 'SC3102', reg: '39' },      // Mansi Jaiswal
+      'mrinalini.rashtrabharti@gmail.com': { school: 'SC3102', reg: '85' },         // Mrinalini Pandey
+      'narendranathchaturvedi.rashtrabharti@gmail.com': { school: 'SC3102', reg: '458' }, // Narendra Nath Chaturvedi
+      'nehasri.rashtrabharti@gmail.com': { school: 'SC3102', reg: '20' },           // Neha Srivastava
+      'nupur.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4697' },           // Nupur Singh
+      'payal.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4728' },           // Payal Rajput
+      'prabhaawasthi.rashtrabharti@gmail.com': { school: 'SC3102', reg: 'TA011' },  // Prabha Awasthi
+      'prashantsrivastava.rashtrabharti@gmail.com': { school: 'SC3102', reg: '16' },// Prashant Srivastava
+      'principal.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4680' },       // Mohd. Wajihul Islam
+      'priyanka.rashtrabharti@gmail.com': { school: 'SC3102', reg: '45' },          // Priyanka Mishra
+      'rahultiwari.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4692' },     // Rahul Tiwari
+      'rajendrashukla.rashtrabharti@gmail.com': { school: 'SC3102', reg: 'TA008' }, // Rajendra Shukla
+      'ruchigupta.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4695' },      // Ruchi Gupta
+      'sambhavi.rashtrabharti@gmail.com': { school: 'SC3102', reg: 'TA009' },       // Sambhavi
+      'shanti.rashtrabharti@gmail.com': { school: 'SC3102', reg: '35' },            // Shanti
+      'shivam.rashtrabharti@gmail.com': { school: 'SC3102', reg: '86' },            // Shivam Gupta
+      'shraddhakushwaha.rashtrabharti@gmail.com': { school: 'SC3102', reg: '71' },  // Shraddha Kushwaha
+      'swatisrivastava.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4696' }, // Swati Srivastava
+      'umasingh.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4678' },        // Uma Singh
+      'vishnu.rashtrabharti@gmail.com': { school: 'SC3102', reg: '56' },            // Vishnu Kant Raj
+      'vivekkumarshukla.rashtrabharti@gmail.com': { school: 'SC3102', reg: '64' },  // Vivek Kumar Shukla
+
+      // ── Trinity (SC3104) ────────────────────────────────────────
+      'artipal.rashtrabharti@gmail.com': { school: 'SC3104', reg: '4732' },         // Arti Pal
+      'artiyadav.rashtrabharti@gmail.com': { school: 'SC3104', reg: '17' },         // Arti Yadav
+      'basundhara.rashtrabharti@gmail.com': { school: 'SC3104', reg: '68' },        // Basundhara
+      'beenatiwari.rashtrabharti@gmail.com': { school: 'SC3104', reg: '25' },       // Beena Tiwari
+      'chhayatrivedi.rashtrabharti@gmail.com': { school: 'SC3104', reg: '27' },     // Chhaya Trivedi
+      'heena.rashtrabharti@gmail.com': { school: 'SC3104', reg: '92' },             // Heena Kausar
+      'jagriti.rashtrabharti@gmail.com': { school: 'SC3104', reg: '4710' },         // Jagriti Chaturvedi
+      'nehajoshi.rashtrabharti@gmail.com': { school: 'SC3104', reg: '67' },         // Neha Joshi
+      'nehamishra.rashtrabharti@gmail.com': { school: 'SC3104', reg: '102' },       // Neha Mishra
+      'nehasingh.rashtrabharti@gmail.com': { school: 'SC3104', reg: '104' },        // Neha Singh
+      'poojarai.rashtrabharti@gmail.com': { school: 'SC3104', reg: '103' },         // Pooja Rai
+      'pratiksha.rashtrabharti@gmail.com': { school: 'SC3104', reg: '4708' },       // Pratiksha Srivastava
+      'preeti.rashtrabharti@gmail.com': { school: 'SC3104', reg: '57' },            // Preeti Kumari
+      'sajida.rashtrabharti@gmail.com': { school: 'SC3104', reg: '56' },            // Sajida Bano
+      'shabeena.rashtrabharti@gmail.com': { school: 'SC3104', reg: '449' },         // Shabeena Shahnaz
+      'shalinipandey.rashtrabharti@gmail.com': { school: 'SC3104', reg: '15' },     // Shalini Pandey
+      'vandana.rashtrabharti@gmail.com': { school: 'SC3104', reg: 'TA004' },        // Vandana Kashyap
+      'vijayranjana.rashtrabharti@gmail.com': { school: 'SC3104', reg: '21' },      // Vijay Ranjana
     },
   },
 }
