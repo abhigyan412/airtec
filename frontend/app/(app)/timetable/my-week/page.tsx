@@ -1,9 +1,9 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  BookOpen, CalendarClock, Check, Clock, LogOut, Loader2, Lock, X,
+  BookOpen, CalendarClock, Check, Clock, LogOut, Loader2, Lock, Maximize2, Minimize2, X,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -172,6 +172,29 @@ function MyGrid({ grid, today }: { grid: any; today: string }) {
   const cells = grid.cells ?? []
   const todayDow = new Date(today).getDay() || 7
 
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  // Synced from the browser's own fullscreen state, not just our toggle —
+  // a phone's back gesture or the system Escape key exits fullscreen
+  // without going through toggleFullscreen, and the button/overlay must
+  // follow that or they'll disagree with what's actually on screen.
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', handler)
+    return () => document.removeEventListener('fullscreenchange', handler)
+  }, [])
+
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenElement) {
+      try { await contentRef.current?.requestFullscreen() } catch { /* unsupported browser */ }
+      try { await (screen.orientation as any)?.lock?.('landscape') } catch { /* iOS / desktop */ }
+    } else {
+      try { await document.exitFullscreen() } catch { /* already exited */ }
+      try { (screen.orientation as any)?.unlock?.() } catch { /* no-op */ }
+    }
+  }
+
   if (!periods.length) {
     return (
       <EmptyState
@@ -197,55 +220,79 @@ function MyGrid({ grid, today }: { grid: any; today: string }) {
         </span>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full border-collapse text-sm" style={{ minWidth: 640 }}>
-          <thead className="bg-muted/50">
-            <tr>
-              <th className="sticky left-0 z-10 bg-muted px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Period
-              </th>
-              {[1, 2, 3, 4, 5, 6].map(day => (
-                <th
-                  key={day}
-                  className={cn(
-                    'px-2 py-2 text-center text-xs font-medium uppercase tracking-wide',
-                    day === todayDow ? 'text-primary' : 'text-muted-foreground',
-                  )}
-                >
-                  {DAY_SHORT[day]}
-                  {day === todayDow && <span className="ml-1 text-[10px] normal-case">today</span>}
+      {!isFullscreen && (
+        <div className="mb-2 flex justify-end sm:hidden">
+          <Button
+            variant="outline" size="icon"
+            onClick={toggleFullscreen} title="Full screen (landscape)"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
+      <div
+        ref={contentRef}
+        className={cn(isFullscreen && 'fixed inset-0 z-50 overflow-auto bg-background p-3')}
+      >
+        {isFullscreen && (
+          <div className="mb-2 flex justify-end">
+            <Button variant="outline" size="sm" onClick={toggleFullscreen}>
+              <Minimize2 className="mr-1.5 h-4 w-4" /> Exit full screen
+            </Button>
+          </div>
+        )}
+
+        <div className="overflow-x-auto rounded-xl border border-border">
+          <table className="w-full border-collapse text-sm" style={{ minWidth: 640 }}>
+            <thead className="bg-muted/50">
+              <tr>
+                <th className="sticky left-0 z-10 bg-muted px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Period
                 </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {periods.map((period: any) => (
-              <tr key={period.periodNumber}>
-                <td className="sticky left-0 z-10 whitespace-nowrap bg-background px-3 py-1.5">
-                  <p className="text-sm font-semibold text-foreground">{period.periodNumber}</p>
-                  <p className="text-[10px] tabular-nums text-muted-foreground">{period.timeLabel}</p>
-                </td>
-                {[1, 2, 3, 4, 5, 6].map(day => {
-                  const cell = byKey.get(`${day}:${period.periodNumber}`)
-                  return (
-                    <td key={day} className={cn('p-1', day === todayDow && 'bg-primary/[0.03]')}>
-                      {cell ? (
-                        <div className={cn('rounded-md px-2 py-1.5 text-center', subjectClasses(cell.subjectName))}>
-                          <p className="truncate text-xs font-medium">{cell.subjectName}</p>
-                          <p className="truncate text-[10px] opacity-80">
-                            {[cell.className, cell.sectionName].filter(Boolean).join('-')}
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="rounded-md py-1.5 text-center text-[10px] text-muted-foreground/50">free</div>
-                      )}
-                    </td>
-                  )
-                })}
+                {[1, 2, 3, 4, 5, 6].map(day => (
+                  <th
+                    key={day}
+                    className={cn(
+                      'px-2 py-2 text-center text-xs font-medium uppercase tracking-wide',
+                      day === todayDow ? 'text-primary' : 'text-muted-foreground',
+                    )}
+                  >
+                    {DAY_SHORT[day]}
+                    {day === todayDow && <span className="ml-1 text-[10px] normal-case">today</span>}
+                  </th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {periods.map((period: any) => (
+                <tr key={period.periodNumber}>
+                  <td className="sticky left-0 z-10 whitespace-nowrap bg-background px-3 py-1.5">
+                    <p className="text-sm font-semibold text-foreground">{period.periodNumber}</p>
+                    <p className="text-[10px] tabular-nums text-muted-foreground">{period.timeLabel}</p>
+                  </td>
+                  {[1, 2, 3, 4, 5, 6].map(day => {
+                    const cell = byKey.get(`${day}:${period.periodNumber}`)
+                    return (
+                      <td key={day} className={cn('p-1', day === todayDow && 'bg-primary/[0.03]')}>
+                        {cell ? (
+                          <div className={cn('rounded-md px-2 py-1.5 text-center', subjectClasses(cell.subjectName))}>
+                            <p className="truncate text-xs font-medium">{cell.subjectName}</p>
+                            <p className="truncate text-[10px] opacity-80">
+                              {[cell.className, cell.sectionName].filter(Boolean).join('-')}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="rounded-md py-1.5 text-center text-[10px] text-muted-foreground/50">free</div>
+                        )}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   )
