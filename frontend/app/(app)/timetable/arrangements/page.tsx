@@ -325,7 +325,7 @@ export default function ArrangementsPage() {
           )}
 
           <Tabs defaultValue="queue">
-            <TabsList className="mb-4">
+            <TabsList className="mb-4 h-auto flex-wrap">
               <TabsTrigger value="queue">
                 Queue{summary.needsCover > 0 && (
                   <span className="ml-1.5 rounded-full bg-destructive px-1.5 text-[10px] font-bold text-destructive-foreground">

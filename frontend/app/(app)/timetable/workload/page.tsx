@@ -91,7 +91,7 @@ export default function WorkloadPage() {
           )}
 
           <Tabs defaultValue="heatmap">
-            <TabsList className="mb-4">
+            <TabsList className="mb-4 h-auto flex-wrap">
               <TabsTrigger value="heatmap">Week at a glance</TabsTrigger>
               <TabsTrigger value="table">Every teacher</TabsTrigger>
               <TabsTrigger value="breaches">

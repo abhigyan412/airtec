@@ -133,7 +133,7 @@ export default function GeneratePage() {
       />
 
       <Tabs defaultValue="build">
-        <TabsList className="mb-4">
+        <TabsList className="mb-4 h-auto flex-wrap">
           <TabsTrigger value="build">Build</TabsTrigger>
           <TabsTrigger value="versions">
             History
