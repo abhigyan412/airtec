@@ -95,7 +95,7 @@ export function TeacherTimetableView() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="bg-muted/50">
-                  <th className="sticky left-0 z-10 w-28 border-b border-r border-border bg-muted/50 px-4 py-3 text-left text-xs font-semibold uppercase text-muted-foreground">
+                  <th className="sticky left-0 z-10 w-28 border-b border-r border-border bg-muted px-4 py-3 text-left text-xs font-semibold uppercase text-muted-foreground">
                     Period
                   </th>
                   {DAYS.map((day, idx) => (

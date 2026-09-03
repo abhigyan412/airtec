@@ -441,7 +441,7 @@ function DayBlock({ data, day, flagged, flaggedSlots, editable, onEdit }: {
       <table className="w-full border-collapse text-sm" style={{ minWidth: 900 }}>
         <thead className="bg-muted/50">
           <tr>
-            <th className="sticky left-0 z-10 border-b border-border bg-muted/50 px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <th className="sticky left-0 z-10 border-b border-border bg-muted px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
               Class
             </th>
             {teaching.map((slot: any) => (

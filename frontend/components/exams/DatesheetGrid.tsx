@@ -119,7 +119,7 @@ export function DatesheetGrid({ examSubjects, onSubjectClick }: { examSubjects: 
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr className="bg-muted/50 text-xs font-semibold uppercase text-muted-foreground">
-            <th className="sticky left-0 z-10 bg-muted/50 px-4 py-3 text-left whitespace-nowrap">Class</th>
+            <th className="sticky left-0 z-10 bg-muted px-4 py-3 text-left whitespace-nowrap">Class</th>
             {scheduleDates.map((date: string) => (
               <th key={date} className="px-4 py-3 text-left whitespace-nowrap">{formatDate(date)}</th>
             ))}

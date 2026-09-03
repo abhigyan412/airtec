@@ -201,7 +201,7 @@ function MyGrid({ grid, today }: { grid: any; today: string }) {
         <table className="w-full border-collapse text-sm" style={{ minWidth: 640 }}>
           <thead className="bg-muted/50">
             <tr>
-              <th className="sticky left-0 z-10 bg-muted/50 px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <th className="sticky left-0 z-10 bg-muted px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Period
               </th>
               {[1, 2, 3, 4, 5, 6].map(day => (

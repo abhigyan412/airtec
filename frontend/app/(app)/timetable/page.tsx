@@ -511,7 +511,7 @@ export default function TimetablePage() {
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-muted/50">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase border-b border-r border-border w-28 sticky left-0 bg-muted/50 z-10">
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase border-b border-r border-border w-28 sticky left-0 bg-muted z-10">
                     Period
                   </th>
                   {DAYS.map((day, idx) => (
