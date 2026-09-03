@@ -3675,20 +3675,38 @@ async function findStaleCover(schoolId: string, date: string, presentTeacherIds:
   return [...byAbsence.values()].map(e => ({ ...e, periods: [...new Set(e.periods)].sort((a, b) => a - b) }))
 }
 
+type SchoolknotMap = Record<string, { school: string; reg: string }>
+
+// The effective email->{school,reg} map: the admin-managed rows in the
+// standalone schoolknot_staff_mapping table if any exist, otherwise the code
+// config's built-in default. Falls back to the default if the table is absent
+// or unreachable, so nothing breaks if the demo table was never created / was
+// already dropped.
+async function getSchoolknotMapping(schoolId: string): Promise<{ mapping: SchoolknotMap; source: 'table' | 'default' }> {
+  const def = getSchoolknotConfig(schoolId)?.regByEmail ?? {}
+  try {
+    const { data, error } = await supabase.from('schoolknot_staff_mapping')
+      .select('email, schoolknot_school, reg').eq('school_id', schoolId)
+    if (error) throw error
+    if (data && data.length) {
+      const mapping: SchoolknotMap = {}
+      for (const r of data as any[]) mapping[r.email] = { school: r.schoolknot_school, reg: String(r.reg) }
+      return { mapping, source: 'table' }
+    }
+  } catch { /* table missing / unreachable — use the code default */ }
+  return { mapping: def, source: 'default' }
+}
+
 async function runSchoolknotAttendanceSync(
   schoolId: string,
   date: string,
   markedBy: string,
-  overrideMapping?: Record<string, { school: string; reg: string }>,
 ): Promise<SchoolknotSyncReport> {
   const config = getSchoolknotConfig(schoolId)
   if (!config) throw new Error('SchoolKnot is not configured for this school.')
 
-  // The admin-managed mapping (built in the browser Mapper and sent with the
-  // request) wins when present; otherwise the code config is the default. The
-  // set of SchoolKnot schools to fetch is the union of the two, so a mapping
-  // that points at a school the config didn't list still gets fetched.
-  const regByEmail = overrideMapping && Object.keys(overrideMapping).length ? overrideMapping : config.regByEmail
+  const { mapping: regByEmail } = await getSchoolknotMapping(schoolId)
+  // Fetch the union of the config's schools and any the mapping points at.
   const schoolIds = [...new Set([...config.schoolknotSchoolIds, ...Object.values(regByEmail).map(v => v.school)])]
 
   // Resolve the email->reg map to the actual airtec users. An email that no
@@ -3793,15 +3811,49 @@ async function runSchoolknotAttendanceSync(
 // school? Lets the UI show the Sync button only where it can work.
 router.get('/attendance/sync/status', asyncHandler(async (req: AuthRequest, res: Response) => {
   const config = getSchoolknotConfig(req.user!.school_id)
+  const { mapping, source } = config ? await getSchoolknotMapping(req.user!.school_id) : { mapping: {}, source: 'default' as const }
   res.json({
     success: true,
     data: {
       configured: !!config,
       provider: config ? 'schoolknot' : null,
-      mappedStaff: config ? Object.keys(config.regByEmail).length : 0,
+      mappedStaff: Object.keys(mapping).length,
+      mappingSource: source,
     },
   })
 }))
+
+// ── GET/PUT the SchoolKnot mapping (standalone demo table) ──────────
+// The Mapper reads the current mapping and saves changes here. Reads fall
+// back to the code default when the table has no rows for this school.
+router.get('/attendance/schoolknot/mapping', requirePermissionV2('staff.attendance_mark'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { mapping, source } = await getSchoolknotMapping(req.user!.school_id)
+    res.json({ success: true, data: { mapping, source } })
+  }))
+
+router.put('/attendance/schoolknot/mapping', requirePermissionV2('staff.attendance_mark'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const school_id = req.user!.school_id
+    const raw = req.body?.mapping
+    if (!raw || typeof raw !== 'object') {
+      return res.status(400).json({ success: false, error: 'mapping object required' })
+    }
+    const rows: any[] = []
+    for (const [email, v] of Object.entries(raw as Record<string, any>)) {
+      if (v && typeof v.school === 'string' && (typeof v.reg === 'string' || typeof v.reg === 'number')) {
+        rows.push({ school_id, email, schoolknot_school: v.school, reg: String(v.reg), updated_by: req.user!.id })
+      }
+    }
+    // Replace the whole set for this school (the Mapper sends the complete map).
+    const del = await supabase.from('schoolknot_staff_mapping').delete().eq('school_id', school_id)
+    if (del.error) return res.status(400).json({ success: false, error: del.error.message })
+    if (rows.length) {
+      const ins = await supabase.from('schoolknot_staff_mapping').insert(rows)
+      if (ins.error) return res.status(400).json({ success: false, error: ins.error.message })
+    }
+    res.json({ success: true, data: { saved: rows.length } })
+  }))
 
 // ── POST /hrms/attendance/sync — pull a day from SchoolKnot. Same
 // permission as manual marking; it writes the same table the same way.
@@ -3824,21 +3876,9 @@ router.post('/attendance/sync', requirePermissionV2('staff.attendance_mark'),
       return res.status(400).json({ success: false, error: 'SchoolKnot is not configured for this school.' })
     }
 
-    // Optional admin-managed mapping from the browser Mapper: { email: {school, reg} }.
-    // Kept out of the database on purpose — it rides along with the request.
-    const raw = req.body?.mapping
-    let mapping: Record<string, { school: string; reg: string }> | undefined
-    if (raw && typeof raw === 'object') {
-      mapping = {}
-      for (const [email, v] of Object.entries(raw as Record<string, any>)) {
-        if (v && typeof v.school === 'string' && (typeof v.reg === 'string' || typeof v.reg === 'number')) {
-          mapping[email] = { school: v.school, reg: String(v.reg) }
-        }
-      }
-    }
-
     try {
-      const report = await runSchoolknotAttendanceSync(req.user!.school_id, date, req.user!.id, mapping)
+      // The mapping is read server-side from the schoolknot_staff_mapping table.
+      const report = await runSchoolknotAttendanceSync(req.user!.school_id, date, req.user!.id)
       res.json({ success: true, data: report })
     } catch (err: any) {
       // A provider/transport failure is upstream, not a bad request.

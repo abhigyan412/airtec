@@ -17,7 +17,7 @@ import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import { StaffAvatar, staffPhotoUrl } from '@/components/hr/StaffAvatar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { MapSchoolknotDialog, loadMapping } from './MapSchoolknotDialog'
+import { MapSchoolknotDialog } from './MapSchoolknotDialog'
 import {
   Table,
   TableBody,
@@ -160,8 +160,8 @@ function MarkTab() {
   const [showMapper, setShowMapper] = useState(false)
 
   const syncMutation = useMutation({
-    // The browser-held mapping (from the Mapper) overrides the server default.
-    mutationFn: () => hrmsApi.attendance.sync(date, loadMapping()),
+
+    mutationFn: () => hrmsApi.attendance.sync(date),
     onSuccess: (res: any) => {
       const d = res.data ?? {}
       qc.invalidateQueries({ queryKey: ['staff-attendance'] })

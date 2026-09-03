@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Loader2, Save, Wand2, Link2, Link2Off } from 'lucide-react'
 
@@ -14,27 +14,18 @@ import {
 } from '@/components/ui/select'
 import { hrmsApi } from '@/lib/api'
 
-// ── SchoolKnot mapper (browser-held, no DB) ─────────────────────────
+// ── SchoolKnot mapper ───────────────────────────────────────────────
 //
-// The admin maps each staff member to their biometric device here. The
-// map lives in THIS browser (localStorage) and rides along with the sync
-// request — nothing is written to the database. Clearing it (or the
-// browser's storage) removes the mapping; the server's built-in default
-// is used when the browser has none.
+// The admin maps each staff member to their biometric device here. The map
+// is stored in a standalone schoolknot_staff_mapping table (shared across
+// admins), read back on open and saved on Save. Reads fall back to the code
+// default when the table has no rows yet.
 
-const LS_KEY = 'schoolknot_mapping'
 type Mapping = Record<string, { school: string; reg: string }>
 
 // SchoolKnot school codes are opaque; show the school's name in the UI.
 const SCHOOL_LABELS: Record<string, string> = { SC3102: 'RBPIC', SC3104: 'Trinity' }
 const schoolLabel = (sk: string) => SCHOOL_LABELS[sk] ?? sk
-
-export function loadMapping(): Mapping {
-  try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') } catch { return {} }
-}
-function persist(m: Mapping) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(m)) } catch { /* private mode */ }
-}
 
 const norm = (s: string) => (s ?? '').toUpperCase().replace(/[^A-Z ]/g, ' ').replace(/\s+/g, ' ').trim()
 function nameScore(a: string, b: string): number {
@@ -64,23 +55,37 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
     enabled: open,
     staleTime: 10 * 60 * 1000,
   })
+  const mappingQ = useQuery({
+    queryKey: ['schoolknot-mapping'],
+    queryFn: () => hrmsApi.attendance.schoolknotMapping().then((r: any) => r.data),
+    enabled: open,
+  })
+  const qc = useQueryClient()
 
   const staff: any[] = staffQ.data ?? []
   const roster: { school: string; reg: string; name: string; punchedToday: boolean }[] = rosterQ.data?.roster ?? []
   const schools: string[] = rosterQ.data?.schools ?? []
-  const defaultMapping: Mapping = rosterQ.data?.defaultMapping ?? {}
 
   const [map, setMap] = useState<Mapping>({})
   const [q, setQ] = useState('')
 
-  // Seed from the admin's saved browser map if they have one; otherwise start
-  // from the server's built-in default, so the editor opens pre-filled rather
-  // than blank. Waits for the roster (which carries the default) to load.
+  // Seed the editor from the stored mapping (table, or the code default when
+  // the table is empty) each time it's loaded.
   useEffect(() => {
-    if (!open) return
-    const saved = loadMapping()
-    setMap(Object.keys(saved).length ? saved : defaultMapping)
-  }, [open, rosterQ.data])
+    if (open && mappingQ.data?.mapping) setMap(mappingQ.data.mapping)
+  }, [open, mappingQ.data])
+
+  const saveMut = useMutation({
+    mutationFn: () => hrmsApi.attendance.saveSchoolknotMapping(map),
+    onSuccess: () => {
+      toast.success(`Saved — ${Object.keys(map).length} staff mapped.`)
+      qc.invalidateQueries({ queryKey: ['schoolknot-mapping'] })
+      qc.invalidateQueries({ queryKey: ['schoolknot-sync-status'] })
+      onSaved?.()
+      onOpenChange(false)
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Could not save the mapping'),
+  })
 
   const rosterByKey = useMemo(() => {
     const m = new Map<string, typeof roster[number]>()
@@ -131,14 +136,7 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
     toast.info('Suggested devices for unmapped staff — review, then Save.')
   }
 
-  const save = () => {
-    persist(map)
-    toast.success(`Saved — ${Object.keys(map).length} staff mapped (this browser).`)
-    onSaved?.()
-    onOpenChange(false)
-  }
-
-  const loading = staffQ.isLoading || rosterQ.isLoading
+  const loading = staffQ.isLoading || rosterQ.isLoading || mappingQ.isLoading
   const mappedCount = Object.keys(map).length
 
   return (
@@ -147,7 +145,7 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Link2 className="h-4 w-4" /> Map staff to SchoolKnot devices</DialogTitle>
           <p className="text-xs text-muted-foreground">
-            Pick each person's biometric device. Saved in this browser only — nothing is written to the database.
+            Pick each person's biometric device. Shared with everyone at this school.
             {schools.length > 0 && <> Schools: {schools.map(schoolLabel).join(', ')}.</>}
           </p>
         </DialogHeader>
@@ -218,7 +216,9 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
           <span className="text-xs text-muted-foreground">{mappedCount} mapped</span>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button onClick={save} disabled={loading}><Save className="h-4 w-4" /> Save mapping</Button>
+            <Button onClick={() => saveMut.mutate()} disabled={loading || saveMut.isPending}>
+              {saveMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save mapping
+            </Button>
           </div>
         </DialogFooter>
       </DialogContent>
