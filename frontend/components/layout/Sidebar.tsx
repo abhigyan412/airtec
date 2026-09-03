@@ -54,6 +54,22 @@ interface NavItem {
    *  knows the feature exists without being able to silently hit a 403
    *  after the page loads. */
   lockUnless?: string
+  /** A plain, non-clickable label dividing the items after it from the
+   *  ones above — visual grouping only, not another expandable level.
+   *  `href`/`children` are ignored; `icon` is still required by the type
+   *  but never rendered. Permission-filtered like any other entry, so a
+   *  heading survives only while at least one item still follows it —
+   *  see dropOrphanHeadings. */
+  heading?: boolean
+}
+
+/** Strips a `heading` entry that has nothing visible left under it — the
+ *  very next item (after permission filtering) is either absent or is
+ *  itself the next heading. Without this, a role that can't see anything
+ *  in one section (e.g. no `timetable.generate`/`import`/`setup_manage`)
+ *  would be shown a "Build" label pointing at nothing. */
+function dropOrphanHeadings(items: NavItem[]): NavItem[] {
+  return items.filter((it, i) => !it.heading || (items[i + 1] && !items[i + 1].heading))
 }
 
 // Grouped navigation mapped to airtec's real routes and role_permissions_v2
@@ -123,10 +139,14 @@ const NAV: NavItem[] = [
         children: [
           // Ordered the way the module is actually used across a day:
           // look at the timetable, work today's cover from it, then the
-          // things you do occasionally — analyse, build, configure. The old
-          // order interleaved all three, so the screen somebody opens twenty
-          // times a day sat below the one they open twice a term.
+          // things you do occasionally — analyse, build, configure. Split
+          // into three visually-labelled sections along that same seam
+          // (see NavItem.heading) rather than another expandable level —
+          // this menu is already two deep on a phone before reaching
+          // anything here, so a label costs nothing while a fourth level
+          // would cost a tap.
 
+          { label: 'View', heading: true, icon: Grid3X3 },
           { label: 'Class View', href: '/timetable', icon: Grid3X3, permission: 'timetable.view' },
           { label: 'Teacher View', href: '/timetable?view=teacher', icon: User, permission: 'timetable.view' },
           // Every class at once, live or draft, and the thing that prints
@@ -140,19 +160,21 @@ const NAV: NavItem[] = [
           // for their own timetable and Class View for any class; the master
           // planning sheet is not theirs.
           { label: 'Block View', href: '/timetable/block', icon: LayoutGrid, permission: 'timetable.manage' },
-
-          // Who is away, who is covering, who is free, and what needs
-          // attention right now. "Who's free" used to be a separate Free
-          // Faculty page on the class-view screen; it is a tab here now,
-          // beside the queue it exists to serve.
-          { label: 'Arrangements', href: '/timetable/arrangements', icon: UserCheck2, permission: 'arrangement.view' },
           // Every teacher's own page: their week, the cover they have been
           // given, and their reserved periods. Gated on nothing but a login,
           // because it only ever shows the caller their own data — the
           // handler resolves identity from the token and ignores any id.
           { label: 'My Week', href: '/timetable/my-week', icon: CalendarClock },
 
+          { label: 'Cover', heading: true, icon: UserCheck2 },
+          // Who is away, who is covering, who is free, and what needs
+          // attention right now. "Who's free" used to be a separate Free
+          // Faculty page on the class-view screen; it is a tab here now,
+          // beside the queue it exists to serve.
+          { label: 'Arrangements', href: '/timetable/arrangements', icon: UserCheck2, permission: 'arrangement.view' },
           { label: 'Workload', href: '/timetable/workload', icon: Gauge, permission: 'timetable.workload_view' },
+
+          { label: 'Build', heading: true, icon: Wand2 },
           { label: 'Generate', href: '/timetable/generate', icon: Wand2, permission: 'timetable.generate' },
           { label: 'Import', href: '/timetable/import', icon: FileSpreadsheet, permission: 'timetable.import' },
           { label: 'Setup', href: '/timetable/setup', icon: SlidersHorizontal, permission: 'timetable.setup_manage' },
@@ -514,7 +536,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             // an item hidden from this user (e.g. Examination Settings
             // without exam.schedule) would still render inside it.
             let children = item.children?.filter(allowed).map((c) =>
-              c.children ? { ...c, children: forTeacher(c, c.children.filter(allowed)) } : c
+              c.children ? { ...c, children: dropOrphanHeadings(forTeacher(c, c.children.filter(allowed)) ?? []) } : c
             )
             // Applied at both depths on purpose. Timetable used to be a
             // top-level group and is now a child of Academics; a check
@@ -658,6 +680,16 @@ function NavEntry({
                   {childOpen && (
                     <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border/60 pl-3 [animation-duration:var(--duration-fast)] animate-in fade-in-0 slide-in-from-top-1">
                       {child.children.map((gc) => {
+                        if (gc.heading) {
+                          return (
+                            <p
+                              key={gc.label}
+                              className="mt-2.5 px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60 first:mt-0"
+                            >
+                              {gc.label}
+                            </p>
+                          )
+                        }
                         const GcIcon = gc.icon
 
                         // A grandchild that's itself a sub-group
