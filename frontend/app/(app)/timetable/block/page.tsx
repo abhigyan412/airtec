@@ -228,50 +228,50 @@ export default function BlockViewPage() {
           </div>
         </div>
 
-        <div
-          ref={contentRef}
-          className={cn(isFullscreen && 'fixed inset-0 z-50 overflow-auto bg-background p-3')}
-        >
-          {isFullscreen && (
-            <div className="mb-2 flex justify-end">
-              <Button variant="outline" size="sm" onClick={toggleFullscreen}>
-                <Minimize2 className="mr-1.5 h-4 w-4" /> Exit full screen
-              </Button>
-            </div>
-          )}
+        {block.isLoading ? (
+          <TableSkeleton rows={10} cols={6} />
+        ) : block.error ? (
+          <Banner tone="bad" title="Could not load the timetable">{timetableError(block.error)}</Banner>
+        ) : !data?.sections?.length ? (
+          <EmptyState icon={Grid3x3} title="Nothing to show"
+            description="This timetable has no periods in it yet." />
+        ) : (
+          <>
+            <SummaryStrip data={data} isDraft={isDraft} editable={editable} />
 
-          {block.isLoading ? (
-            <TableSkeleton rows={10} cols={6} />
-          ) : block.error ? (
-            <Banner tone="bad" title="Could not load the timetable">{timetableError(block.error)}</Banner>
-          ) : !data?.sections?.length ? (
-            <EmptyState icon={Grid3x3} title="Nothing to show"
-              description="This timetable has no periods in it yet." />
-          ) : (
-            <>
-              <SummaryStrip data={data} isDraft={isDraft} editable={editable} />
+            {editable && (
+              <div className="mb-3 flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setReassignOpen(true)}>
+                  <UserCog className="h-4 w-4" /> Reassign teacher
+                </Button>
+              </div>
+            )}
 
-              {editable && (
-                <div className="mb-3 flex justify-end">
-                  <Button variant="outline" size="sm" onClick={() => setReassignOpen(true)}>
-                    <UserCog className="h-4 w-4" /> Reassign teacher
+            {data.conflicts.length > 0 && (
+              <ConflictPanel
+                conflicts={data.conflicts}
+                open={showConflicts}
+                onToggle={() => setShowConflicts(v => !v)}
+              />
+            )}
+
+            {!isDraft && (
+              <p className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Lock className="h-3.5 w-3.5" />
+                This is the live timetable and is read-only. Make a copy to change anything.
+              </p>
+            )}
+
+            <div
+              ref={contentRef}
+              className={cn(isFullscreen && 'fixed inset-0 z-50 overflow-auto bg-background p-3')}
+            >
+              {isFullscreen && (
+                <div className="mb-2 flex justify-end">
+                  <Button variant="outline" size="sm" onClick={toggleFullscreen}>
+                    <Minimize2 className="mr-1.5 h-4 w-4" /> Exit full screen
                   </Button>
                 </div>
-              )}
-
-              {data.conflicts.length > 0 && (
-                <ConflictPanel
-                  conflicts={data.conflicts}
-                  open={showConflicts}
-                  onToggle={() => setShowConflicts(v => !v)}
-                />
-              )}
-
-              {!isDraft && (
-                <p className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Lock className="h-3.5 w-3.5" />
-                  This is the live timetable and is read-only. Make a copy to change anything.
-                </p>
               )}
 
               {layout === 'week' && (
@@ -296,9 +296,9 @@ export default function BlockViewPage() {
                 <DayEditor data={data} versionId={versionId} editable={editable}
                   onChanged={() => qc.invalidateQueries({ queryKey: ['tt-block', versionId] })} />
               )}
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* The printable artefact: one class per page, whole week. */}
