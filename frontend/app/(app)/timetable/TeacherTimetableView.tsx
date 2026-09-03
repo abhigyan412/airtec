@@ -1,11 +1,12 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Clock, GraduationCap, User } from 'lucide-react'
+import { Clock, GraduationCap, Maximize2, Minimize2, User } from 'lucide-react'
 import { timetableApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { useTeacherDashboard } from '@/lib/useTeacherDashboard'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -25,6 +26,28 @@ export function TeacherTimetableView() {
   const isClassTeacher = dashboard?.header?.is_class_teacher ?? false
   const homeroom = dashboard?.header?.homeroom_section
   const [tab, setTab] = useState<Tab>('mine')
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  // Synced from the browser's own fullscreen state, not just our toggle —
+  // a phone's back gesture or the system Escape key exits fullscreen
+  // without going through toggleFullscreen, and the button/overlay must
+  // follow that or they'll disagree with what's actually on screen.
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', handler)
+    return () => document.removeEventListener('fullscreenchange', handler)
+  }, [])
+
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenElement) {
+      try { await contentRef.current?.requestFullscreen() } catch { /* unsupported browser */ }
+      try { await (screen.orientation as any)?.lock?.('landscape') } catch { /* iOS / desktop */ }
+    } else {
+      try { await document.exitFullscreen() } catch { /* already exited */ }
+      try { (screen.orientation as any)?.unlock?.() } catch { /* no-op */ }
+    }
+  }
 
   const { data: ownPeriods, isLoading: ownLoading } = useQuery({
     queryKey: ['timetable-mine', user?.id],
@@ -90,55 +113,81 @@ export function TeacherTimetableView() {
           <EmptyState icon={Clock} title="No periods scheduled" description="Nothing on the timetable here yet." />
         </div>
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-border bg-card">
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="bg-muted/50">
-                  <th className="sticky left-0 z-10 w-28 border-b border-r border-border bg-muted px-4 py-3 text-left text-xs font-semibold uppercase text-muted-foreground">
-                    Period
-                  </th>
-                  {DAYS.map((day, idx) => (
-                    <th key={day} className="min-w-[150px] border-b border-r border-border px-3 py-3 last:border-r-0">
-                      <span className="text-xs font-bold text-foreground">{DAY_SHORT[idx]}</span>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {allPeriods.map(periodNum => (
-                  <tr key={periodNum} className="border-b border-border last:border-b-0">
-                    <td className="sticky left-0 z-10 border-r border-border bg-card px-4 py-2">
-                      <p className="text-xs font-bold text-foreground">P{periodNum}</p>
-                      <p className="text-xs text-muted-foreground">{timeByPeriod[periodNum]}</p>
-                    </td>
-                    {[1, 2, 3, 4, 5, 6].map(dayNum => {
-                      const period = (byDay[dayNum] ?? []).find((p: any) => p.period_number === periodNum)
-                      return (
-                        <td key={dayNum} className="border-r border-border px-2 py-2 align-top last:border-r-0">
-                          {period ? (
-                            <div className={cn('rounded-lg px-2.5 py-2', getColor(period.subject_name))}>
-                              <p className="text-xs font-semibold">{period.subject_name}</p>
-                              {showingHomeroom && (
-                                <p className="mt-0.5 text-[11px] opacity-80">{period.users?.full_name ?? 'Unassigned'}</p>
-                              )}
-                              {!showingHomeroom && (
-                                <p className="mt-0.5 text-[11px] opacity-80">{period.classes?.name} {period.sections?.name}</p>
-                              )}
-                              {period.room && <p className="text-[11px] opacity-70">Room {period.room}</p>}
-                            </div>
-                          ) : (
-                            <div className="h-full min-h-[44px]" />
-                          )}
+        <>
+          {!isFullscreen && (
+            <div className="mb-2 flex justify-end sm:hidden">
+              <Button
+                variant="outline" size="icon"
+                onClick={toggleFullscreen} title="Full screen (landscape)"
+              >
+                <Maximize2 className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+
+          <div
+            ref={contentRef}
+            className={cn(isFullscreen && 'fixed inset-0 z-50 overflow-auto bg-background p-3')}
+          >
+            {isFullscreen && (
+              <div className="mb-2 flex justify-end">
+                <Button variant="outline" size="sm" onClick={toggleFullscreen}>
+                  <Minimize2 className="mr-1.5 h-4 w-4" /> Exit full screen
+                </Button>
+              </div>
+            )}
+
+            <div className="overflow-hidden rounded-2xl border border-border bg-card">
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-muted/50">
+                      <th className="sticky left-0 z-10 w-28 border-b border-r border-border bg-muted px-4 py-3 text-left text-xs font-semibold uppercase text-muted-foreground">
+                        Period
+                      </th>
+                      {DAYS.map((day, idx) => (
+                        <th key={day} className="min-w-[150px] border-b border-r border-border px-3 py-3 last:border-r-0">
+                          <span className="text-xs font-bold text-foreground">{DAY_SHORT[idx]}</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allPeriods.map(periodNum => (
+                      <tr key={periodNum} className="border-b border-border last:border-b-0">
+                        <td className="sticky left-0 z-10 border-r border-border bg-card px-4 py-2">
+                          <p className="text-xs font-bold text-foreground">P{periodNum}</p>
+                          <p className="text-xs text-muted-foreground">{timeByPeriod[periodNum]}</p>
                         </td>
-                      )
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        {[1, 2, 3, 4, 5, 6].map(dayNum => {
+                          const period = (byDay[dayNum] ?? []).find((p: any) => p.period_number === periodNum)
+                          return (
+                            <td key={dayNum} className="border-r border-border px-2 py-2 align-top last:border-r-0">
+                              {period ? (
+                                <div className={cn('rounded-lg px-2.5 py-2', getColor(period.subject_name))}>
+                                  <p className="text-xs font-semibold">{period.subject_name}</p>
+                                  {showingHomeroom && (
+                                    <p className="mt-0.5 text-[11px] opacity-80">{period.users?.full_name ?? 'Unassigned'}</p>
+                                  )}
+                                  {!showingHomeroom && (
+                                    <p className="mt-0.5 text-[11px] opacity-80">{period.classes?.name} {period.sections?.name}</p>
+                                  )}
+                                  {period.room && <p className="text-[11px] opacity-70">Room {period.room}</p>}
+                                </div>
+                              ) : (
+                                <div className="h-full min-h-[44px]" />
+                              )}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   )
