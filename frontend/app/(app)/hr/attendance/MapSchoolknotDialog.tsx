@@ -64,12 +64,19 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
   const staff: any[] = staffQ.data ?? []
   const roster: { school: string; reg: string; name: string; punchedToday: boolean }[] = rosterQ.data?.roster ?? []
   const schools: string[] = rosterQ.data?.schools ?? []
+  const defaultMapping: Mapping = rosterQ.data?.defaultMapping ?? {}
 
   const [map, setMap] = useState<Mapping>({})
   const [q, setQ] = useState('')
 
-  // Seed the editor from what's already saved in this browser.
-  useEffect(() => { if (open) setMap(loadMapping()) }, [open])
+  // Seed from the admin's saved browser map if they have one; otherwise start
+  // from the server's built-in default, so the editor opens pre-filled rather
+  // than blank. Waits for the roster (which carries the default) to load.
+  useEffect(() => {
+    if (!open) return
+    const saved = loadMapping()
+    setMap(Object.keys(saved).length ? saved : defaultMapping)
+  }, [open, rosterQ.data])
 
   const rosterByKey = useMemo(() => {
     const m = new Map<string, typeof roster[number]>()

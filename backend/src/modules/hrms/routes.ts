@@ -3861,7 +3861,9 @@ router.get('/attendance/schoolknot/roster', requirePermissionV2('staff.attendanc
       const roster = feeds.flatMap(f => f.rows.map(r => ({
         school: f.sk, reg: String(r.reg_id), name: (r.first_name ?? '').trim(), punchedToday: !!r.in_time,
       })))
-      res.json({ success: true, data: { schools: config.schoolknotSchoolIds, date, roster } })
+      // The built-in default, so the Mapper opens pre-filled with the current
+      // mapping (the admin's saved browser map takes over once they save one).
+      res.json({ success: true, data: { schools: config.schoolknotSchoolIds, date, roster, defaultMapping: config.regByEmail } })
     } catch (err: any) {
       res.status(502).json({ success: false, error: err?.message ?? 'Could not reach SchoolKnot' })
     }
