@@ -1,9 +1,9 @@
 'use client'
-import { Fragment, useMemo, useState, type DragEvent } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  AlertTriangle, Check, Copy, Grid3x3, Loader2, Lock, Printer, UserCog, X,
+  AlertTriangle, Check, Copy, Grid3x3, Loader2, Lock, Maximize2, Minimize2, Printer, UserCog, X,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -52,8 +52,30 @@ export default function BlockViewPage() {
   const [showConflicts, setShowConflicts] = useState(true)
   const [teacherFormat, setTeacherFormat] = useState<'grid' | 'sheets'>('grid')
   const [reassignOpen, setReassignOpen] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const contentRef = useRef<HTMLDivElement>(null)
 
   const canEdit = can('timetable.manage')
+
+  // Synced from the browser's own fullscreen state, not just our toggle —
+  // a phone's back gesture or the system Escape key exits fullscreen
+  // without going through toggleFullscreen, and the button/overlay must
+  // follow that or they'll disagree with what's actually on screen.
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', handler)
+    return () => document.removeEventListener('fullscreenchange', handler)
+  }, [])
+
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenElement) {
+      try { await contentRef.current?.requestFullscreen() } catch { /* unsupported browser */ }
+      try { await (screen.orientation as any)?.lock?.('landscape') } catch { /* iOS / desktop */ }
+    } else {
+      try { await document.exitFullscreen() } catch { /* already exited */ }
+      try { (screen.orientation as any)?.unlock?.() } catch { /* no-op */ }
+    }
+  }
 
   const versions = useQuery({
     queryKey: ['tt-versions'],
@@ -134,6 +156,13 @@ export default function BlockViewPage() {
             </SelectContent>
           </Select>
 
+          <Button
+            variant="outline" size="icon" className="sm:hidden"
+            onClick={toggleFullscreen} title="Full screen (landscape)"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </Button>
+
           <div className="flex flex-wrap gap-1.5">
             {([
               ['week', 'All classes, whole week'],
@@ -199,64 +228,77 @@ export default function BlockViewPage() {
           </div>
         </div>
 
-        {block.isLoading ? (
-          <TableSkeleton rows={10} cols={6} />
-        ) : block.error ? (
-          <Banner tone="bad" title="Could not load the timetable">{timetableError(block.error)}</Banner>
-        ) : !data?.sections?.length ? (
-          <EmptyState icon={Grid3x3} title="Nothing to show"
-            description="This timetable has no periods in it yet." />
-        ) : (
-          <>
-            <SummaryStrip data={data} isDraft={isDraft} editable={editable} />
+        <div
+          ref={contentRef}
+          className={cn(isFullscreen && 'fixed inset-0 z-50 overflow-auto bg-background p-3')}
+        >
+          {isFullscreen && (
+            <div className="mb-2 flex justify-end">
+              <Button variant="outline" size="sm" onClick={toggleFullscreen}>
+                <Minimize2 className="mr-1.5 h-4 w-4" /> Exit full screen
+              </Button>
+            </div>
+          )}
 
-            {editable && (
-              <div className="mb-3 flex justify-end">
-                <Button variant="outline" size="sm" onClick={() => setReassignOpen(true)}>
-                  <UserCog className="h-4 w-4" /> Reassign teacher
-                </Button>
-              </div>
-            )}
+          {block.isLoading ? (
+            <TableSkeleton rows={10} cols={6} />
+          ) : block.error ? (
+            <Banner tone="bad" title="Could not load the timetable">{timetableError(block.error)}</Banner>
+          ) : !data?.sections?.length ? (
+            <EmptyState icon={Grid3x3} title="Nothing to show"
+              description="This timetable has no periods in it yet." />
+          ) : (
+            <>
+              <SummaryStrip data={data} isDraft={isDraft} editable={editable} />
 
-            {data.conflicts.length > 0 && (
-              <ConflictPanel
-                conflicts={data.conflicts}
-                open={showConflicts}
-                onToggle={() => setShowConflicts(v => !v)}
-              />
-            )}
+              {editable && (
+                <div className="mb-3 flex justify-end">
+                  <Button variant="outline" size="sm" onClick={() => setReassignOpen(true)}>
+                    <UserCog className="h-4 w-4" /> Reassign teacher
+                  </Button>
+                </div>
+              )}
 
-            {!isDraft && (
-              <p className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Lock className="h-3.5 w-3.5" />
-                This is the live timetable and is read-only. Make a copy to change anything.
-              </p>
-            )}
+              {data.conflicts.length > 0 && (
+                <ConflictPanel
+                  conflicts={data.conflicts}
+                  open={showConflicts}
+                  onToggle={() => setShowConflicts(v => !v)}
+                />
+              )}
 
-            {layout === 'week' && (
-              <WeekBlock data={data} flagged={flagged} flaggedSlots={flaggedSlots}
-                editable={editable} onEdit={setEditing} />
-            )}
-            {layout === 'day' && (
-              <DayBlock data={data} day={day} flagged={flagged} flaggedSlots={flaggedSlots}
-                editable={editable} onEdit={setEditing} />
-            )}
-            {layout === 'teachers' && (
-              teacherFormat === 'grid'
-                ? <TeacherBlock data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
-                : <TeacherSheets data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
-            )}
-            {layout === 'class' && (
-              <ClassWeeks data={data} flagged={flagged} flaggedSlots={flaggedSlots}
-                editable={editable} onEdit={setEditing} versionId={versionId}
-                onChanged={() => qc.invalidateQueries({ queryKey: ['tt-block', versionId] })} />
-            )}
-            {layout === 'edit' && (
-              <DayEditor data={data} versionId={versionId} editable={editable}
-                onChanged={() => qc.invalidateQueries({ queryKey: ['tt-block', versionId] })} />
-            )}
-          </>
-        )}
+              {!isDraft && (
+                <p className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Lock className="h-3.5 w-3.5" />
+                  This is the live timetable and is read-only. Make a copy to change anything.
+                </p>
+              )}
+
+              {layout === 'week' && (
+                <WeekBlock data={data} flagged={flagged} flaggedSlots={flaggedSlots}
+                  editable={editable} onEdit={setEditing} />
+              )}
+              {layout === 'day' && (
+                <DayBlock data={data} day={day} flagged={flagged} flaggedSlots={flaggedSlots}
+                  editable={editable} onEdit={setEditing} />
+              )}
+              {layout === 'teachers' && (
+                teacherFormat === 'grid'
+                  ? <TeacherBlock data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
+                  : <TeacherSheets data={data} flagged={flagged} editable={editable} onEdit={setEditing} />
+              )}
+              {layout === 'class' && (
+                <ClassWeeks data={data} flagged={flagged} flaggedSlots={flaggedSlots}
+                  editable={editable} onEdit={setEditing} versionId={versionId}
+                  onChanged={() => qc.invalidateQueries({ queryKey: ['tt-block', versionId] })} />
+              )}
+              {layout === 'edit' && (
+                <DayEditor data={data} versionId={versionId} editable={editable}
+                  onChanged={() => qc.invalidateQueries({ queryKey: ['tt-block', versionId] })} />
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* The printable artefact: one class per page, whole week. */}
