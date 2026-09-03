@@ -1,10 +1,10 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { timetableApi, admissionApi, classesApi, api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { Plus, Trash2, Loader2, Clock, Grid3X3, List, Printer, User, AlertTriangle, ShieldOff, UserCheck, BookOpen } from 'lucide-react'
+import { Plus, Trash2, Loader2, Clock, Grid3X3, List, Maximize2, Minimize2, Printer, User, AlertTriangle, ShieldOff, UserCheck, BookOpen } from 'lucide-react'
 import { toast } from 'sonner'
 import { usePermissions } from '@/lib/usePermissions'
 import { useAuth } from '@/lib/auth'
@@ -57,11 +57,33 @@ export default function TimetablePage() {
   const [lockedPeriod,    setLockedPeriod]    = useState<{ number: number; start: string; end: string } | null>(null)
   const [showBulkLunch,   setShowBulkLunch]   = useState(false)
   const [showPrint,       setShowPrint]       = useState(false)
+  const [isFullscreen,    setIsFullscreen]    = useState(false)
+  const contentRef = useRef<HTMLDivElement>(null)
   const qc = useQueryClient()
 
   useEffect(() => {
     setViewModeState(viewModeFromParam(searchParams.get('view')))
   }, [searchParams])
+
+  // Synced from the browser's own fullscreen state, not just our toggle —
+  // a phone's back gesture or the system Escape key exits fullscreen
+  // without going through toggleFullscreen, and the button/overlay must
+  // follow that or they'll disagree with what's actually on screen.
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', handler)
+    return () => document.removeEventListener('fullscreenchange', handler)
+  }, [])
+
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenElement) {
+      try { await contentRef.current?.requestFullscreen() } catch { /* unsupported browser */ }
+      try { await (screen.orientation as any)?.lock?.('landscape') } catch { /* iOS / desktop */ }
+    } else {
+      try { await document.exitFullscreen() } catch { /* already exited */ }
+      try { (screen.orientation as any)?.unlock?.() } catch { /* no-op */ }
+    }
+  }
 
   const setViewMode = (v: ViewMode) => {
     setViewModeState(v)
@@ -458,7 +480,32 @@ export default function TimetablePage() {
             <Skeleton key={i} className="h-14 w-full" />
           ))}
         </div>
-      ) : gridOrList === 'grid' ? (
+      ) : (
+        <>
+          {!isFullscreen && (
+            <div className="mb-2 flex justify-end sm:hidden">
+              <Button
+                variant="outline" size="icon"
+                onClick={toggleFullscreen} title="Full screen (landscape)"
+              >
+                <Maximize2 className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+
+          <div
+            ref={contentRef}
+            className={cn(isFullscreen && 'fixed inset-0 z-50 overflow-auto bg-background p-3')}
+          >
+            {isFullscreen && (
+              <div className="mb-2 flex justify-end">
+                <Button variant="outline" size="sm" onClick={toggleFullscreen}>
+                  <Minimize2 className="mr-1.5 h-4 w-4" /> Exit full screen
+                </Button>
+              </div>
+            )}
+
+            {gridOrList === 'grid' ? (
         // ── GRID VIEW ─────────────────────────────────────────
         <div className="bg-card rounded-2xl border border-border overflow-hidden">
           <div className="overflow-x-auto">
@@ -625,6 +672,9 @@ export default function TimetablePage() {
             )
           })}
         </div>
+            )}
+          </div>
+        </>
       )}
 
       {showAdd && selectedClass && canManage && (
