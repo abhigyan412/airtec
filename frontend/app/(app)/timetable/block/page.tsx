@@ -134,7 +134,7 @@ export default function BlockViewPage() {
             </SelectContent>
           </Select>
 
-          <div className="flex flex-wrap overflow-hidden rounded-lg border border-border">
+          <div className="flex flex-wrap overflow-hidden rounded-lg border border-border divide-x divide-border">
             {([
               ['week', 'All classes, whole week'],
               ['day', 'All classes, one day'],
@@ -353,7 +353,7 @@ function ConflictPanel({ conflicts, open, onToggle }: { conflicts: any[]; open: 
               : `${warnings.length} thing${warnings.length === 1 ? '' : 's'} worth a look`}
             {blocking.length > 0 && warnings.length > 0 && `, and ${warnings.length} worth a look`}
           </span>
-          <span className="ml-auto text-xs text-muted-foreground">{open ? 'hide' : 'show'}</span>
+          <span className="ml-auto text-xs font-medium text-primary underline-offset-2 hover:underline">{open ? 'hide' : 'show'}</span>
         </button>
 
         {open && (

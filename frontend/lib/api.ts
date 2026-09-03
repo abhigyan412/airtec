@@ -372,8 +372,8 @@ export const classesApi = {
     delete: (id: string) => api.delete(`/admission/sections/${id}`).then(r => r.data),
   },
   subjects: {
-    list: (classId?: string) => api.get('/admission/subjects', { params: { class_id: classId } }).then(r => r.data),
-    create: (data: { name: string; class_id?: string; is_elective?: boolean }) =>
+    list: (classId?: string, sectionId?: string) => api.get('/admission/subjects', { params: { class_id: classId, section_id: sectionId || undefined } }).then(r => r.data),
+    create: (data: { name: string; class_id?: string; is_elective?: boolean; section_id?: string }) =>
       api.post('/admission/subjects', data).then(r => r.data),
     delete: (id: string) => api.delete(`/admission/subjects/${id}`).then(r => r.data),
     rescope: (name: string, class_ids: string[]) =>

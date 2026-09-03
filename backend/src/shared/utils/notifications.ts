@@ -30,6 +30,7 @@ export type NotificationType =
   | 'arrangement_assigned' | 'arrangement_reminder' | 'arrangement_escalated'
   | 'arrangement_declined' | 'arrangement_cancelled' | 'arrangement_unfilled'
   | 'absence_detected' | 'workload_breach' | 'booking_overridden'
+  | 'exam_datesheet_announced'
 
 interface CreateNotificationParams {
   schoolId: string

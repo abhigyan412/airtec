@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
 import { ResultStatusBadge } from '@/components/exams/ResultStatusBadge'
 import { STATUS_VARIANT } from '@/components/exams/statusVariant'
+import { DatesheetGrid } from '@/components/exams/DatesheetGrid'
 import { cn, formatDate } from '@/lib/utils'
 import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone, BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
@@ -33,37 +34,6 @@ import {
 const TABS = ['Datesheet', 'Marks Entry', 'Results']
 
 const titleCase = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-
-// Categorical subject colouring for the Datesheet grid, matching Timetable's
-// convention (hash the subject name to a stable hue so unanticipated
-// subjects still get distinct, non-grey colours) — written out locally
-// rather than importing timetable/components.tsx across module boundaries,
-// since that file's helpers are scoped to the timetable feature.
-const DATESHEET_TONES: Record<string, string> = {
-  indigo: 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 ring-1 ring-inset ring-indigo-500/20',
-  blue: 'bg-blue-500/10 text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-500/20',
-  emerald: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-1 ring-inset ring-emerald-500/20',
-  orange: 'bg-orange-500/10 text-orange-700 dark:text-orange-300 ring-1 ring-inset ring-orange-500/20',
-  purple: 'bg-purple-500/10 text-purple-700 dark:text-purple-300 ring-1 ring-inset ring-purple-500/20',
-  cyan: 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 ring-1 ring-inset ring-cyan-500/20',
-  pink: 'bg-pink-500/10 text-pink-700 dark:text-pink-300 ring-1 ring-inset ring-pink-500/20',
-  lime: 'bg-lime-500/10 text-lime-700 dark:text-lime-300 ring-1 ring-inset ring-lime-500/20',
-  yellow: 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-300 ring-1 ring-inset ring-yellow-500/20',
-  rose: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-500/20',
-  teal: 'bg-teal-500/10 text-teal-700 dark:text-teal-300 ring-1 ring-inset ring-teal-500/20',
-  violet: 'bg-violet-500/10 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/20',
-  amber: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-500/20',
-  sky: 'bg-sky-500/10 text-sky-700 dark:text-sky-300 ring-1 ring-inset ring-sky-500/20',
-  fuchsia: 'bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300 ring-1 ring-inset ring-fuchsia-500/20',
-  green: 'bg-green-500/10 text-green-700 dark:text-green-300 ring-1 ring-inset ring-green-500/20',
-}
-const DATESHEET_HUES = Object.keys(DATESHEET_TONES)
-function subjectColor(subject: string): string {
-  const key = subject.toLowerCase().trim()
-  let hash = 0
-  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0
-  return DATESHEET_TONES[DATESHEET_HUES[hash % DATESHEET_HUES.length]]
-}
 
 export default function ExamDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -144,42 +114,7 @@ export default function ExamDetailPage() {
     )
   }
 
-  // Datesheet grid: one row per class, one column per date — reading like
-  // a real school datesheet/timetable rather than a flat list. A split
-  // subject can appear in two date columns (Theory's date and Practical's,
-  // when they differ) or one (when they're the same, or it isn't split).
   const examSubjects: any[] = exam?.exam_subjects ?? []
-  const scheduleClasses = Array.from(
-    new Map(examSubjects.map((s: any) => [s.class_id, { id: s.class_id, name: s.classes?.name }])).values()
-  ).filter(c => c.id)
-
-  const scheduleDates = Array.from(new Set(
-    examSubjects.flatMap((s: any) => [s.exam_date, s.practical_exam_date].filter(Boolean))
-  )).sort((a: string, b: string) => a.localeCompare(b))
-
-  type ScheduleChip = { subject: any; suffix: string | null }
-  const scheduleGrid = new Map<string, Map<string, ScheduleChip[]>>() // class_id -> date ('' = unscheduled) -> chips
-  const pushChip = (classId: string, date: string, chip: ScheduleChip) => {
-    if (!scheduleGrid.has(classId)) scheduleGrid.set(classId, new Map())
-    const byDate = scheduleGrid.get(classId)!
-    if (!byDate.has(date)) byDate.set(date, [])
-    byDate.get(date)!.push(chip)
-  }
-  for (const s of examSubjects) {
-    const isSplit = s.theory_max_marks != null && s.practical_max_marks != null
-    if (!isSplit) {
-      pushChip(s.class_id, s.exam_date ?? '', { subject: s, suffix: null })
-      continue
-    }
-    const sameDay = s.exam_date && s.practical_exam_date && s.exam_date === s.practical_exam_date
-    if (sameDay) {
-      pushChip(s.class_id, s.exam_date, { subject: s, suffix: null })
-      continue
-    }
-    if (s.exam_date) pushChip(s.class_id, s.exam_date, { subject: s, suffix: null })
-    if (s.practical_exam_date) pushChip(s.class_id, s.practical_exam_date, { subject: s, suffix: 'Practical' })
-    if (!s.exam_date && !s.practical_exam_date) pushChip(s.class_id, '', { subject: s, suffix: null })
-  }
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -253,57 +188,7 @@ export default function ExamDetailPage() {
                 }
               />
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-muted/50 text-xs font-semibold uppercase text-muted-foreground">
-                      <th className="sticky left-0 z-10 bg-muted/50 px-4 py-3 text-left whitespace-nowrap">Class</th>
-                      {scheduleDates.map((date: string) => (
-                        <th key={date} className="px-4 py-3 text-left whitespace-nowrap">{formatDate(date)}</th>
-                      ))}
-                      <th className="px-4 py-3 text-left whitespace-nowrap">Not Scheduled</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {scheduleClasses.map((c: any) => {
-                      const byDate = scheduleGrid.get(c.id) ?? new Map()
-                      return (
-                        <tr key={c.id} className="align-top">
-                          <td className="sticky left-0 z-10 bg-card px-4 py-3 font-medium text-foreground whitespace-nowrap">{c.name}</td>
-                          {scheduleDates.map((date: string) => (
-                            <td key={date} className="px-4 py-3 min-w-[160px]">
-                              <div className="flex flex-wrap gap-1.5">
-                                {(byDate.get(date) ?? []).map((chip: ScheduleChip) => (
-                                  <button
-                                    key={`${chip.subject.id}-${chip.suffix ?? ''}`}
-                                    onClick={() => setEditingSubject(chip.subject)}
-                                    className={cn('rounded-lg px-2 py-1 text-xs font-medium transition hover:opacity-80', subjectColor(chip.subject.subject_name))}
-                                  >
-                                    {chip.subject.subject_name}{chip.suffix ? ` (${chip.suffix})` : ''}
-                                  </button>
-                                ))}
-                              </div>
-                            </td>
-                          ))}
-                          <td className="px-4 py-3 min-w-[160px]">
-                            <div className="flex flex-wrap gap-1.5">
-                              {(byDate.get('') ?? []).map((chip: ScheduleChip) => (
-                                <button
-                                  key={chip.subject.id}
-                                  onClick={() => setEditingSubject(chip.subject)}
-                                  className={cn('rounded-lg px-2 py-1 text-xs font-medium transition hover:opacity-80', subjectColor(chip.subject.subject_name))}
-                                >
-                                  {chip.subject.subject_name}
-                                </button>
-                              ))}
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <DatesheetGrid examSubjects={examSubjects} onSubjectClick={subject => setEditingSubject(subject)} />
             )}
           </Card>
         </TabsContent>
@@ -1296,20 +1181,30 @@ function AddSubjectModal({ examId, examType, classes, defaultTimeSlot, onClose }
   // Exam time) if it has one — still just a starting point, the Time
   // Slot select below can always override it per subject.
   const [form, setForm] = useState({
-    class_id: '', subject_name: '', exam_date: '',
+    class_id: '', section_id: '', subject_name: '', exam_date: '',
     start_time: defaultTimeSlot?.start_time ?? '', end_time: defaultTimeSlot?.end_time ?? '', max_marks: 100, pass_marks: 33,
     practical_exam_date: '', practical_start_time: '', practical_end_time: '',
   })
   const [split, setSplit] = useState(false)
   const [splitForm, setSplitForm] = useState({ theory_max_marks: 70, theory_pass_marks: 25, practical_max_marks: 30, practical_pass_marks: 10 })
 
+  // 11th/12th "sections" are really streams (PCM/PCB/Commerce/Humanities)
+  // with genuinely different subjects — same numeric_level convention
+  // Syllabus Setup already uses. Below that, a section picker only adds a
+  // pointless step since every section shares one subject list.
+  const selectedClassObj = (classes ?? []).find((c: any) => c.id === form.class_id)
+  const isStreamWise = selectedClassObj?.numeric_level === 11 || selectedClassObj?.numeric_level === 12
+  const streamSections = selectedClassObj?.sections ?? []
+
   // Subjects come from the class's master list (Settings -> Classes &
   // Sections) — the same source Timetable and Homework already draw
   // from, so a datesheet entry for "Mathematics" matches exactly what
   // those modules mean by it, instead of free text that could drift.
+  // Scoped to the picked stream (when applicable) so the dropdown only
+  // shows this stream's own + whole-class + school-wide subjects.
   const { data: subjectsData } = useQuery({
-    queryKey: ['subjects', form.class_id],
-    queryFn: () => classesApi.subjects.list(form.class_id).then(r => r.data),
+    queryKey: ['subjects', form.class_id, isStreamWise ? form.section_id : undefined],
+    queryFn: () => classesApi.subjects.list(form.class_id, isStreamWise ? form.section_id : undefined).then(r => r.data),
     enabled: !!form.class_id,
   })
 
@@ -1336,6 +1231,7 @@ function AddSubjectModal({ examId, examType, classes, defaultTimeSlot, onClose }
   const mutation = useMutation({
     mutationFn: (data: any) => api.post('/exams/subjects/add', {
       ...data, exam_id: examId,
+      section_id: data.section_id || undefined,
       ...(split ? splitForm : {}),
     }),
     onSuccess: () => {
@@ -1356,7 +1252,7 @@ function AddSubjectModal({ examId, examType, classes, defaultTimeSlot, onClose }
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label>Class</Label>
-            <Select value={form.class_id} onValueChange={v => setForm(f => ({ ...f, class_id: v, subject_name: '' }))}>
+            <Select value={form.class_id} onValueChange={v => setForm(f => ({ ...f, class_id: v, section_id: '', subject_name: '' }))}>
               <SelectTrigger>
                 <SelectValue placeholder="Select class..." />
               </SelectTrigger>
@@ -1365,6 +1261,19 @@ function AddSubjectModal({ examId, examType, classes, defaultTimeSlot, onClose }
               </SelectContent>
             </Select>
           </div>
+          {isStreamWise && streamSections.length > 0 && (
+            <div className="space-y-1.5">
+              <Label>Stream</Label>
+              <Select value={form.section_id || undefined} onValueChange={v => setForm(f => ({ ...f, section_id: v, subject_name: '' }))}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select stream..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {streamSections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label>Subject *</Label>
             <Select value={form.subject_name || undefined} disabled={!form.class_id}

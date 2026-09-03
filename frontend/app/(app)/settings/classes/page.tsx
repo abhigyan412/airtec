@@ -274,15 +274,24 @@ function ClassCard({ cls, displayStyle, onDeleteClass, onChanged }: { cls: any; 
 
   const [addingSubject, setAddingSubject] = useState(false)
   const [subjectName, setSubjectName] = useState('')
+  const [subjectSectionId, setSubjectSectionId] = useState('')
 
+  // Full catalog for the class — every stream's subjects plus whole-class
+  // and global ones — since this is the audit/management view, not a
+  // stream-specific consumer view; each chip below is labeled with its
+  // own stream so admins can see the scoping at a glance.
   const { data: subjects, refetch: refetchSubjects } = useQuery({
     queryKey: ['subjects', cls.id],
     queryFn: () => classesApi.subjects.list(cls.id).then(r => r.data),
   })
 
   const addSubjectMutation = useMutation({
-    mutationFn: () => classesApi.subjects.create({ name: subjectName.trim(), class_id: cls.id }),
-    onSuccess: () => { refetchSubjects(); setSubjectName(''); setAddingSubject(false); toast.success('Subject added') },
+    mutationFn: () => classesApi.subjects.create({
+      name: subjectName.trim(),
+      class_id: cls.id,
+      ...(subjectSectionId ? { section_id: subjectSectionId } : {}),
+    }),
+    onSuccess: () => { refetchSubjects(); setSubjectName(''); setSubjectSectionId(''); setAddingSubject(false); toast.success('Subject added') },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to add subject'),
   })
 
@@ -378,11 +387,25 @@ function ClassCard({ cls, displayStyle, onDeleteClass, onChanged }: { cls: any; 
           </p>
           <div className="flex flex-wrap items-center gap-2">
             {(subjects ?? []).map((s: any) => (
-              <SubjectChip key={s.id} subject={s} onDelete={() => deleteSubjectMutation.mutate(s.id)} />
+              <SubjectChip
+                key={s.id}
+                subject={s}
+                streamLabel={isSenior && sections.length > 0 ? (s.section_id ? (sections.find((sec: any) => sec.id === s.section_id)?.name ?? 'Stream') : 'All Streams') : null}
+                onDelete={() => deleteSubjectMutation.mutate(s.id)}
+              />
             ))}
 
             {addingSubject ? (
               <div className="flex items-center gap-1">
+                {isSenior && sections.length > 0 && (
+                  <Select value={subjectSectionId || '__all__'} onValueChange={v => setSubjectSectionId(v === '__all__' ? '' : v)}>
+                    <SelectTrigger className="h-8 w-28 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">All Streams</SelectItem>
+                      {sections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                )}
                 <Input autoFocus value={subjectName} onChange={e => setSubjectName(e.target.value)}
                   placeholder="e.g. Physics"
                   onKeyDown={e => e.key === 'Enter' && subjectName.trim() && addSubjectMutation.mutate()}
@@ -393,7 +416,7 @@ function ClassCard({ cls, displayStyle, onDeleteClass, onChanged }: { cls: any; 
                   {addSubjectMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
                 </Button>
                 <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground"
-                  onClick={() => { setAddingSubject(false); setSubjectName('') }} aria-label="Cancel">
+                  onClick={() => { setAddingSubject(false); setSubjectName(''); setSubjectSectionId('') }} aria-label="Cancel">
                   <X className="h-3.5 w-3.5" />
                 </Button>
               </div>
@@ -415,10 +438,13 @@ function ClassCard({ cls, displayStyle, onDeleteClass, onChanged }: { cls: any; 
 }
 
 // ── SUBJECT CHIP ──────────────────────────────────────────────
-function SubjectChip({ subject, onDelete }: { subject: any; onDelete: () => void }) {
+function SubjectChip({ subject, streamLabel, onDelete }: { subject: any; streamLabel?: string | null; onDelete: () => void }) {
   return (
     <div className="group flex items-center gap-1.5 rounded-lg border border-success/20 bg-success/10 py-1.5 pl-3 pr-1 text-xs font-medium text-success">
       <span>{subject.name}</span>
+      {streamLabel && (
+        <Badge variant="secondary" className="h-4 px-1.5 py-0 text-[10px] font-semibold leading-4">{streamLabel}</Badge>
+      )}
       {/* Revealed on hover, but also on keyboard focus — otherwise the only
           way to remove a subject is with a mouse. */}
       <button onClick={onDelete} aria-label={`Remove ${subject.name}`}

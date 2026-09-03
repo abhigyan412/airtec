@@ -3,14 +3,16 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, classesApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { usePermissions } from '@/lib/usePermissions'
 import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
-import { Plus, Trash2, Loader2, ArrowLeft, Clock, LayoutTemplate, BookOpen, Sparkles, ShieldOff, ListChecks } from 'lucide-react'
+import { Plus, Trash2, Loader2, ArrowLeft, Clock, LayoutTemplate, BookOpen, Sparkles, ShieldOff, ListChecks, Megaphone } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -34,7 +36,7 @@ const BLANK_STRUCTURE_ROW = (): StructureRow => ({ label: '', exam_type: 'unit_t
 // Kept in step with the sidebar's Examination Settings sub-items
 // (components/layout/Sidebar.tsx) — each links straight into one tab
 // via ?tab=, landing here instead of always opening on Time Slots.
-const EXAM_TEMPLATES_TABS = ['Time Slots', 'Exam Structure (Annually)', 'Exam Templates']
+const EXAM_TEMPLATES_TABS = ['Time Slots', 'Exam Structure (Annually)', 'Exam Templates', 'Announce Exam']
 
 export default function ExamTemplatesPage() {
   const qc = useQueryClient()
@@ -167,6 +169,7 @@ export default function ExamTemplatesPage() {
           <TabsTrigger value="Time Slots">Time Slots</TabsTrigger>
           <TabsTrigger value="Exam Structure (Annually)">Exam Structure (Annually)</TabsTrigger>
           <TabsTrigger value="Exam Templates">Exam Templates</TabsTrigger>
+          <TabsTrigger value="Announce Exam">Announce Exam</TabsTrigger>
         </TabsList>
 
         <TabsContent value="Time Slots" className="mt-6">
@@ -318,6 +321,10 @@ export default function ExamTemplatesPage() {
         </CardContent>
       </Card>
         </TabsContent>
+
+        <TabsContent value="Announce Exam" className="mt-6">
+          <AnnounceExamTab />
+        </TabsContent>
       </Tabs>
 
       {showNewTemplate && (
@@ -334,13 +341,86 @@ export default function ExamTemplatesPage() {
   )
 }
 
+// One-shot: pick a real (published-or-later) exam, notify every student
+// and parent in its datesheet's classes/sections that it's out — a
+// stream-wise (11th/12th) subject only reaches students in that exact
+// stream, not the whole class. Re-announcing the same exam the same day
+// is deduped server-side (writeNotifications' upsert), so this is safe
+// to click again as a reminder without spamming a fresh wave same-day.
+function AnnounceExamTab() {
+  const [examId, setExamId] = useState('')
+  const [message, setMessage] = useState('')
+
+  const { data: exams, isLoading: examsLoading } = useQuery({
+    queryKey: ['exams'],
+    queryFn: () => api.get('/exams').then(r => r.data.data),
+  })
+  const announceable = (exams ?? []).filter((e: any) => e.status !== 'draft')
+  const selectedExam = announceable.find((e: any) => e.id === examId)
+
+  const mutation = useMutation({
+    mutationFn: () => api.post(`/exams/${examId}/announce`, { message: message.trim() || undefined }),
+    onSuccess: (res: any) => {
+      const { students_notified } = res.data.data
+      toast.success(students_notified > 0
+        ? `Announced to ${students_notified} student${students_notified === 1 ? '' : 's'} and their parents.`
+        : 'Announced — no students currently in this datesheet\'s classes.')
+      setMessage('')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to send announcement'),
+  })
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm">Announce Exam</CardTitle>
+        <CardDescription className="text-xs">Notify every student and parent in this exam's datesheet that it's out — reaches only the classes (and, for 11th/12th, the exact streams) actually scheduled.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {examsLoading ? (
+          <Skeleton className="h-10 w-full max-w-sm" />
+        ) : (
+          <div className="max-w-sm space-y-1.5">
+            <Label>Exam</Label>
+            <Select value={examId || undefined} onValueChange={setExamId}>
+              <SelectTrigger><SelectValue placeholder="Select exam..." /></SelectTrigger>
+              <SelectContent>
+                {announceable.map((e: any) => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {!examsLoading && !announceable.length && (
+              <p className="text-xs text-muted-foreground">No published exams yet — publish a datesheet first.</p>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <Label>Message (optional)</Label>
+          <Textarea
+            value={message}
+            onChange={e => setMessage(e.target.value)}
+            placeholder={selectedExam ? `Your "${selectedExam.name}" datesheet is now available. Check your schedule.` : 'Your exam datesheet is now available. Check your schedule.'}
+            rows={3}
+          />
+          <p className="text-xs text-muted-foreground">Leave blank to send the default message shown above.</p>
+        </div>
+
+        <Button onClick={() => mutation.mutate()} disabled={!examId || mutation.isPending}>
+          {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Megaphone className="h-4 w-4" />}
+          Send Announcement
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
 type TemplateRow = {
-  class_id: string; subject_name: string; time_slot_id: string; max_marks: number; pass_marks: number
+  class_id: string; section_id: string; subject_name: string; time_slot_id: string; max_marks: number; pass_marks: number
   split: boolean; theory_max_marks: number; theory_pass_marks: number; practical_max_marks: number; practical_pass_marks: number
 }
 
 const BLANK_TEMPLATE_ROW: TemplateRow = {
-  class_id: '', subject_name: '', time_slot_id: '', max_marks: 100, pass_marks: 33,
+  class_id: '', section_id: '', subject_name: '', time_slot_id: '', max_marks: 100, pass_marks: 33,
   split: false, theory_max_marks: 70, theory_pass_marks: 25, practical_max_marks: 30, practical_pass_marks: 10,
 }
 
@@ -356,7 +436,7 @@ function NewTemplateModal({ classes, timeSlots, onClose }: { classes: any[]; tim
     mutationFn: () => api.post('/exams/templates', {
       ...form,
       subjects: rows.map(r => ({
-        class_id: r.class_id, subject_name: r.subject_name,
+        class_id: r.class_id, section_id: r.section_id || undefined, subject_name: r.subject_name,
         time_slot_id: r.time_slot_id || undefined,
         max_marks: r.max_marks, pass_marks: r.pass_marks,
         ...(r.split ? {
@@ -434,24 +514,42 @@ function NewTemplateModal({ classes, timeSlots, onClose }: { classes: any[]; tim
 function TemplateSubjectRow({ row, classes, timeSlots, onChange, onRemove }: {
   row: TemplateRow; classes: any[]; timeSlots: any[]; onChange: (patch: Partial<TemplateRow>) => void; onRemove?: () => void
 }) {
-  // Each row picks its own class, so each row needs its own class-scoped
-  // subject list — same source (Settings -> Classes & Sections) as the
-  // datesheet's own Add Subject form, kept in sync with it.
+  // 11th/12th "sections" are really streams (PCM/PCB/Commerce/Humanities)
+  // with genuinely different subjects — same numeric_level convention used
+  // across the Examination module. Below that, a stream picker only adds a
+  // pointless step since every section shares one subject list.
+  const selectedClassObj = classes.find((c: any) => c.id === row.class_id)
+  const isStreamWise = selectedClassObj?.numeric_level === 11 || selectedClassObj?.numeric_level === 12
+  const streamSections = selectedClassObj?.sections ?? []
+  const showStreamPicker = isStreamWise && streamSections.length > 0
+
+  // Each row picks its own class (and stream, for 11th/12th), so each row
+  // needs its own class(+stream)-scoped subject list — same source
+  // (Settings -> Classes & Sections) as the datesheet's own Add Subject
+  // form, kept in sync with it.
   const { data: subjects } = useQuery({
-    queryKey: ['subjects', row.class_id],
-    queryFn: () => classesApi.subjects.list(row.class_id).then(r => r.data),
+    queryKey: ['subjects', row.class_id, isStreamWise ? row.section_id : undefined],
+    queryFn: () => classesApi.subjects.list(row.class_id, isStreamWise ? row.section_id : undefined).then(r => r.data),
     enabled: !!row.class_id,
   })
 
   return (
     <div className="space-y-2 rounded-xl border border-border p-2.5">
-      <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_80px_80px_auto] gap-2">
-        <Select value={row.class_id || undefined} onValueChange={v => onChange({ class_id: v, subject_name: '' })}>
+      <div className={cn('grid grid-cols-1 gap-2', showStreamPicker ? 'sm:grid-cols-[1fr_140px_1fr_1fr_80px_80px_auto]' : 'sm:grid-cols-[1fr_1fr_1fr_80px_80px_auto]')}>
+        <Select value={row.class_id || undefined} onValueChange={v => onChange({ class_id: v, section_id: '', subject_name: '' })}>
           <SelectTrigger className="h-9"><SelectValue placeholder="Class..." /></SelectTrigger>
           <SelectContent>
             {classes.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
           </SelectContent>
         </Select>
+        {showStreamPicker && (
+          <Select value={row.section_id || undefined} onValueChange={v => onChange({ section_id: v, subject_name: '' })}>
+            <SelectTrigger className="h-9"><SelectValue placeholder="Stream..." /></SelectTrigger>
+            <SelectContent>
+              {streamSections.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
         <Select value={row.subject_name || undefined} disabled={!row.class_id} onValueChange={v => onChange({ subject_name: v })}>
           <SelectTrigger className="h-9"><SelectValue placeholder={row.class_id ? 'Subject...' : 'Pick class first'} /></SelectTrigger>
           <SelectContent>

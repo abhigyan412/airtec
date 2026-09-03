@@ -1387,3 +1387,178 @@ client-side navigations that only change the query string (or, for
 re-synced. Fixed identically in all four: added a `useEffect` keyed on
 `searchParams` that calls `setTab`/`setMode` when the URL's value
 differs from the current state. `npx esbuild` clean on all four.
+
+## Datesheet Viewer + real stream/section scoping for 11th/12th (2026-09-01)
+
+Request: a sidebar-reachable Datesheet Viewer showing an exam's full
+schedule as a block/grid across every class at once, with 11th/12th
+broken out stream-wise. Investigation first: neither `subjects` nor
+`exam_subjects` carried any scoping finer than `class_id` — for 11/12,
+whose "sections" are real streams (PCM/PCB/Commerce/Humanities,
+confirmed against real data), this meant one flat mixed subject list
+per class. A stream-wise block view built on that would've shown the
+identical list under every stream heading. Presented this gap; user
+chose to add real section-level scoping first rather than a
+cosmetically-split view over the same undifferentiated data.
+
+### Migration
+
+`20260901000000_subject_section_scoping.sql`: nullable
+`section_id references sections(id) on delete set null` added to
+`subjects`, `exam_subjects`, and `exam_template_subjects`. Purely
+additive — NULL means "whole class," so every class 1-10 (which never
+gets a section picker) is completely unaffected. Applied to dev only;
+production is untouched pending an explicit request to migrate it
+again, same boundary as every feature before the one prior explicit
+prod-push.
+
+### Backend contract
+
+`GET /admission/subjects?class_id=X&section_id=Y` (`admission/routes.ts`):
+new optional `section_id` extends the existing class-or-global `.or()`
+filter to `and(class_id=X,section_id is null) OR and(class_id=X,section_id=Y)
+OR class_id is null` — this exact stream's own subjects, whole-class
+subjects, and school-wide ones, excluding other streams'. Omitting
+`section_id` (every non-stream caller) keeps the old behavior exactly.
+`POST /admission/subjects` accepts an optional `section_id`.
+
+`POST /exams/subjects/add`, `POST /templates` (manual template
+creation — its Zod schema was initially missing `section_id` on the
+subjects array; Zod strips unrecognized keys silently, so this was
+caught and fixed before it shipped) both now accept/store `section_id`
+via their existing spread-based insert, no other change needed.
+`POST /templates/generate-structure` was the one route needing real
+new logic: for a row's class with `numeric_level` 11/12 that has real
+sections, it now fetches that class's sections and builds one subject
+list PER STREAM (via the new section-aware subjects filter) instead of
+one flat list, emitting one `exam_template_subjects` row set per
+stream with `section_id` set — every other class keeps today's exact
+single-list behavior. `POST /templates/:id/apply` carries `section_id`
+straight through from `exam_template_subjects` to the real
+`exam_subjects` row, same as every other column already did.
+`GET /exams/:id`'s `exam_subjects` join now also embeds
+`classes(name, numeric_level)` and `sections(name)`.
+
+Explicitly out of scope, unaffected: Timetable, Homework, the other
+Syllabus screens, HR's staff subject picker, and Result Settings'
+Subject Overrides tab — none of them filter by section, so the new
+nullable column changes nothing about their existing queries.
+
+### Frontend
+
+`AddSubjectModal` (`exams/[id]/page.tsx`) and `TemplateSubjectRow`
+(`exams/templates/page.tsx`) both gained the exact `isStreamWise`
+convention already proven in Syllabus Setup (`numeric_level === 11 ||
+12`, section picker only rendered when the class has real sections) —
+a Stream select between Class and Subject, resetting Subject whenever
+Class or Stream changes, scoping the subjects query and the create
+payload accordingly. Settings → Classes & Sections' `ClassCard`
+subject-add form got the same picker (plus an "All Streams" sentinel
+option, since Radix `Select` can't take an empty-string value) and
+existing subjects now show a small stream badge.
+
+New shared `components/exams/DatesheetGrid.tsx` (`buildDatesheetRows` +
+`DatesheetGrid`) extracted from the per-exam Datesheet tab's inline
+grid logic — rows group by `class_id` normally, or by `(class_id,
+section_id)` for an 11/12 subject, with a subject carrying no
+`section_id` on such a class getting its own "Class — All Streams" row
+rather than being folded into one stream or dropped. Both the existing
+per-exam tab (now correctly split for 11/12 too, an intentional side
+effect of sharing the component) and the new
+`app/(app)/exams/datesheet/page.tsx` viewer render it. The new page
+mirrors `/exams/results`' exam-picker pattern (`?exam=` deep-linked the
+same `useEffect`-resynced way as this session's other `?tab=`/`?mode=`
+fixes) and adds a `DatesheetPrintSheet.tsx` mirroring
+`timetable/block/PrintSheets.tsx` exactly (`print:hidden` chrome,
+`hidden print:block` A4-landscape sheet, `window.print()`). One new
+sidebar leaf, "Datesheet," next to All Examinations/Results.
+
+### Verification
+
+- `npx esbuild` clean on every touched/new file, backend and frontend,
+  re-checked together in one final pass.
+- Backend logic verified twice against real data, scripts deleted
+  after: (1) the `GET /admission/subjects` stream filter and
+  `generate-structure`'s per-stream fan-out, using real Class 11 and
+  its real PCM/Commerce sections — a PCM-scoped test subject correctly
+  excluded from Commerce's view and vice versa, both correctly
+  including a whole-class test subject; (2) a full round trip through
+  `GET /exams/:id`'s actual updated query against a real test exam
+  with PCM/Commerce/whole-class subjects, confirming the exact response
+  shape `DatesheetGrid` consumes, and confirming its row-grouping logic
+  produces the expected 3 distinct rows (PCM, Commerce, All Streams).
+- Built via 3 parallel agents on disjoint files (Settings→Classes
+  picker; exam-module pickers; DatesheetGrid+viewer+sidebar), each
+  independently verified, plus a backend contract built and verified
+  first so all three had a fixed API shape to build against.
+- Full backend test suite re-run.
+- Manual browser click-through (the pickers, the viewer, print output)
+  is the user's to verify live — no browser-automation tool available
+  in this environment.
+
+## "Announce Exam" — notify students/parents a datesheet is out (2026-09-01)
+
+Request: an "Announce Exam" nav entry that "pops" (a pulsing badge) like
+Admissions' "Cycles → QR" entry, positioned beside "Exam Templates."
+Unlike the QR badge (which points at an already-built feature), nothing
+named "Announce" existed anywhere in the app — confirmed by search
+before building anything. Asked what it should actually do: a
+staff-triggered, one-shot notification to every student/parent affected
+by an exam's datesheet, using the app's existing in-app notification
+system (the same one already polling the header bell).
+
+### Design precedent
+
+`POST /:id/generate-results`'s existing `exam_result_published`
+notification (`exam/routes.ts`, resolves `student_marks` → `getRecipientUserIdsForStudents`
+→ `createNotifications`, `link: '/exams'`) is nearly the same shape —
+reused directly. The one real difference: at announce-time (right after
+publishing a datesheet) there are no marks yet to derive recipients
+from, so recipients come from the datesheet's classes/sections instead.
+
+### Backend
+
+New migration adds `'exam_datesheet_announced'` to
+`notifications_type_check` (mirroring `20260829010000`'s own
+DROP/ADD-CONSTRAINT pattern — a type missing from this constraint is a
+silently-rejected insert, never delivered) and to the `NotificationType`
+union in `shared/utils/notifications.ts`.
+
+New `POST /exams/:id/announce` (`exam/routes.ts`, gated `exam.schedule`,
+rejects a still-`draft` exam): dedupes the exam's `exam_subjects` down
+to distinct `(class_id, section_id)` pairs, fetches every active student
+across the involved classes in ONE query, then filters in memory —
+a student matches a pair if their `section_id` equals the pair's, or the
+pair's `section_id` is null (whole-class subject) — so a stream-wise
+(11th/12th) subject only reaches its own stream, not the whole class.
+Resolves through the same `getRecipientUserIdsForStudents` +
+`createNotifications` used by `exam_result_published`; accepts an
+optional custom `message`, defaults to a generated one.
+
+### Frontend
+
+Added as a 4th tab, "Announce Exam," on the already-tabbed Examination
+Settings page (`exams/templates/page.tsx`) — literally beside "Exam
+Templates" in both the `TabsList` and the sidebar tree, the most direct
+reading of the placement request. New `AnnounceExamTab` component: pick
+any non-draft exam, optional custom message (placeholder shows the
+generated default), Send button. Sidebar gained a new leaf under
+Examination Settings with `badge: 'New'` — required extending the
+great-grandchild (`ggc`) rendering tier to support badges at all, since
+that capability only existed one level up (`child.badge`) before now.
+
+### Verification
+
+- `npx esbuild` clean on every touched file.
+- Live script against real data (Class 11's real PCM stream, 38 active
+  students): confirmed the route's recipient-resolution logic returns
+  exactly the 38 real PCM students for a PCM-only test subject,
+  correctly excluding the other 3 streams — matching the same
+  stream-scoping already verified for the Datesheet Viewer. Recipient
+  *user_id* resolution correctly returned 0 (this dev dataset's test
+  students aren't linked to real user accounts) — a property of the
+  data, not the logic; `createNotifications`/`writeNotifications`
+  handled the empty set correctly. Script + test exam + test
+  notifications all cleaned up after.
+- Backend test suite re-run (exam module + notifications/delivery
+  suites specifically, plus the full suite from the prior phase).

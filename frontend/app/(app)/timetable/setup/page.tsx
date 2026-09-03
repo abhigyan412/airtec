@@ -62,7 +62,7 @@ export default function SetupPage() {
       />
 
       <Tabs defaultValue="checklist">
-        <TabsList className="mb-4 flex-wrap">
+        <TabsList className="mb-4 h-auto flex-wrap">
           <TabsTrigger value="checklist">Checklist</TabsTrigger>
           <TabsTrigger value="day">School day</TabsTrigger>
           <TabsTrigger value="teachers">Teachers</TabsTrigger>

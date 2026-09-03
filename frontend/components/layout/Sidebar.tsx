@@ -10,6 +10,7 @@ import {
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
   Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
   SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2, BookMarked, LayoutTemplate,
+  CalendarRange, Megaphone,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -164,6 +165,7 @@ const NAV: NavItem[] = [
         children: [
           { label: 'All Examinations', href: '/exams', icon: BookOpen, permission: 'exam.view' },
           { label: 'Results', href: '/exams/results', icon: BarChart3, permission: 'exam.view' },
+          { label: 'Datesheet', href: '/exams/datesheet', icon: CalendarRange, permission: 'exam.view' },
           // Each leaf here is one tab of /exams/templates, deep-linked via
           // ?tab= (kept in step with EXAM_TEMPLATES_TABS in that page) —
           // exposes what used to be one long scrolling page as separately
@@ -174,7 +176,8 @@ const NAV: NavItem[] = [
             children: [
               { label: 'Time Slots', href: '/exams/templates?tab=Time+Slots', icon: Clock, permission: 'exam.view', lockUnless: 'exam.schedule' },
               { label: 'Exam Structure (Annually)', href: '/exams/templates?tab=Exam+Structure+(Annually)', icon: Wand2, permission: 'exam.view', lockUnless: 'exam.schedule' },
-              { label: 'Exam Templates', href: '/exams/templates?tab=Exam+Templates', icon: LayoutTemplate, permission: 'exam.view', lockUnless: 'exam.schedule' },
+              { label: 'Exam Templates', href: '/exams/templates?tab=Exam+Templates', icon: LayoutTemplate, permission: 'exam.view', lockUnless: 'exam.schedule', badge: 'Announce' },
+              { label: 'Announce Exam', href: '/exams/templates?tab=Announce+Exam', icon: Megaphone, permission: 'exam.view', lockUnless: 'exam.schedule' },
             ],
           },
           // Same pattern, one leaf per tab of /exams/result-settings
@@ -710,6 +713,11 @@ function NavEntry({
                                       >
                                         <GgcIcon className="h-2.5 w-2.5 shrink-0" />
                                         <span className="flex-1">{ggc.label}</span>
+                                        {ggc.badge && (
+                                          <span className="flex shrink-0 items-center rounded-full bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold leading-none text-primary animate-pulse">
+                                            {ggc.badge}
+                                          </span>
+                                        )}
                                       </Link>
                                     )
                                   })}

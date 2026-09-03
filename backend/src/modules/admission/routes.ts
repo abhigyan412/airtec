@@ -2571,11 +2571,21 @@ router.delete('/sections/:id', requirePermissionV2('settings.manage'),
 // every class; set = specific to that one class (e.g. senior-secondary
 // electives), same nullable-scope pattern used for sections.
 router.get('/subjects', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { class_id } = req.query
+  const { class_id, section_id } = req.query
   const school_id = req.user!.school_id
 
   let query = supabase.from('subjects').select('*').eq('school_id', school_id).order('name')
-  if (class_id) query = query.or(`class_id.eq.${class_id},class_id.is.null`)
+  if (class_id && section_id) {
+    // Stream-aware (11th/12th): this class's own whole-class subjects
+    // (section_id null), this exact stream's own subjects, and every
+    // school-wide subject — but NOT another stream's subjects. Omitting
+    // section_id (every other class) keeps the old behavior below exactly,
+    // rather than silently excluding stream-scoped subjects a caller
+    // that isn't stream-aware yet still expects to see.
+    query = query.or(`and(class_id.eq.${class_id},section_id.is.null),and(class_id.eq.${class_id},section_id.eq.${section_id}),class_id.is.null`)
+  } else if (class_id) {
+    query = query.or(`class_id.eq.${class_id},class_id.is.null`)
+  }
 
   const { data, error } = await query
   if (error) return res.status(500).json({ success: false, error: error.message })
@@ -2584,13 +2594,13 @@ router.get('/subjects', asyncHandler(async (req: AuthRequest, res: Response) => 
 
 router.post('/subjects', requirePermissionV2('settings.manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
-    const { name, class_id, is_elective } = req.body
+    const { name, class_id, is_elective, section_id } = req.body
     const school_id = req.user!.school_id
     if (!name?.trim()) return res.status(400).json({ success: false, error: 'name is required' })
 
     const { data, error } = await supabase
       .from('subjects')
-      .insert({ school_id, name: name.trim(), class_id: class_id || null, is_elective: !!is_elective })
+      .insert({ school_id, name: name.trim(), class_id: class_id || null, is_elective: !!is_elective, section_id: section_id || null })
       .select().single()
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.status(201).json({ success: true, data })

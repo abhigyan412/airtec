@@ -41,6 +41,10 @@ const CreateExamSchema = z.object({
 const CreateExamSubjectSchema = z.object({
     exam_id: z.string(),
     class_id: z.string(),
+    // Only meaningful for a stream-wise class (11th/12th) — which stream
+    // this subject belongs to. Null/omitted means "whole class", exactly
+    // like every non-stream-wise class.
+    section_id: z.string().optional(),
     subject_name: z.string().min(1),
     exam_date: z.string().optional(),
     start_time: z.string().optional(),
@@ -88,6 +92,7 @@ const CreateTemplateSchema = z.object({
     grading_system: z.enum(['marks', 'grades', 'cgpa']).default('marks'),
     subjects: z.array(z.object({
         class_id: z.string(),
+        section_id: z.string().optional(),
         subject_name: z.string().min(1),
         time_slot_id: z.string().optional(),
         max_marks: z.number().default(100),
@@ -598,7 +603,7 @@ router.post('/templates/:id/apply', requirePermissionV2('exam.create'),
         const subjectRows = templateSubjects.map((ts: any) => {
             const isSplit = ts.theory_max_marks != null && ts.practical_max_marks != null
             return {
-                exam_id: exam.id, school_id, class_id: ts.class_id, subject_name: ts.subject_name,
+                exam_id: exam.id, school_id, class_id: ts.class_id, section_id: ts.section_id, subject_name: ts.subject_name,
                 // Never trust the template's own stored max_marks when
                 // split — recomputed as the sum, same rule as
                 // POST /subjects/add, so it can't drift from its components.
@@ -723,19 +728,26 @@ router.post('/templates/generate-structure', requirePermissionV2('exam.create'),
 
         for (const row of body.rows) {
             const classIdList = row.class_ids.join(',')
-            const [{ data: subjects }, { data: overrides }] = await Promise.all([
-                supabase.from('subjects').select('name, class_id').eq('school_id', school_id).or(`class_id.in.(${classIdList}),class_id.is.null`),
+            const [{ data: subjects }, { data: overrides }, { data: classesWithSections }] = await Promise.all([
+                supabase.from('subjects').select('name, class_id, section_id').eq('school_id', school_id).or(`class_id.in.(${classIdList}),class_id.is.null`),
                 supabase.from('exam_subject_result_overrides').select('*').eq('school_id', school_id).in('class_id', row.class_ids).or(`exam_type.eq.${row.exam_type},exam_type.is.null`),
+                supabase.from('classes').select('id, numeric_level, sections(id)').in('id', row.class_ids),
             ])
+            const classInfoById = new Map((classesWithSections ?? []).map((c: any) => [c.id, c]))
 
-            // Computed once per row, shared across every one of its
-            // `count` template instances (identical class_ids/exam_type
-            // means an identical subject list every time).
-            const subjectRowsByClass = new Map<string, any[]>()
-            for (const class_id of row.class_ids) {
-                const classSubjects = (subjects ?? []).filter((s: any) => s.class_id === class_id || s.class_id == null)
+            const buildRows = (class_id: string, section_id: string | null) => {
+                // A stream-wise class's subject is either school-wide
+                // (class_id null), whole-class (section_id null — applies
+                // to every stream), or this exact stream's own — never
+                // another stream's, or PCM students would see Commerce
+                // subjects on their own datesheet template.
+                const classSubjects = (subjects ?? []).filter((s: any) => {
+                    if (s.class_id == null) return true
+                    if (s.class_id !== class_id) return false
+                    return s.section_id == null || s.section_id === section_id
+                })
                 const classOverrides = (overrides ?? []).filter((o: any) => o.class_id === class_id)
-                const rows = classSubjects.map((subj: any) => {
+                return classSubjects.map((subj: any) => {
                     // Exam-type-specific override first, else the class
                     // default — the exact same precedence AddSubjectModal
                     // already uses for the real datesheet.
@@ -749,18 +761,48 @@ router.post('/templates/generate-structure', requirePermissionV2('exam.create'),
                         const practical_max_marks = override.default_practical_max_marks ?? 30
                         const practical_pass_marks = override.default_practical_pass_marks ?? 10
                         return {
-                            class_id, subject_name: subj.name,
+                            class_id, section_id, subject_name: subj.name,
                             max_marks: theory_max_marks + practical_max_marks, pass_marks: theory_pass_marks + practical_pass_marks,
                             theory_max_marks, theory_pass_marks, practical_max_marks, practical_pass_marks,
                         }
                     }
                     return {
-                        class_id, subject_name: subj.name,
+                        class_id, section_id, subject_name: subj.name,
                         max_marks: override?.default_max_marks ?? 100,
                         pass_marks: override?.default_pass_marks ?? 33,
                     }
                 })
-                subjectRowsByClass.set(class_id, rows)
+            }
+
+            // Computed once per row, shared across every one of its
+            // `count` template instances (identical class_ids/exam_type
+            // means an identical subject list every time). A stream-wise
+            // class (11th/12th) with real sections gets one subject list
+            // PER STREAM instead of one flat list mixing every stream
+            // together; every other class keeps today's single list.
+            const subjectRowsByClass = new Map<string, any[]>()
+            for (const class_id of row.class_ids) {
+                const classInfo = classInfoById.get(class_id)
+                const isStreamWise = classInfo?.numeric_level === 11 || classInfo?.numeric_level === 12
+                const sections = (classInfo?.sections ?? []) as { id: string }[]
+                if (isStreamWise && sections.length) {
+                    for (const sec of sections) {
+                        subjectRowsByClass.set(`${class_id}:${sec.id}`, buildRows(class_id, sec.id))
+                    }
+                } else {
+                    subjectRowsByClass.set(class_id, buildRows(class_id, null))
+                }
+            }
+            // A stream-wise class contributes one key per stream
+            // (`class_id:section_id`) instead of one bare `class_id` key —
+            // this is what actually fans the subject rows out per stream
+            // below, since the template-instance loop still only knows
+            // about `row.class_ids` themselves.
+            const subjectKeysByClass = new Map<string, string[]>()
+            for (const key of subjectRowsByClass.keys()) {
+                const class_id = key.includes(':') ? key.split(':')[0] : key
+                if (!subjectKeysByClass.has(class_id)) subjectKeysByClass.set(class_id, [])
+                subjectKeysByClass.get(class_id)!.push(key)
             }
 
             for (let i = 1; i <= row.count; i++) {
@@ -779,8 +821,9 @@ router.post('/templates/generate-structure', requirePermissionV2('exam.create'),
                 }
                 createdTemplates.push(template)
 
-                const templateSubjectRows = row.class_ids.flatMap(class_id =>
-                    (subjectRowsByClass.get(class_id) ?? []).map(r => ({ ...r, template_id: template.id })))
+                const templateSubjectRows = row.class_ids
+                    .flatMap(class_id => subjectKeysByClass.get(class_id) ?? [])
+                    .flatMap(key => (subjectRowsByClass.get(key) ?? []).map(r => ({ ...r, template_id: template.id })))
 
                 if (templateSubjectRows.length) {
                     const { error: subjectsErr } = await supabase.from('exam_template_subjects').insert(templateSubjectRows)
@@ -801,7 +844,7 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const { data, error } = await supabase
         .from('exams')
-        .select('*, academic_years(name), exam_subjects(*, classes(name)), default_time_slot:default_time_slot_id(id, name, start_time, end_time)')
+        .select('*, academic_years(name), exam_subjects(*, classes(name, numeric_level), sections(name)), default_time_slot:default_time_slot_id(id, name, start_time, end_time)')
         .eq('id', id)
         .eq('school_id', req.user!.school_id)
         .single()
@@ -820,6 +863,52 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, data })
 }))
+
+// ── POST /:id/announce — notify affected students/parents that this
+// exam's datesheet is out. Same trigger shape as the existing
+// exam_result_published notification (getRecipientUserIdsForStudents +
+// createNotifications), but resolves recipients from the datesheet's
+// classes/sections rather than from student_marks — there are no marks
+// yet at datesheet-announcement time. A stream-wise (11th/12th) subject
+// only notifies students actually in that stream, not the whole class,
+// since a PCM student has no reason to hear about a Commerce-only exam.
+router.post('/:id/announce', requirePermissionV2('exam.schedule'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const { id } = req.params
+        const school_id = req.user!.school_id
+        const customMessage = typeof req.body?.message === 'string' ? req.body.message.trim() : ''
+
+        const { data: exam } = await supabase.from('exams').select('name, status').eq('id', id).eq('school_id', school_id).maybeSingle()
+        if (!exam) return res.status(404).json({ success: false, error: 'Exam not found' })
+        if (exam.status === 'draft') {
+            return res.status(400).json({ success: false, error: 'Publish the exam before announcing it — a draft datesheet can still change.' })
+        }
+
+        const { data: examSubjects } = await supabase.from('exam_subjects').select('class_id, section_id').eq('exam_id', id).eq('school_id', school_id)
+        if (!examSubjects?.length) return res.status(400).json({ success: false, error: 'This exam has no subjects on its datesheet yet.' })
+
+        const pairs = Array.from(new Map(examSubjects.map(s => [`${s.class_id}:${s.section_id ?? ''}`, s])).values())
+        const classIds = [...new Set(pairs.map(p => p.class_id))]
+
+        const { data: students } = await supabase.from('students').select('id, class_id, section_id').eq('school_id', school_id).in('class_id', classIds).eq('status', 'active')
+        const studentIds = new Set<string>()
+        for (const s of students ?? []) {
+            const matches = pairs.some(p => p.class_id === s.class_id && (p.section_id == null || p.section_id === s.section_id))
+            if (matches) studentIds.add(s.id)
+        }
+
+        const recipients = await getRecipientUserIdsForStudents([...studentIds])
+        const { count } = await createNotifications(recipients, {
+            schoolId: school_id, type: 'exam_datesheet_announced',
+            title: `New Datesheet: ${exam.name}`,
+            message: customMessage || `Your "${exam.name}" datesheet is now available. Check your schedule.`,
+            link: '/exams',
+            relatedEntityType: 'exam', relatedEntityId: id,
+        })
+
+        res.json({ success: true, data: { students_notified: studentIds.size, recipients_notified: count } })
+    })
+)
 
 router.post('/', requirePermissionV2('exam.create'),
     asyncHandler(async (req: AuthRequest, res: Response) => {
