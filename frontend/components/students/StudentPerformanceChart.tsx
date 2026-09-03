@@ -46,9 +46,14 @@ export function StudentPerformanceChart({ studentId, examId, onExamChange }: {
       ) : chartData.length === 0 ? (
         <EmptyState icon={PieChartIcon} title="No marks recorded yet" description="This fills in once exam marks are entered for this student." className="py-14" />
       ) : (
-        <ResponsiveContainer width="100%" height={300}>
+        // A side-by-side legend (align="right") competed with the pie for
+        // horizontal room — the pie's radius is fixed in pixels and never
+        // shrank, so on a narrow phone the legend overlapped its edge. A
+        // legend below the chart never fights the pie for width: it wraps
+        // onto its own rows using the full container width instead.
+        <ResponsiveContainer width="100%" height={380}>
           <PieChart>
-            <Pie data={chartData} dataKey="avg_pct" nameKey="subject_name" cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={2}>
+            <Pie data={chartData} dataKey="avg_pct" nameKey="subject_name" cx="50%" cy="45%" innerRadius={55} outerRadius={90} paddingAngle={2}>
               {chartData.map((d: any, i: number) => <Cell key={i} fill={d.color} stroke="hsl(var(--card))" strokeWidth={2} />)}
             </Pie>
             <Tooltip
@@ -56,7 +61,8 @@ export function StudentPerformanceChart({ studentId, examId, onExamChange }: {
               contentStyle={{ border: '1px solid hsl(var(--border))', borderRadius: 12, fontSize: 13, background: 'hsl(var(--popover))', color: 'hsl(var(--popover-foreground))', boxShadow: '0 8px 24px -8px rgb(0 0 0 / 0.2)' }}
             />
             <Legend
-              layout="vertical" verticalAlign="middle" align="right"
+              layout="horizontal" verticalAlign="bottom" align="center"
+              wrapperStyle={{ paddingTop: 16 }}
               formatter={(value, entry: any) => <span className="text-xs text-foreground">{value} — {entry.payload.avg_pct}%</span>}
             />
           </PieChart>

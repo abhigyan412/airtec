@@ -201,8 +201,12 @@ export function WorkflowPipeline({ applicationId }: WorkflowPipelineProps) {
           <StatusBadge status={status} />
         </div>
 
-        {/* Pipeline steps — role/action labels are whitespace-nowrap, so on a
-            narrow screen the row scrolls rather than overflowing the card. */}
+        {/* Pipeline steps — each step's label can shrink and wrap (no more
+            forced flex-shrink-0/nowrap), so a long role+action pair like
+            "School Admin / Admission Confirmation" wraps onto two lines
+            instead of forcing the whole row — and the card — wider than
+            the screen. overflow-x-auto stays as a safety net for a
+            pathologically long chain of many steps. */}
         <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1">
           {allSteps.length > 0 && renderSteps(allSteps, approvals, currentStep, status)}
         </div>
@@ -413,7 +417,7 @@ function renderSteps(allSteps: any[], approvals: any[], currentStep: any, status
 
     return (
       <div key={step.id} className="flex items-center flex-1 min-w-0">
-        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+        <div className="flex min-w-0 flex-col items-center gap-1.5">
           <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0',
             state === 'done' && 'bg-success/10 text-success',
             state === 'current' && 'bg-primary text-primary-foreground ring-4 ring-primary/20',
@@ -423,9 +427,9 @@ function renderSteps(allSteps: any[], approvals: any[], currentStep: any, status
             {state === 'rejected' && <X className="w-4 h-4" />}
             {(state === 'current' || state === 'pending') && (idx + 1)}
           </div>
-          <div className="text-center">
-            <p className={cn('text-xs font-semibold whitespace-nowrap', state === 'pending' ? 'text-muted-foreground' : 'text-foreground')}>{step.roles?.name}</p>
-            <p className="text-[10px] text-muted-foreground whitespace-nowrap">{STEP_LABELS[step.action_name] ?? step.action_name}</p>
+          <div className="w-full text-center">
+            <p className={cn('text-xs font-semibold', state === 'pending' ? 'text-muted-foreground' : 'text-foreground')}>{step.roles?.name}</p>
+            <p className="text-[10px] text-muted-foreground">{STEP_LABELS[step.action_name] ?? step.action_name}</p>
           </div>
         </div>
         {idx < allSteps.length - 1 && (

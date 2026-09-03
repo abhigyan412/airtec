@@ -326,22 +326,22 @@ function MarkTab({ classId, sectionId, className, canManage }: {
               const status = attendance[student.id]
               return (
                 <div key={student.id} className={cn(
-                  'flex items-center gap-4 border-l-4 px-5 py-3 transition-colors',
+                  'flex flex-wrap items-center gap-3 border-l-4 px-4 py-3 transition-colors sm:flex-nowrap sm:gap-4 sm:px-5',
                   status ? ROW_STRIPE[status] : 'border-l-transparent',
                   status === 'absent' ? 'bg-destructive/10' : status === 'late' ? 'bg-warning/10' : !status ? 'bg-muted/30' : 'hover:bg-muted/50'
                 )}>
-                  <span className="w-6 text-center font-mono text-xs text-muted-foreground">{idx + 1}</span>
+                  <span className="w-6 shrink-0 text-center font-mono text-xs text-muted-foreground">{idx + 1}</span>
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
                     {student.photo_url
                       ? <img src={student.photo_url} alt="" className="h-8 w-8 rounded-full object-cover" />
                       : `${student.first_name?.[0]}${student.last_name?.[0]}`
                     }
                   </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-medium text-foreground">{student.first_name} {student.last_name}</p>
                       {percentByStudent[student.id] !== undefined && (
-                        <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-bold', pctColor(percentByStudent[student.id]))}>
+                        <span className={cn('shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', pctColor(percentByStudent[student.id]))}>
                           {percentByStudent[student.id]}% this year
                         </span>
                       )}
@@ -351,7 +351,11 @@ function MarkTab({ classId, sectionId, className, canManage }: {
                       {student.sections?.name && ` · ${student.sections.name}`}
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  {/* Own full-width row below the student's info on a
+                      phone — four 40px touch targets never fit beside a
+                      name and roll number on that width, and squeezing
+                      them in just clipped the last one off-screen. */}
+                  <div className="flex w-full justify-end gap-2 pl-[2.75rem] sm:w-auto sm:justify-start sm:pl-0">
                     {(Object.entries(STATUS_CONFIG) as [AttendanceStatus, any][]).map(([s, config]) => (
                       <button key={s}
                         onClick={() => canManage && setAttendance(a => ({ ...a, [student.id]: s }))}
