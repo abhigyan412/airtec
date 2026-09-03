@@ -44,6 +44,7 @@ export const SCHOOLKNOT_CONFIG: Record<string, SchoolknotSchoolConfig> = {
       'priyanka.rashtrabharti@gmail.com': { school: 'SC3102', reg: '45' },          // Priyanka Mishra
       'rahultiwari.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4692' },     // Rahul Tiwari
       'rajendrashukla.rashtrabharti@gmail.com': { school: 'SC3102', reg: 'TA008' }, // Rajendra Shukla
+      'reetika.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4726' },         // Reetika Kanoujiya (enrolled at RBPIC; no punches last month)
       'ruchigupta.rashtrabharti@gmail.com': { school: 'SC3102', reg: '4695' },      // Ruchi Gupta
       'sambhavi.rashtrabharti@gmail.com': { school: 'SC3102', reg: 'TA009' },       // Sambhavi
       'shanti.rashtrabharti@gmail.com': { school: 'SC3102', reg: '35' },            // Shanti
