@@ -156,13 +156,6 @@ export default function BlockViewPage() {
             </SelectContent>
           </Select>
 
-          <Button
-            variant="outline" size="icon" className="sm:hidden"
-            onClick={toggleFullscreen} title="Full screen (landscape)"
-          >
-            <Maximize2 className="h-4 w-4" />
-          </Button>
-
           <div className="flex flex-wrap gap-1.5">
             {([
               ['week', 'All classes, whole week'],
@@ -260,6 +253,17 @@ export default function BlockViewPage() {
                 <Lock className="h-3.5 w-3.5" />
                 This is the live timetable and is read-only. Make a copy to change anything.
               </p>
+            )}
+
+            {!isFullscreen && (
+              <div className="mb-2 flex justify-end sm:hidden">
+                <Button
+                  variant="outline" size="icon"
+                  onClick={toggleFullscreen} title="Full screen (landscape)"
+                >
+                  <Maximize2 className="h-4 w-4" />
+                </Button>
+              </div>
             )}
 
             <div
