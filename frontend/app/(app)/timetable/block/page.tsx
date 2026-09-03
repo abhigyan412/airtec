@@ -134,7 +134,7 @@ export default function BlockViewPage() {
             </SelectContent>
           </Select>
 
-          <div className="flex flex-wrap overflow-hidden rounded-lg border border-border divide-x divide-border">
+          <div className="flex flex-wrap gap-1.5">
             {([
               ['week', 'All classes, whole week'],
               ['day', 'All classes, one day'],
@@ -145,8 +145,10 @@ export default function BlockViewPage() {
               <button
                 key={mode}
                 onClick={() => setLayout(mode)}
-                className={cn('px-3 py-1.5 text-sm transition-colors',
-                  layout === mode ? 'bg-primary text-primary-foreground' : 'hover:bg-accent')}
+                className={cn('rounded-md border px-3 py-1.5 text-sm font-medium transition-colors',
+                  layout === mode
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground')}
               >
                 {label}
               </button>
@@ -154,13 +156,15 @@ export default function BlockViewPage() {
           </div>
 
           {layout === 'teachers' && (
-            <div className="flex overflow-hidden rounded-lg border border-border">
+            <div className="flex flex-wrap gap-1.5">
               {([['grid', 'Grid'], ['sheets', 'Per teacher']] as const).map(([mode, label]) => (
                 <button
                   key={mode}
                   onClick={() => setTeacherFormat(mode)}
-                  className={cn('px-3 py-1.5 text-sm transition-colors',
-                    teacherFormat === mode ? 'bg-primary text-primary-foreground' : 'hover:bg-accent')}
+                  className={cn('rounded-md border px-3 py-1.5 text-sm font-medium transition-colors',
+                    teacherFormat === mode
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground')}
                 >
                   {label}
                 </button>
