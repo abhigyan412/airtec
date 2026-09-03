@@ -5,16 +5,14 @@ import { useRouter } from 'next/navigation'
 
 import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
-import { Users, UserPlus, CreditCard, AlertCircle, LayoutDashboard, ArrowRight, Plus } from 'lucide-react'
+import { Users, UserPlus, CreditCard, AlertCircle, LayoutDashboard, ArrowRight } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { studentsApi, admissionApi, feeApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatCard } from '@/components/shared/StatCard'
 import { EmptyState } from '@/components/shared/EmptyState'
@@ -111,11 +109,6 @@ export default function DashboardPage() {
     queryFn: () => feeApi.stats().then((r) => r.data),
     enabled: runAdminQueries && canViewFees,
   })
-  const { data: recentStudents, isLoading: recentLoading } = useQuery({
-    queryKey: ['recent-students'],
-    queryFn: () => studentsApi.list({ limit: 5, page: 1 }).then((r) => r.data),
-    enabled: runAdminQueries && canViewStudents,
-  })
   // Only the first 8 are rendered, so only 8 are fetched; the headline count
   // comes off meta.total, which the server counts across the whole school.
   // Measuring the returned array capped this at the page size (50).
@@ -176,6 +169,13 @@ export default function DashboardPage() {
       ) : (
         <>
           <NeedsAttentionToday />
+
+          {/* Academic snapshot */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <UpcomingExams />
+            <ClassStrength />
+            <UpcomingEvents />
+          </div>
 
           {/* KPI cards — skeletons until permissions resolve, otherwise the
               grid renders empty for a beat and the page jumps when it fills. */}
@@ -346,71 +346,6 @@ export default function DashboardPage() {
               )}
             </div>
           )}
-
-          {/* Recent students */}
-          {canViewStudents && (
-            <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0">
-                <CardTitle>Recently Added Students</CardTitle>
-                <ViewAll href="/students" />
-              </CardHeader>
-              <CardContent className="p-0">
-                {recentLoading ? (
-                  <div className="space-y-3 p-6">
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <Skeleton key={i} className="h-12 w-full" />
-                    ))}
-                  </div>
-                ) : (recentStudents ?? []).length === 0 ? (
-                  <EmptyState
-                    icon={Users}
-                    title="No students added yet"
-                    description="Add your first student and the newest admissions will show up here."
-                    action={
-                      <Button asChild>
-                        <Link href="/students/new">
-                          <Plus className="h-4 w-4" /> Add Student
-                        </Link>
-                      </Button>
-                    }
-                  />
-                ) : (
-                  <div className="divide-y divide-border">
-                    {(recentStudents ?? []).map((s: any) => (
-                      <div key={s.id} className="flex items-center gap-4 px-6 py-3 transition-colors hover:bg-muted/50">
-                        <Avatar className="h-9 w-9">
-                          <AvatarFallback className="bg-primary/10 text-xs font-bold text-primary">
-                            {s.first_name?.[0]}
-                            {s.last_name?.[0]}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-foreground">
-                            {s.first_name} {s.last_name}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {s.classes?.name ?? 'No class'}
-                            {s.sections?.name ? ` · ${s.sections.name}` : ''}
-                          </p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <p className="font-mono text-xs text-muted-foreground">{s.admission_number}</p>
-                          <p className="mt-0.5 text-xs text-muted-foreground/70">{formatDate(s.created_at)}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Academic snapshot */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <UpcomingExams />
-            <ClassStrength />
-            <UpcomingEvents />
-          </div>
 
           <FeeCollectionTrend />
         </>
