@@ -3679,19 +3679,27 @@ async function runSchoolknotAttendanceSync(
   schoolId: string,
   date: string,
   markedBy: string,
+  overrideMapping?: Record<string, { school: string; reg: string }>,
 ): Promise<SchoolknotSyncReport> {
   const config = getSchoolknotConfig(schoolId)
   if (!config) throw new Error('SchoolKnot is not configured for this school.')
 
-  // Resolve the config's email->reg_id map to the actual airtec users. An
-  // email that no longer exists (renamed/removed account) is simply dropped.
-  const emails = Object.keys(config.regByEmail)
+  // The admin-managed mapping (built in the browser Mapper and sent with the
+  // request) wins when present; otherwise the code config is the default. The
+  // set of SchoolKnot schools to fetch is the union of the two, so a mapping
+  // that points at a school the config didn't list still gets fetched.
+  const regByEmail = overrideMapping && Object.keys(overrideMapping).length ? overrideMapping : config.regByEmail
+  const schoolIds = [...new Set([...config.schoolknotSchoolIds, ...Object.values(regByEmail).map(v => v.school)])]
+
+  // Resolve the email->reg map to the actual airtec users. An email that no
+  // longer exists (renamed/removed account) is simply dropped.
+  const emails = Object.keys(regByEmail)
   const { data: users } = await supabase.from('users')
     .select('id, email').eq('school_id', schoolId).in('email', emails)
   const mappedRows = ((users ?? []) as { id: string; email: string }[]).map(u => ({
     user_id: u.id,
-    school: config.regByEmail[u.email].school,
-    reg: config.regByEmail[u.email].reg,
+    school: regByEmail[u.email].school,
+    reg: regByEmail[u.email].reg,
   }))
 
   // How many staff exist at all, to report those left unmapped.
@@ -3701,7 +3709,7 @@ async function runSchoolknotAttendanceSync(
   // A school's staff can punch across more than one SchoolKnot school (some
   // at RBPIC, some at Trinity). Fetch each, then key the combined feed by
   // school:reg so a reg number can't collide between the two.
-  const feeds = await Promise.all(config.schoolknotSchoolIds.map(async sk => ({
+  const feeds = await Promise.all(schoolIds.map(async sk => ({
     sk, rows: await fetchSchoolknotDay(sk, date),
   })))
   const byKey = new Map<string, SchoolknotRow>()
@@ -3816,8 +3824,21 @@ router.post('/attendance/sync', requirePermissionV2('staff.attendance_mark'),
       return res.status(400).json({ success: false, error: 'SchoolKnot is not configured for this school.' })
     }
 
+    // Optional admin-managed mapping from the browser Mapper: { email: {school, reg} }.
+    // Kept out of the database on purpose — it rides along with the request.
+    const raw = req.body?.mapping
+    let mapping: Record<string, { school: string; reg: string }> | undefined
+    if (raw && typeof raw === 'object') {
+      mapping = {}
+      for (const [email, v] of Object.entries(raw as Record<string, any>)) {
+        if (v && typeof v.school === 'string' && (typeof v.reg === 'string' || typeof v.reg === 'number')) {
+          mapping[email] = { school: v.school, reg: String(v.reg) }
+        }
+      }
+    }
+
     try {
-      const report = await runSchoolknotAttendanceSync(req.user!.school_id, date, req.user!.id)
+      const report = await runSchoolknotAttendanceSync(req.user!.school_id, date, req.user!.id, mapping)
       res.json({ success: true, data: report })
     } catch (err: any) {
       // A provider/transport failure is upstream, not a bad request.
@@ -3825,6 +3846,26 @@ router.post('/attendance/sync', requirePermissionV2('staff.attendance_mark'),
     }
   })
 )
+
+// ── GET /hrms/attendance/schoolknot/roster — the live roster of every
+// SchoolKnot school this school punches at, so the Mapper can offer real
+// reg_ids to pick from. Read-only: it fetches, it stores nothing.
+router.get('/attendance/schoolknot/roster', requirePermissionV2('staff.attendance_mark'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const config = getSchoolknotConfig(req.user!.school_id)
+    if (!config) return res.status(400).json({ success: false, error: 'SchoolKnot is not configured for this school.' })
+    const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date : toLocalDateStr(new Date())
+    try {
+      const feeds = await Promise.all(config.schoolknotSchoolIds.map(async sk => ({ sk, rows: await fetchSchoolknotDay(sk, date) })))
+      const roster = feeds.flatMap(f => f.rows.map(r => ({
+        school: f.sk, reg: String(r.reg_id), name: (r.first_name ?? '').trim(), punchedToday: !!r.in_time,
+      })))
+      res.json({ success: true, data: { schools: config.schoolknotSchoolIds, date, roster } })
+    } catch (err: any) {
+      res.status(502).json({ success: false, error: err?.message ?? 'Could not reach SchoolKnot' })
+    }
+  }))
 
 // Shared attendance rollup — extracted from GET /attendance/report so
 // payslip generation's LOP computation (below) can reuse the exact same

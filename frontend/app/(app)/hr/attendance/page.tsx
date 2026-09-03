@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi, calendarApi } from '@/lib/api'
 import { timetableApi } from '@/lib/timetableApi'
 import { cn } from '@/lib/utils'
-import { ArrowLeft, Loader2, ClipboardList, BarChart3, ChevronLeft, ChevronRight, Users, UserCheck, Inbox, Clock3, Plus, Trash2, Check, X, PartyPopper, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Loader2, ClipboardList, BarChart3, ChevronLeft, ChevronRight, Users, UserCheck, Inbox, Clock3, Plus, Trash2, Check, X, PartyPopper, RefreshCw, Link2 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -17,6 +17,7 @@ import { HrQuickNav } from '@/components/hr/HrQuickNav'
 import { StaffAvatar, staffPhotoUrl } from '@/components/hr/StaffAvatar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { MapSchoolknotDialog, loadMapping } from './MapSchoolknotDialog'
 import {
   Table,
   TableBody,
@@ -156,9 +157,11 @@ function MarkTab() {
   // Teachers who checked in on the latest sync but still have cover booked
   // — surfaced by the sync so it can be cancelled in one click here.
   const [staleCover, setStaleCover] = useState<any[]>([])
+  const [showMapper, setShowMapper] = useState(false)
 
   const syncMutation = useMutation({
-    mutationFn: () => hrmsApi.attendance.sync(date),
+    // The browser-held mapping (from the Mapper) overrides the server default.
+    mutationFn: () => hrmsApi.attendance.sync(date, loadMapping()),
     onSuccess: (res: any) => {
       const d = res.data ?? {}
       qc.invalidateQueries({ queryKey: ['staff-attendance'] })
@@ -214,16 +217,26 @@ function MarkTab() {
     <div className="space-y-6">
       <div className="flex justify-end gap-2">
         {syncStatus?.configured && (
-          <Button variant="outline" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending || saveMutation.isPending}
-            title="Pull this day's punches from the SchoolKnot biometric device">
-            {syncMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            Sync from SchoolKnot
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setShowMapper(true)} disabled={syncMutation.isPending}
+              title="Map each staff member to their SchoolKnot biometric device">
+              <Link2 className="h-4 w-4" /> Map staff
+            </Button>
+            <Button variant="outline" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending || saveMutation.isPending}
+              title="Pull this day's punches from the SchoolKnot biometric device">
+              {syncMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Sync from SchoolKnot
+            </Button>
+          </>
         )}
         <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || isNonWorkingDay}>
           {saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save Attendance
         </Button>
       </div>
+
+      {syncStatus?.configured && (
+        <MapSchoolknotDialog open={showMapper} onOpenChange={setShowMapper} />
+      )}
 
       {/* Returned-teacher reconciliation. A teacher who was covered but has
           now checked in still has a substitute booked — the sync surfaces

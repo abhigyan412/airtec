@@ -891,7 +891,12 @@ export const hrmsApi = {
       api.get('/hrms/attendance/report', { params: { month, year, department: department || undefined } }).then(r => r.data),
     // SchoolKnot biometric sync (demo integration, config-gated per school).
     syncStatus: () => api.get('/hrms/attendance/sync/status').then(r => r.data),
-    sync: (date: string) => api.post('/hrms/attendance/sync', { date }).then(r => r.data),
+    // `mapping` is the admin's browser-held email->{school,reg} map; when
+    // present it overrides the server default. Kept out of the DB by design.
+    sync: (date: string, mapping?: Record<string, { school: string; reg: string }>) =>
+      api.post('/hrms/attendance/sync', { date, mapping }).then(r => r.data),
+    schoolknotRoster: (date?: string) =>
+      api.get('/hrms/attendance/schoolknot/roster', { params: { date } }).then(r => r.data),
   },
   shifts: {
     list: () => api.get('/hrms/shifts').then(r => r.data),
