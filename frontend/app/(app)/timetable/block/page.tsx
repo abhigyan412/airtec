@@ -183,16 +183,16 @@ export default function BlockViewPage() {
             </Select>
           )}
 
-          <div className="ml-auto flex flex-wrap gap-2">
+          <div className="ml-auto flex w-full gap-2 sm:w-auto">
             {!isDraft && canEdit && (
-              <Button variant="outline" onClick={() => clone.mutate()} disabled={clone.isPending}>
+              <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => clone.mutate()} disabled={clone.isPending}>
                 {clone.isPending
                   ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                   : <Copy className="mr-1.5 h-4 w-4" />}
                 Make a copy to edit
               </Button>
             )}
-            <Button variant="outline" onClick={() => window.print()} disabled={!data}>
+            <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => window.print()} disabled={!data}>
               <Printer className="mr-1.5 h-4 w-4" />
               {layout === 'teachers' || layout === 'teacher' ? 'Print all teachers' : 'Print all classes'}
             </Button>
