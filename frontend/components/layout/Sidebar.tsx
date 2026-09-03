@@ -268,22 +268,33 @@ const NAV: NavItem[] = [
     // arrangement queue syncs from approved leave. Hiding the group hid
     // the timetable's own inputs.
     children: [
+      // Grouped the same way as Timetable (see NavItem.heading): plain
+      // labels along the record / attendance-leave / payroll-hiring /
+      // self-service seam, not another expandable level.
+
+      { label: 'Directory', heading: true, icon: Users },
       { label: 'Staff', href: '/hr/staff', icon: Users, permission: 'staff.view', module: 'staff' },
       { label: 'Org Chart', href: '/hr/org-chart', icon: Network, permission: 'staff.view', module: 'staff' },
+      { label: 'Reports', href: '/hr/reports', icon: BarChart3, permission: 'staff.view', module: 'staff' },
+      { label: 'Permissions', href: '/hr/permissions', icon: ShieldCheck, requireAny: ['role.manage', 'role.assign'], module: 'staff' },
+
+      { label: 'Attendance & Leave', heading: true, icon: UserCheck },
       // Feeds the timetable's absence detection, so it belongs to the
       // staff module rather than a payroll-shaped "HR" one.
       { label: 'Staff Attendance', href: '/hr/attendance', icon: UserCheck, requireAny: ['staff.attendance_mark', 'staff.view'], module: 'staff' },
       { label: 'Leave Requests', href: '/hr/leave', icon: ClipboardList, requireAny: ['staff.leave_approve', 'staff.view'], module: 'leave' },
+
+      { label: 'Payroll & Recruitment', heading: true, icon: Wallet },
       { label: 'Payroll', href: '/hr/payroll', icon: Wallet, requireAny: ['staff.payroll_manage', 'staff.view'], module: 'payroll' },
       { label: 'Recruitment', href: '/hr/recruitment', icon: UserPlus, requireAny: ['staff.recruitment_manage', 'staff.view'], module: 'recruitment' },
       { label: 'Offer Sent', href: '/hr/recruitment/offer-sent', icon: Send, requireAny: ['staff.recruitment_manage', 'staff.view'], indent: true, module: 'recruitment' },
       { label: 'Joined Candidates', href: '/hr/recruitment/joined', icon: UserCheck2, requireAny: ['staff.recruitment_manage', 'staff.view'], indent: true, module: 'recruitment' },
-      { label: 'Reports', href: '/hr/reports', icon: BarChart3, permission: 'staff.view', module: 'staff' },
+
+      { label: 'My Space', heading: true, icon: Clock },
       { label: 'My Attendance', href: '/hr/my-attendance', icon: Clock, module: 'staff' },
       { label: 'My Leave', href: '/hr/my-leave', icon: CalendarDays, module: 'leave' },
       { label: 'My Payslips', href: '/hr/my-payslips', icon: CreditCard, module: 'payroll' },
       { label: 'My Documents', href: '/hr/my-documents', icon: FileText, module: 'documents' },
-      { label: 'Permissions', href: '/hr/permissions', icon: ShieldCheck, requireAny: ['role.manage', 'role.assign'], module: 'staff' },
     ],
   },
 ]
@@ -544,6 +555,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             // matching the day it moved, and the sidebar went back to
             // showing a teacher the same page twice.
             children = forTeacher(item, children)
+            if (children) children = dropOrphanHeadings(children)
             if (item.children && !children?.length) return null
             return (
               <NavEntry
@@ -654,6 +666,16 @@ function NavEntry({
         // this is opened a few times a session, so it must not feel like a wait.
         <div className="ml-3 mt-0.5 space-y-0.5 border-l border-border pl-3 [animation-duration:var(--duration-fast)] animate-in fade-in-0 slide-in-from-top-1">
           {item.children.map((child) => {
+            if (child.heading) {
+              return (
+                <p
+                  key={child.label}
+                  className="mt-2.5 px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60 first:mt-0"
+                >
+                  {child.label}
+                </p>
+              )
+            }
             const ChildIcon = child.icon
 
             // A child that's itself a sub-group (Timetable / Examinations
