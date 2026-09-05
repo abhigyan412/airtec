@@ -214,9 +214,12 @@ export default function BlockViewPage() {
                 Make a copy to edit
               </Button>
             )}
-            <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => window.print()} disabled={!data}>
-              <Printer className="mr-1.5 h-4 w-4" />
-              {layout === 'teachers' || layout === 'teacher' ? 'Print all teachers' : 'Print all classes'}
+            <Button
+              variant="outline" size="icon" onClick={() => window.print()} disabled={!data}
+              title={layout === 'teachers' || layout === 'teacher' ? 'Print all teachers' : 'Print all classes'}
+              aria-label={layout === 'teachers' || layout === 'teacher' ? 'Print all teachers' : 'Print all classes'}
+            >
+              <Printer className="h-4 w-4" />
             </Button>
           </div>
         </div>
