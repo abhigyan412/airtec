@@ -311,14 +311,7 @@ export async function seedDefaultRoles(schoolId: string): Promise<Record<string,
  * value, creating default roles for the school first if needed.
  * No-ops if the user already has that role assigned.
  */
-export async function assignDefaultUserRole(userId: string, schoolId: string, legacyRole: string): Promise<void> {
-  const rbacRoleName = LEGACY_ROLE_TO_RBAC_ROLE[legacyRole]
-  if (!rbacRoleName) return
-
-  const roleIdByName = await seedDefaultRoles(schoolId)
-  const roleId = roleIdByName[rbacRoleName]
-  if (!roleId) return
-
+async function assignRoleId(userId: string, schoolId: string, roleId: string): Promise<void> {
   const { data: existing } = await supabase
     .from('user_roles')
     .select('id')
@@ -335,6 +328,72 @@ export async function assignDefaultUserRole(userId: string, schoolId: string, le
   })
   if (error) throw new Error(`Failed to assign user role: ${error.message}`)
   invalidatePermissionsForUser(userId, schoolId)
+}
+
+export async function assignDefaultUserRole(userId: string, schoolId: string, legacyRole: string): Promise<void> {
+  const rbacRoleName = LEGACY_ROLE_TO_RBAC_ROLE[legacyRole]
+  if (!rbacRoleName) return
+
+  const roleIdByName = await seedDefaultRoles(schoolId)
+  const roleId = roleIdByName[rbacRoleName]
+  if (!roleId) return
+
+  await assignRoleId(userId, schoolId, roleId)
+}
+
+/**
+ * Assigns a user directly to a specific RBAC role, by id — used when the
+ * caller already knows exactly which role (the Invite Team Member form's
+ * own picker, which offers the school's full role catalog via
+ * users.primary_role_id, not the 5-value legacy bucket alone). Unlike
+ * assignDefaultUserRole, never goes through LEGACY_ROLE_TO_RBAC_ROLE.
+ */
+export async function assignSpecificUserRole(userId: string, schoolId: string, roleId: string): Promise<void> {
+  await seedDefaultRoles(schoolId) // make sure the school's role catalog exists before assigning into it
+  await assignRoleId(userId, schoolId, roleId)
+}
+
+/**
+ * Switches a user's primary RBAC role assignment by id — removes the old
+ * primary's user_roles row (if any) and assigns the new one. Leaves any
+ * extra (non-primary) roles the user was manually granted untouched.
+ * Same shape as setPrimaryUserRole below, generalized to an arbitrary
+ * role_id (users.primary_role_id) instead of only a legacy value.
+ */
+export async function setPrimaryUserRoleById(userId: string, schoolId: string, newRoleId: string, oldRoleId?: string | null): Promise<void> {
+  if (oldRoleId && oldRoleId !== newRoleId) {
+    await supabase.from('user_roles').delete().eq('user_id', userId).eq('role_id', oldRoleId).eq('school_id', schoolId)
+  }
+  await assignRoleId(userId, schoolId, newRoleId)
+}
+
+/**
+ * Reverse of LEGACY_ROLE_TO_RBAC_ROLE — which legacy `users.role` bucket
+ * a given RBAC role name should sit in, for the ~50 requireRole() gates
+ * across the backend that still check that column directly. Never used
+ * to derive a user's real identity anymore — that's users.primary_role_id
+ * now — only to keep the internal legacy column populated with
+ * something one of those gates can match. Defaults to 'teacher', the
+ * least-privileged bucket, for every role with no direct legacy
+ * equivalent (Exam Controller, HR, Librarian, Receptionist, ...): a
+ * person assigned this way still gets their REAL permissions entirely
+ * from user_roles/requirePermissionV2 — this derived bucket can only
+ * ever under-grant relative to their actual RBAC role, never over-grant.
+ */
+export function deriveLegacyRoleFromRbacRoleName(rbacRoleName: string): string {
+  const DIRECT: Record<string, string> = {
+    'School Admin': 'school_admin',
+    'Principal': 'principal',
+    'Vice Principal': 'principal',
+    'Director': 'principal',
+    'Teacher': 'teacher',
+    'Class Teacher': 'teacher',
+    'Accountant': 'accountant',
+    'Counselor': 'counselor',
+    'Parent': 'parent',
+    'Student': 'student',
+  }
+  return DIRECT[rbacRoleName] ?? 'teacher'
 }
 
 /**

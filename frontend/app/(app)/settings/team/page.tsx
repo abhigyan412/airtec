@@ -38,21 +38,20 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 
-const ROLE_LABELS: Record<string, string> = {
-  school_admin: 'School Admin',
-  principal: 'Principal',
-  teacher: 'Teacher',
-  accountant: 'Accountant',
-  counselor: 'Counselor',
-}
-
+// Keyed by the real RBAC role NAME now (School Admin, Principal, ...,
+// Exam Controller, HR, ...) — not the 5-value legacy bucket, which no
+// longer drives anything shown on this page (see users.primary_role_id).
+// A named color for the handful of common ones; anything else (the
+// other ~17 seeded roles, or a school's own custom ones) falls back to a
+// plain neutral badge rather than trying to hand-pick 22+ colors.
 const ROLE_COLORS: Record<string, string> = {
-  school_admin: 'bg-primary/10 text-primary',
-  principal: 'bg-purple-500/10 text-purple-600 dark:text-purple-400',
-  teacher: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
-  accountant: 'bg-success/10 text-success',
-  counselor: 'bg-warning/10 text-warning',
+  'School Admin': 'bg-primary/10 text-primary',
+  'Principal': 'bg-purple-500/10 text-purple-600 dark:text-purple-400',
+  'Teacher': 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+  'Accountant': 'bg-success/10 text-success',
+  'Counselor': 'bg-warning/10 text-warning',
 }
+const roleColor = (name: string | null | undefined) => (name && ROLE_COLORS[name]) || 'bg-muted text-muted-foreground'
 
 export default function TeamPage() {
   const qc = useQueryClient()
@@ -66,11 +65,19 @@ export default function TeamPage() {
     queryFn: () => teamApi.list().then(r => r.data),
   })
 
-  const { data: extraRoles, error: extraRolesError } = useQuery({
+  const { data: extraRoles } = useQuery({
     queryKey: ['team-extra-roles'],
     queryFn: () => teamApi.extraRoles().then(r => r.data),
   })
-  console.log('DEBUG extraRoles:', extraRoles, 'ERROR:', extraRolesError)
+
+  // The school's full RBAC role catalog (22 seeded roles, or any custom
+  // ones it added) — same queryKey RoleManagerModal below already uses,
+  // so fetching it here too is free (react-query dedupes by key). Used
+  // by the table's own Role Select, not just the modal.
+  const { data: allRoles } = useQuery({
+    queryKey: ['rbac-roles'],
+    queryFn: () => rbacApi.roles.list().then(r => r.data as any[]),
+  })
 
   const deactivateMutation = useMutation({
     mutationFn: (id: string) => teamApi.deactivate(id),
@@ -82,9 +89,10 @@ export default function TeamPage() {
   })
 
   const roleMutation = useMutation({
-    mutationFn: ({ id, role }: any) => teamApi.update(id, { role }),
+    mutationFn: ({ id, role_id }: any) => teamApi.update(id, { role_id }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['team'] })
+      qc.invalidateQueries({ queryKey: ['team-extra-roles'] })
       toast.success('Role updated')
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
@@ -143,18 +151,18 @@ export default function TeamPage() {
                     <TableCell className="text-muted-foreground">{u.email}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <Select value={u.role} onValueChange={role => roleMutation.mutate({ id: u.id, role })}>
+                        <Select value={u.primary_role_id ?? undefined} onValueChange={role_id => roleMutation.mutate({ id: u.id, role_id })}>
                           <SelectTrigger
                             className={cn(
                               'h-7 w-auto gap-1 border-0 px-2 text-xs font-semibold shadow-none',
-                              ROLE_COLORS[u.role],
+                              roleColor(u.primary_role_name),
                             )}
                           >
-                            <SelectValue />
+                            <SelectValue placeholder="No role set">{u.primary_role_name ?? 'No role set'}</SelectValue>
                           </SelectTrigger>
                           <SelectContent>
-                            {Object.entries(ROLE_LABELS).map(([k, v]) => (
-                              <SelectItem key={k} value={k}>{v}</SelectItem>
+                            {(allRoles ?? []).map((r: any) => (
+                              <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
@@ -267,8 +275,6 @@ function RoleManagerModal({ user, extraRoles, onClose }: { user: any, extraRoles
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed'),
   })
 
-  const primaryRoleName = ROLE_LABELS[user.role]
-
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
       <DialogContent className="max-w-md">
@@ -297,7 +303,7 @@ function RoleManagerModal({ user, extraRoles, onClose }: { user: any, extraRoles
         ) : (
           <div className="max-h-72 space-y-1.5 overflow-y-auto">
             {(allRoles ?? []).map((r: any) => {
-              const isPrimary = r.name === primaryRoleName
+              const isPrimary = r.id === user.primary_role_id
               const isAssigned = isPrimary || extraRoles.includes(r.name)
               return (
                 <div key={r.id} className={cn('flex items-center justify-between rounded-xl border px-3 py-2.5',
@@ -362,12 +368,24 @@ function CredentialsBox({ email, password }: { email: string, password: string }
 }
 
 function InviteModal({ onClose }: { onClose: () => void }) {
-  const [form, setForm] = useState({ full_name: '', email: '', role: 'teacher', phone: '', password: generatePassword(), designation: '', department: '' })
+  const [form, setForm] = useState({ full_name: '', email: '', role_id: '', phone: '', password: generatePassword(), designation: '', department: '' })
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ email: string, password: string } | null>(null)
 
+  // The school's full RBAC role catalog — same one Manage Roles already
+  // shows, not the old 5-value legacy bucket. Lets a school invite
+  // someone directly as their real role (Exam Controller, HR, Vice
+  // Principal, ...) instead of always picking a generic bucket first and
+  // separately granting the real role afterward.
+  const { data: allRoles } = useQuery({
+    queryKey: ['rbac-roles'],
+    queryFn: () => rbacApi.roles.list().then(r => r.data as any[]),
+  })
+  const selectedRoleName = (allRoles ?? []).find((r: any) => r.id === form.role_id)?.name
+
   const handleSave = async () => {
     if (!form.full_name || !form.email || !form.password) return toast.error('Name, email and password required')
+    if (!form.role_id) return toast.error('Pick a role')
     setLoading(true)
     try {
       await teamApi.invite(form)
@@ -397,10 +415,10 @@ function InviteModal({ onClose }: { onClose: () => void }) {
             </div>
             <div className="space-y-1.5">
               <Label>Role *</Label>
-              <Select value={form.role} onValueChange={v => setForm(f => ({ ...f, role: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select value={form.role_id || undefined} onValueChange={v => setForm(f => ({ ...f, role_id: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select role..." /></SelectTrigger>
                 <SelectContent>
-                  {Object.entries(ROLE_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+                  {(allRoles ?? []).map((r: any) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -408,7 +426,7 @@ function InviteModal({ onClose }: { onClose: () => void }) {
               <Label htmlFor="inv-phone">Phone</Label>
               <Input id="inv-phone" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="9876543210" />
             </div>
-            {form.role !== 'school_admin' && (
+            {selectedRoleName && selectedRoleName !== 'School Admin' && (
               <>
                 <div className="space-y-1.5">
                   <Label htmlFor="inv-desig">Designation</Label>

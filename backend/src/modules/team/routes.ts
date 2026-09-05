@@ -5,7 +5,7 @@ import { supabase } from '../../shared/db/client'
 import { authenticate, AuthRequest, invalidateUserProfile } from '../../shared/middleware/auth'
 import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
 import { asyncHandler } from '../../shared/utils/helpers'
-import { assignDefaultUserRole, setPrimaryUserRole, LEGACY_ROLE_TO_RBAC_ROLE } from '../rbac/seed'
+import { assignDefaultUserRole, assignSpecificUserRole, setPrimaryUserRoleById, deriveLegacyRoleFromRbacRoleName } from '../rbac/seed'
 
 const router = Router()
 router.use(authenticate)
@@ -23,12 +23,14 @@ const supabaseAdmin = createClient(
   }
 )
 
-const VALID_ROLES = ['school_admin', 'principal', 'teacher', 'accountant', 'counselor'] as const
-
 const InviteSchema = z.object({
   full_name: z.string().min(1),
   email: z.string().email(),
-  role: z.enum(VALID_ROLES),
+  // The chosen RBAC role's id (roles.id) — the school's full role
+  // catalog (22 seeded roles, or any custom ones it added), not the
+  // 5-value legacy bucket. users.role gets derived from this
+  // automatically; it's never picked directly anymore.
+  role_id: z.string().min(1),
   phone: z.string().optional(),
   password: z.string().min(6),
   // optional staff profile fields
@@ -47,7 +49,11 @@ router.get('/', requirePermissionV2('team.view'),
     const [{ data: users, error }, { data: authUsers }] = await Promise.all([
       supabase
         .from('users')
-        .select('id, full_name, email, role, phone, is_active, created_at')
+        // role: the internal legacy bucket, kept for requireRole() gates
+        // elsewhere — never displayed. primary_role_id/roles(name) is the
+        // real, precise role a school actually chose (via Invite or
+        // Change Role), shown as primary_role_name below.
+        .select('id, full_name, email, role, primary_role_id, roles!primary_role_id(name), phone, is_active, created_at')
         .eq('school_id', school_id)
         .order('created_at', { ascending: false }),
       supabaseAdmin.auth.admin.listUsers({ perPage: 1000 }),
@@ -58,8 +64,9 @@ router.get('/', requirePermissionV2('team.view'),
     // Which users have a matching auth account
     const authIds = new Set((authUsers?.users ?? []).map(u => u.id))
 
-    const result = (users ?? []).map(u => ({
+    const result = (users ?? []).map((u: any) => ({
       ...u,
+      primary_role_name: u.roles?.name ?? null,
       has_login: authIds.has(u.id),
     }))
 
@@ -81,6 +88,14 @@ router.post('/invite', requirePermissionV2('team.invite'),
       return res.status(400).json({ success: false, error: 'A user with this email already exists in your school' })
     }
 
+    // Validate the chosen role belongs to this school (the full RBAC
+    // catalog, not the 5-value legacy bucket), and derive the internal
+    // legacy bucket from it for the requireRole() gates that still need
+    // one — see deriveLegacyRoleFromRbacRoleName's own doc comment.
+    const { data: chosenRole } = await supabase.from('roles').select('id, name').eq('id', body.role_id).eq('school_id', school_id).maybeSingle()
+    if (!chosenRole) return res.status(400).json({ success: false, error: 'Invalid role for this school' })
+    const legacyRole = deriveLegacyRoleFromRbacRoleName(chosenRole.name)
+
     // 1. Create the Supabase Auth account
     const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: body.email,
@@ -101,7 +116,8 @@ router.post('/invite', requirePermissionV2('team.invite'),
         full_name: body.full_name,
         email: body.email,
         phone: body.phone || null,
-        role: body.role,
+        role: legacyRole,
+        primary_role_id: chosenRole.id,
         is_active: true,
       })
       .select()
@@ -114,7 +130,7 @@ router.post('/invite', requirePermissionV2('team.invite'),
     }
 
     // 3. Optionally create a staff_profiles row (for non-admin roles)
-    if (body.role !== 'school_admin' && (body.designation || body.department)) {
+    if (chosenRole.name !== 'School Admin' && (body.designation || body.department)) {
       await supabase.from('staff_profiles').insert({
         school_id,
         user_id: newUser.id,
@@ -127,11 +143,12 @@ router.post('/invite', requirePermissionV2('team.invite'),
       })
     }
 
-    // 4. Seed default RBAC roles for the school (if missing) and assign
-    //    this user their primary role — this is what drives sidebar/page
-    //    visibility (see usePermissions.ts). Without this the user gets
-    //    zero permissions and only sees the null-gated nav items.
-    await assignDefaultUserRole(newUser.id, school_id, body.role)
+    // 4. Assign this user their real, specific RBAC role (seeding the
+    //    school's role catalog first if it's missing) — this is what
+    //    drives sidebar/page visibility (see usePermissions.ts). Without
+    //    this the user gets zero permissions and only sees the
+    //    null-gated nav items.
+    await assignSpecificUserRole(newUser.id, school_id, chosenRole.id)
 
     res.status(201).json({
       success: true,
@@ -217,13 +234,17 @@ router.post('/:id/reset-login', requirePermissionV2('team.credentials_manage'),
 // team.edit. A request touching only one must not require the others.
 router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
-    const { role, is_active, full_name, phone } = req.body
+    // role_id: the chosen RBAC role's id — the full catalog, same as
+    // Invite. users.role (the internal legacy bucket) is re-derived from
+    // it automatically; it's never accepted directly from the client
+    // anymore.
+    const { role_id, is_active, full_name, phone } = req.body
     const school_id = req.user!.school_id
 
     const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
     const has = (code: string) => isSuperRole || permissionCodes.has(code)
 
-    if (role !== undefined && !has('role.assign')) {
+    if (role_id !== undefined && !has('role.assign')) {
       return res.status(403).json({ success: false, error: 'Missing permission: role.assign' })
     }
     if (is_active !== undefined && !has('team.deactivate')) {
@@ -233,17 +254,23 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ success: false, error: 'Missing permission: team.edit' })
     }
 
-    if (role && !VALID_ROLES.includes(role)) {
-      return res.status(400).json({ success: false, error: 'Invalid role' })
+    let chosenRole: { id: string; name: string } | null = null
+    if (role_id) {
+      const { data } = await supabase.from('roles').select('id, name').eq('id', role_id).eq('school_id', school_id).maybeSingle()
+      if (!data) return res.status(400).json({ success: false, error: 'Invalid role for this school' })
+      chosenRole = data
     }
 
     const update: any = {}
-    if (role) update.role = role
+    if (chosenRole) {
+      update.role = deriveLegacyRoleFromRbacRoleName(chosenRole.name)
+      update.primary_role_id = chosenRole.id
+    }
     if (is_active !== undefined) update.is_active = is_active
     if (full_name) update.full_name = full_name
     if (phone !== undefined) update.phone = phone
 
-    const { data: before } = await supabase.from('users').select('role').eq('id', id).eq('school_id', school_id).maybeSingle()
+    const { data: before } = await supabase.from('users').select('primary_role_id').eq('id', id).eq('school_id', school_id).maybeSingle()
 
     const { data, error } = await supabase
       .from('users').update(update).eq('id', id).eq('school_id', school_id).select().single()
@@ -253,10 +280,11 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
     if (error) return res.status(400).json({ success: false, error: error.message })
 
-    // Keep the RBAC primary role in sync with the legacy role field —
-    // otherwise sidebar/page permissions silently stay on the old role.
-    if (role && before?.role && role !== before.role) {
-      await setPrimaryUserRole(id, school_id, role, before.role)
+    // Keep the RBAC primary role assignment in sync with the chosen
+    // role — otherwise sidebar/page permissions silently stay on the old
+    // one even though the label changed.
+    if (chosenRole && chosenRole.id !== before?.primary_role_id) {
+      await setPrimaryUserRoleById(id, school_id, chosenRole.id, before?.primary_role_id)
     }
 
     res.json({ success: true, data })
@@ -293,11 +321,6 @@ router.delete('/:id', requirePermissionV2('team.deactivate'),
 // "Exam Controller" role so they can act on workflow steps that
 // require it, without changing their primary role.
 
-// Primary-role name lookup is the same mapping assignDefaultUserRole()
-// uses to seed/assign roles — imported as LEGACY_ROLE_TO_RBAC_ROLE so
-// the two never drift out of sync.
-const LEGACY_ROLE_TO_NEW_NAME = LEGACY_ROLE_TO_RBAC_ROLE
-
 // ── GET /team/extra-roles - map of user_id -> additional role names ──
 router.get('/extra-roles', requirePermissionV2('role.view'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -305,25 +328,23 @@ router.get('/extra-roles', requirePermissionV2('role.view'),
 
     const { data: users } = await supabase
       .from('users')
-      .select('id, role')
+      .select('id, primary_role_id')
       .eq('school_id', school_id)
 
     const { data: userRoles, error } = await supabase
       .from('user_roles')
-      .select('user_id, roles ( name )')
+      .select('user_id, role_id, roles ( name )')
       .eq('school_id', school_id)
 
     if (error) return res.status(500).json({ success: false, error: error.message })
 
-    const legacyByUser = new Map((users ?? []).map(u => [u.id, u.role]))
+    const primaryRoleIdByUser = new Map((users ?? []).map(u => [u.id, u.primary_role_id]))
 
     const result: Record<string, string[]> = {}
     for (const row of (userRoles ?? []) as any[]) {
       const roleName = row.roles?.name
       if (!roleName) continue
-      const legacyRole = legacyByUser.get(row.user_id)
-      const primaryName = legacyRole ? LEGACY_ROLE_TO_NEW_NAME[legacyRole] : undefined
-      if (roleName === primaryName) continue // skip the role matching their primary
+      if (row.role_id === primaryRoleIdByUser.get(row.user_id)) continue // skip the role matching their primary
       if (!result[row.user_id]) result[row.user_id] = []
       result[row.user_id].push(roleName)
     }
@@ -398,16 +419,15 @@ router.delete('/:id/roles/:roleId', requirePermissionV2('role.assign'),
     const { id, roleId } = req.params
     const school_id = req.user!.school_id
 
-    const { data: targetUser } = await supabase.from('users').select('id, role').eq('id', id).eq('school_id', school_id).maybeSingle()
+    const { data: targetUser } = await supabase.from('users').select('id, primary_role_id').eq('id', id).eq('school_id', school_id).maybeSingle()
     if (!targetUser) return res.status(404).json({ success: false, error: 'User not found' })
 
     const { data: role } = await supabase.from('roles').select('id, name').eq('id', roleId).eq('school_id', school_id).maybeSingle()
     if (!role) return res.status(404).json({ success: false, error: 'Role not found' })
 
-    // Prevent removing the user's PRIMARY role (matching their legacy
-    // users.role) — they'd lose all default sidebar access.
-    const primaryRoleName = LEGACY_ROLE_TO_NEW_NAME[targetUser.role]
-    if (role.name === primaryRoleName) {
+    // Prevent removing the user's PRIMARY role — they'd lose all default
+    // sidebar access.
+    if (targetUser.primary_role_id === role.id) {
       return res.status(400).json({
         success: false,
         error: `Cannot remove ${role.name} — it's this user's primary role. Change their primary role in the table instead.`,
