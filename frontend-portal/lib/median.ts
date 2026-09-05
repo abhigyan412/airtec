@@ -56,9 +56,14 @@ function normalise(raw: any): OneSignalDevice | null {
     ? {
         deviceId: raw.oneSignalUserId || null,
         externalId: raw.externalId || null,
-        // A legacy build only reports a Player ID once the OS has allowed
-        // notifications, so the id's presence corroborates the flag.
-        optedIn: raw.oneSignalSubscribed === true || (!!raw.oneSignalUserId && raw.oneSignalSubscribed !== false),
+        // Only the flag. An earlier version also inferred consent from the
+        // Player ID being present, on the strength of a doc line saying
+        // the id is withheld when the prompt is declined — but that is an
+        // iOS behaviour. Android issues a Player ID regardless of
+        // permission, so the inference reported "On" for a device
+        // OneSignal itself classed as never subscribed, and the panel
+        // said push was working while nothing could arrive.
+        optedIn: raw.oneSignalSubscribed === true,
         requiresPrivacyConsent: raw.oneSignalRequiresUserPrivacyConsent === true,
         legacy: true,
       }
