@@ -220,15 +220,17 @@ export default function GeneratePage() {
                   </span>
                 </label>
 
-                <Button onClick={() => generate.mutate()} disabled={generate.isPending || feasible === false}>
-                  {generate.isPending
-                    ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    : <Wand2 className="mr-1.5 h-4 w-4" />}
-                  Generate a draft
-                </Button>
-                <p className="text-xs text-muted-foreground">
-                  This creates a draft. Nothing changes for teachers until it is published.
-                </p>
+                <div className="flex flex-col items-center gap-2">
+                  <Button onClick={() => generate.mutate()} disabled={generate.isPending || feasible === false}>
+                    {generate.isPending
+                      ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      : <Wand2 className="mr-1.5 h-4 w-4" />}
+                    Generate a draft
+                  </Button>
+                  <p className="text-center text-xs text-muted-foreground">
+                    This creates a draft. Nothing changes for teachers until it is published.
+                  </p>
+                </div>
               </CardContent>
             </Card>
 
