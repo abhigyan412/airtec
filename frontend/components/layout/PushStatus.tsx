@@ -59,6 +59,13 @@ export function PushStatus({ app }: { app: 'staff' | 'family' }) {
         <div className="mt-1.5 pl-[26px]">
           <p className="text-xs font-medium text-foreground">{blocked.title}</p>
           <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{blocked.detail}</p>
+          {/* The only way into the diagnostics page from inside the
+              wrapped app, which has no address bar. Shown only when
+              something is already wrong, so it stays out of the way. */}
+          <a href="/push-debug"
+            className="mt-1 inline-block text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground">
+            Diagnostics
+          </a>
         </div>
       )}
 
