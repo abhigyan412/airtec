@@ -474,7 +474,7 @@ function ProposedAbsenceRow({ absence, date, onDone }: { absence: any; date: str
         <p className="truncate text-xs text-muted-foreground">{absence.reason}</p>
       </div>
       <div className="flex shrink-0 gap-2">
-        <Button size="sm" variant="ghost" onClick={() => dismiss.mutate()} disabled={busy}>
+        <Button size="sm" variant="outline" onClick={() => dismiss.mutate()} disabled={busy}>
           They're here
         </Button>
         <Button size="sm" onClick={() => confirm.mutate()} disabled={busy}>
@@ -638,7 +638,7 @@ function ArrangementRow({
                 <ChevronDown className={cn('ml-1 h-3.5 w-3.5 transition-transform', isExpanded && 'rotate-180')} />
               </Button>
             ) : row.status !== 'cancelled' ? (
-              <Button size="sm" variant="ghost" onClick={() => unassign.mutate()} disabled={unassign.isPending}>
+              <Button size="sm" variant="outline" onClick={() => unassign.mutate()} disabled={unassign.isPending}>
                 {unassign.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                 Change
               </Button>
