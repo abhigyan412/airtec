@@ -482,4 +482,55 @@ router.get('/:id/results/:student_id', asyncHandler(async (req: AuthRequest, res
   res.json({ success: true, data: { report_card: reportCard, subjects: subjects ?? [] } })
 }))
 
+// ── Co-scholastic grading ────────────────────────────────────────
+// Qualitative grades (Discipline, Work Education, ...) graded once per
+// Term by the class teacher — not tied to any member exam's datesheet,
+// no marks/max-marks concept, never fed into computeReportCard's
+// percentage. Gated exam.marks_entry (a class-teacher action), not
+// exam.result_settings_manage (that's for configuring the AREA list
+// itself, see coscholasticAreas.routes.ts).
+
+router.get('/:id/coscholastic', requirePermissionV2('exam.marks_entry'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const { data: group } = await supabase.from('result_groups').select('id, class_id').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+  if (!group) return res.status(404).json({ success: false, error: 'Result group not found' })
+
+  const [{ data: students }, { data: rawAreas }, { data: assessments }, { data: scaleLinks }] = await Promise.all([
+    supabase.from('students').select('id, first_name, last_name, roll_number, admission_number').eq('class_id', group.class_id).eq('school_id', school_id).eq('status', 'active').order('roll_number'),
+    supabase.from('coscholastic_areas').select('*').or(`school_id.eq.${school_id},school_id.is.null`).order('sort_order'),
+    supabase.from('coscholastic_assessments').select('*').eq('result_group_id', req.params.id).eq('school_id', school_id),
+    // This school's own choice of grade scale per area (never a column on
+    // coscholastic_areas itself — its 5 seeded rows are shared across
+    // every school). An area with none configured falls back to free
+    // text on the grading grid.
+    supabase.from('coscholastic_area_grade_scales').select('area_id, exam_grade_scales(id, name, exam_grade_bands(grade_label, sort_order))').eq('school_id', school_id),
+  ])
+  const scaleByArea = new Map((scaleLinks ?? []).map((l: any) => [l.area_id, l.exam_grade_scales]))
+  const areas = (rawAreas ?? []).map(a => ({ ...a, grade_scale: scaleByArea.get(a.id) ?? null }))
+  res.json({ success: true, data: { students: students ?? [], areas, assessments: assessments ?? [] } })
+}))
+
+const CoscholasticGradeSchema = z.object({ area_id: z.string(), grade_label: z.string().min(1), remarks: z.string().optional() })
+const SetCoscholasticSchema = z.object({ grades: z.array(CoscholasticGradeSchema).min(1) })
+
+router.put('/:id/coscholastic/:student_id', requirePermissionV2('exam.marks_entry'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const { id: result_group_id, student_id } = req.params
+  const { grades } = SetCoscholasticSchema.parse(req.body)
+
+  const { data: group } = await supabase.from('result_groups').select('id').eq('id', result_group_id).eq('school_id', school_id).maybeSingle()
+  if (!group) return res.status(404).json({ success: false, error: 'Result group not found' })
+
+  const rows = grades.map(g => ({
+    school_id, result_group_id, student_id, area_id: g.area_id,
+    grade_label: g.grade_label, remarks: g.remarks ?? null,
+    assessed_by: req.user!.id, assessed_at: new Date().toISOString(),
+  }))
+  const { data, error } = await supabase.from('coscholastic_assessments')
+    .upsert(rows, { onConflict: 'result_group_id,student_id,area_id' })
+    .select()
+  if (error) return res.status(400).json({ success: false, error: error.message })
+  res.json({ success: true, data })
+}))
+
 export default router

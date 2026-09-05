@@ -116,6 +116,7 @@ export default function ResultGroupDetailPage() {
 
       <MemberExamsSection groupId={id} classId={group.class_id} members={group.members ?? []} onChanged={invalidate} />
       <SubjectsSection groupId={id} subjects={group.subjects ?? []} onChanged={invalidate} />
+      <CoscholasticSection groupId={id} />
 
       {['result_declared', 'result_published'].includes(group.status) && (
         <TermResultsView groupId={id} />
@@ -249,6 +250,102 @@ function SubjectsSection({ groupId, subjects, onChanged }: { groupId: string; su
           })}
         </div>
       )}
+    </Card>
+  )
+}
+
+// Qualitative grades (Discipline, Work Education, ...) graded once per
+// Term directly by the class teacher — not tied to any member exam, no
+// marks/max-marks concept, never fed into the percentage above. Each
+// area's grade_scale (configured in Result Settings -> Co-Scholastic
+// Areas, reusing the same exam_grade_scales table scholastic grading
+// uses) drives a click-to-select dropdown of that scale's labels; an area
+// with no scale configured falls back to a free-text input.
+function CoscholasticSection({ groupId }: { groupId: string }) {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['result-group-coscholastic', groupId],
+    queryFn: () => api.get(`/exams/result-groups/${groupId}/coscholastic`).then(r => r.data.data),
+  })
+  const [edits, setEdits] = useState<Record<string, Record<string, string>>>({})
+
+  const saveMutation = useMutation({
+    mutationFn: ({ studentId, grades }: { studentId: string; grades: { area_id: string; grade_label: string }[] }) =>
+      api.put(`/exams/result-groups/${groupId}/coscholastic/${studentId}`, { grades }),
+    onSuccess: () => { toast.success('Saved'); qc.invalidateQueries({ queryKey: ['result-group-coscholastic', groupId] }) },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to save'),
+  })
+
+  if (isLoading) return <Card className="p-6"><Skeleton className="h-32 w-full" /></Card>
+
+  const students = data?.students ?? []
+  const areas = data?.areas ?? []
+  if (!areas.length || !students.length) return null
+
+  const assessmentsByStudent = new Map<string, Map<string, any>>()
+  for (const a of data?.assessments ?? []) {
+    if (!assessmentsByStudent.has(a.student_id)) assessmentsByStudent.set(a.student_id, new Map())
+    assessmentsByStudent.get(a.student_id)!.set(a.area_id, a)
+  }
+
+  const valueFor = (studentId: string, areaId: string) =>
+    edits[studentId]?.[areaId] ?? assessmentsByStudent.get(studentId)?.get(areaId)?.grade_label ?? ''
+
+  const setValue = (studentId: string, areaId: string, value: string) =>
+    setEdits(prev => ({ ...prev, [studentId]: { ...prev[studentId], [areaId]: value } }))
+
+  const saveStudent = (studentId: string) => {
+    const grades = areas
+      .map((a: any) => ({ area_id: a.id, grade_label: valueFor(studentId, a.id).trim() }))
+      .filter((g: any) => g.grade_label)
+    if (!grades.length) return
+    saveMutation.mutate({ studentId, grades })
+  }
+
+  return (
+    <Card className="p-5 space-y-3">
+      <h3 className="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Co-Scholastic Grading</h3>
+      <p className="text-xs text-muted-foreground">
+        Qualitative grades per student — shown on the report card alongside, not inside, the scholastic percentage.
+      </p>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Student</TableHead>
+              {areas.map((a: any) => <TableHead key={a.id}>{a.name}</TableHead>)}
+              <TableHead></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {students.map((s: any) => (
+              <TableRow key={s.id}>
+                <TableCell className="whitespace-nowrap font-medium text-foreground">{s.first_name} {s.last_name}</TableCell>
+                {areas.map((a: any) => {
+                  const bands = [...(a.grade_scale?.exam_grade_bands ?? [])].sort((x: any, y: any) => x.sort_order - y.sort_order)
+                  return (
+                    <TableCell key={a.id}>
+                      {bands.length ? (
+                        <Select value={valueFor(s.id, a.id) || undefined} onValueChange={v => setValue(s.id, a.id, v)}>
+                          <SelectTrigger className="h-8 w-32"><SelectValue placeholder="Select..." /></SelectTrigger>
+                          <SelectContent>
+                            {bands.map((b: any) => <SelectItem key={b.grade_label} value={b.grade_label}>{b.grade_label}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input className="h-8 w-20" value={valueFor(s.id, a.id)} onChange={e => setValue(s.id, a.id, e.target.value)} />
+                      )}
+                    </TableCell>
+                  )
+                })}
+                <TableCell>
+                  <Button size="sm" variant="ghost" onClick={() => saveStudent(s.id)} disabled={saveMutation.isPending}>Save</Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </Card>
   )
 }

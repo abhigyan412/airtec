@@ -1562,3 +1562,385 @@ that capability only existed one level up (`child.badge`) before now.
   notifications all cleaned up after.
 - Backend test suite re-run (exam module + notifications/delivery
   suites specifically, plus the full suite from the prior phase).
+
+## Gap-closing plan — Phase A: Compartment re-exams (2026-09-05)
+
+A review of the whole engine (see chat history 2026-09-05) found four real
+structural gaps with no configuration path, only a manual workaround —
+compartment had no re-exam path, no co-scholastic/qualitative grading area,
+no systemic moderation/scaling, and only two components (Theory/Practical)
+per subject. International point-based systems (IB/IGCSE) were explicitly
+scoped out — a genuinely different aggregation model, and the gap furthest
+from anything this engine has been validated against; revisit only once a
+real international-curriculum school is a prospect. The approved plan
+sequences the remaining four one phase at a time, same cadence as the
+original build. This entry covers Phase A.
+
+**Schema** (`20260905000000_compartment_exams.sql`, not yet applied to any
+database — see below): `'compartment'` joins `exams.exam_type`'s check
+constraint (drop/add pattern, same as `20260724000000_notifications.sql`
+already used to widen `exams_status_check`) — deliberately NOT added to
+`exam_class_result_rules`/`exam_subject_result_overrides`'s own exam_type
+check constraints, nor to any user-facing "pick an exam type" dropdown; a
+compartment exam is only ever produced by the new create route below, never
+hand-created, and always resolves the class's DEFAULT rule at finalize
+time. `exams.compartment_of_exam_id` (self-FK) links a compartment exam
+back to the original. New `report_card_revisions` — a snapshot taken the
+one time this feature ever overwrites an already-published `report_cards`
+row, so the figures a family already saw stay recoverable.
+
+**Computation core** (`resultComputation.ts`): `ExamType` widened to
+include `'compartment'`. New pure `overlayCompartmentMarks()` — a re-take's
+marks supersede the original subject's marks entirely (matched by subject
+name, since the compartment exam has its own distinct `exam_subjects` ids),
+never averaged with the failed attempt. 6 new unit tests (merge behavior,
+no-op cases, and two full `computeReportCard` end-to-end scenarios: a
+student who fails Maths then passes the re-take flips to Pass with the
+correct merged total; a student whose re-take is still below the pass mark
+stays flagged `compartment` rather than a hard Fail — the same class rule
+that allowed compartment the first time applies again on finalize; a
+school that doesn't allow a second attempt uses the existing per-student
+`result_status_override` to force it).
+
+**Backend** (`exam/routes.ts`, gated `exam.result_generate` throughout):
+`POST /:id/compartment/create` — reads which students are flagged
+`result_status='compartment'` on the original exam, recomputes each one's
+`subject_outcomes` in-memory (via the same already-tested
+`computeReportCard`, nothing persisted) to find exactly which subjects they
+failed, creates a real `compartment`-typed exam plus `exam_subjects` rows
+for the union of failed (class, subject) pairs, copying max/pass/split
+shape verbatim from the original subject rows. Whole-request rollback (the
+orphaned exam is deleted) if the subject-row insert fails, matching every
+other apply-a-template route's rollback convention in this module.
+`POST /:id/compartment/finalize` — merges the compartment exam's marks onto
+the original exam's `report_cards` via `overlayCompartmentMarks`, snapshots
+each card into `report_card_revisions` first, requires a `reason`.
+`GET /:id/marks/:class_id`'s roster narrows to only the compartment-eligible
+students when `exam.exam_type==='compartment'` — a teacher can no longer
+be shown (or accidentally enter marks for) a student who already passed and
+has nothing to re-take. `GET /:id/results` now attaches each card's most
+recent `compartment_revised_at`, if any.
+
+**Frontend** (`exams/[id]/page.tsx`): new `CompartmentActionCard` on the
+Results tab — for a standalone/original exam with compartment-status
+students, a "Schedule Compartment Exam" action that routes straight into
+the new exam's normal detail page (every existing tab works unchanged,
+including the narrowed Marks Entry roster above); for a compartment exam
+itself, a "Finalize Compartment Results" action gated on its own results
+already being generated, with a required reason field. `ResultsView` shows
+"Compartment result recorded `<date>`" under a card that's been through a
+finalize. Scoped down from the original plan's "before/after diff confirm
+dialog" to a plain required-reason field, given the size of the remaining
+three phases — a diff view can be added later if a school finds the
+plain confirmation insufficient.
+
+### Verification
+
+- `npx esbuild` clean on every touched/new file (backend and frontend).
+- `resultComputation.test.ts`: 32/32 (26 pre-existing + 6 new), all passing.
+- Full backend suite re-run: 490 passed, 1 pre-existing unrelated failure
+  (the same already-documented flaky timing assertion in the timetable
+  engine's realistic-scale test) — no regressions anywhere touched by this
+  work.
+- **Not yet done, deliberately**: the migration has NOT been applied to any
+  database, and no live-data script has been run. `SUPABASE_URL` in
+  `backend/.env` points at a live, remote Supabase project (no local Docker
+  stack available in this environment) — unlike every prior phase's "live
+  script against real data, thrown away after," applying a schema migration
+  or running a mutating script here reaches a shared remote resource, not a
+  disposable local one. Both need an explicit go-ahead before proceeding.
+  (The Supabase MCP connector attached to this session was checked and
+  found to point at a completely different, unrelated project — its own
+  migration history has nothing to do with this app — so it can't be used
+  as a substitute path either.)
+
+## Gap-closing plan — Phase B: Co-scholastic / qualitative grading (2026-09-05)
+
+CBSE-style Discipline / Work Education / Health & Physical Education /
+Attitude & Values / Life Skills grades, deliberately NOT modeled as exam
+subjects (the `grade_only`, `include_in_aggregate: false` workaround the
+gap review flagged) — this assessment isn't tied to any one exam's
+datesheet, has no marks/max-marks concept, and is graded once per Term
+directly by the class teacher. Hooks into `result_groups` (the existing
+"Term" concept), never `exams`.
+
+**Schema** (`20260905010000_coscholastic_grading.sql`, not yet applied —
+same live-project caveat as Phase A): `coscholastic_areas` (school-owned +
+system rows, same `is_system` convention as `exam_grade_scales`) seeded
+with CBSE's standard five. `coscholastic_assessments`
+(`result_group_id`/`student_id`/`area_id`, `grade_label` free text,
+`remarks`) — unique on the three, and (unlike every rule table in this
+engine) a genuine plain unique index, not a partial one, so
+`.upsert(...).onConflict(...)` works directly with no
+check-then-update-or-insert dance needed.
+
+**Backend**: new `coscholasticAreas.routes.ts`, mounted at
+`/exams/coscholastic-areas` — CRUD mirroring `resultSettings.routes.ts`'s
+grade-scales pattern exactly (reads see school + system rows; writes
+gated `exam.result_settings_manage`; a system row can't be edited or
+deleted). Two new routes on `resultGroups.routes.ts`, gated
+`exam.marks_entry` (a class-teacher action, not a result-settings one):
+`GET /:id/coscholastic` (the class's active students + every area +
+existing assessments), `PUT /:id/coscholastic/:student_id` (upserts every
+area's grade for one student in one call).
+
+**Frontend**: new "Co-Scholastic Areas" tab on the Result Settings page
+(list + add/remove, `CoscholasticAreasTab`) — a flat list, not a
+bands-editor, since an area has no percentage ranges to configure, just a
+name. `exams/result-groups/[id]/page.tsx` gains a `CoscholasticSection`
+card (this page has no tab strip — it's a stack of cards — so this
+follows that existing shape rather than introducing tabs) — a
+student-by-area grid, one text input per cell rather than a fixed dropdown
+(schools use different conventions — A/B/C, Outstanding/Very Good/Good —
+and no scale table exists for this the way `exam_grade_scales` does for
+scholastic grading), Save per row.
+
+**Deliberately deferred**: the plan called for a "Part 2 — Co-Scholastic"
+section on the printable report card. Investigating `documents/routes.ts`
+found no printable card route exists for a Term/`result_group` at all —
+`GET /report-card/:exam_id/:student_id` only ever prints a single exam's
+`report_cards` row, and co-scholastic data is scoped to `result_group_id`,
+not `exam_id`. Bolting it onto the wrong printable card, or building an
+entire new Term-level printable-card generator as a side effect of this
+phase, would be disproportionate scope creep — that's its own feature
+(a Term printable card doesn't exist for ANY purpose yet, not just this
+one) and belongs as an explicit follow-up if a school asks for it.
+Co-scholastic grades are fully enterable and visible in-app (Result
+Settings + the Term detail page) even without this.
+
+### Verification
+
+- `npx esbuild` clean on every touched/new file (backend and frontend).
+- No new pure-computation logic was added — co-scholastic grades
+  deliberately never feed `computeReportCard` (by design, they sit
+  alongside the percentage, not inside it), so there's nothing here to
+  unit-test the way Phase A's merge logic had; `resultComputation.test.ts`
+  re-run clean (32/32) as a sanity check that nothing regressed.
+- **Not yet done, deliberately**: same as Phase A — no migration applied,
+  no live-data script run, pending the same go-ahead.
+
+## Gap-closing plan — Phase C: Systemic moderation / scaling (2026-09-05)
+
+Grace marks (`student_marks.grace_marks_applied`, `PATCH
+.../override`) have always been strictly per-student, per-subject, one API
+call each — a board-wide or cohort-wide adjustment ("+5 marks to everyone
+scoring 28-32% in Maths", "scale this subject's marks by 1.1 across the
+board") had no bulk mechanism. This phase adds the generic, auditable,
+reversible counterpart, folded directly into the same computation pipeline
+moderation always eventually feeds through — never a separately
+materialized step.
+
+**Schema** (`20260905020000_result_moderation.sql`, not yet applied — same
+live-project caveat as Phases A/B): `exam_moderation_rules`
+(`exam_id`, optional `exam_subject_id` — null means every subject,
+`rule_type` in `flat_grace_band`/`scale_factor`, band bounds, grace amount
+or scale factor). `report_cards.moderation_marks_applied_total` — same
+always-visible audit-column pattern `grace_marks_applied_total` already
+established.
+
+**Computation core** (`resultComputation.ts`): new `ModerationRule` type
+and pure `applyModerationToObtained()` — applied to the RAW obtained marks
+inside `computeSubjectOutcome`, before per-student grace marks fold in and
+before a split subject's per-component pass check is decided (moderation
+is scoped to a subject's overall total, not each component separately —
+documented simplification). `SubjectOutcome` gains
+`moderation_marks_applied`; `computeSubjectOutcome` gains an optional
+4th parameter `moderationRules` (default `[]`, so every existing call site
+— including every test written before this phase — stays byte-identical).
+Result rounded to 2 decimals before capping at `max_marks`, since a
+`scale_factor` multiply routinely produces float noise (`50 * 1.1 =
+55.00000000000001`) that would otherwise show up verbatim on a report
+card — caught by a test failure while writing this, not by inspection.
+`computeReportCard` threads `moderationRules` through and sums
+`moderation_marks_applied_total`. 8 new unit tests (band matching, scale
+factor, capping, subject-scoping, `grade_only`/status-override immunity,
+byte-identical no-op with zero rules, and a full end-to-end case: a
+scale_factor rule flips a borderline fail to a pass).
+
+**Backend** (`exam/routes.ts`): `GET/POST/DELETE /:id/moderation-rules`,
+gated `exam.result_settings_manage`. `POST /:id/generate-results` loads
+active rules for the exam and threads them through — since that route
+already recomputes and upserts every `report_cards` row unconditionally
+on every call, adding/editing/removing a rule and re-running Generate
+Results is the entire apply/reverse mechanism, no separate execution
+step needed.
+
+**Frontend**: new "Moderation" tab on the exam detail page (only rendered
+for `exam.result_settings_manage` holders) — a small rule builder (subject
+picker, grace-band or scale-factor, the matching fields), a list of active
+rules with Remove, and an explicit note that Generate Results must be
+(re)run for a change to take effect.
+
+**Deliberately out of scope for this phase**: moderation rules are
+exam-scoped and apply only within a standalone exam's own
+`generate-results` run. They do NOT propagate into a Compartment
+finalize (`POST /:id/compartment/finalize` resolves the class default
+rule directly against merged marks, no moderation threading) or into a
+composite Term's blended calculation (`resultGroups.routes.ts` blends raw
+percentages across member exams arithmetically, never calling
+`computeSubjectOutcome` per member the way a standalone exam does). Both
+are real intersections a school could eventually want, but extending
+moderation into either adds real complexity for what's likely a rare
+combination (a school moderating one exam that also happens to feed a
+compartment retake or a Term) — flagged here as a known boundary rather
+than silently unsupported.
+
+### Verification
+
+- `npx esbuild` clean on every touched/new file (backend and frontend).
+- `resultComputation.test.ts`: 40/40 (32 prior + 8 new), all passing.
+- Full backend suite re-run: same 490 passed / 1 pre-existing unrelated
+  flaky-timing failure baseline as Phases A and B — no regressions.
+- **Not yet done, deliberately**: same as Phases A/B — no migration
+  applied, no live-data script run, pending the same go-ahead.
+
+## Gap-closing plan — Phase D: Multi-component subjects (2026-09-05)
+
+Theory/Practical are hardcoded columns in `exam_subjects`, `student_marks`
+and a lot of frontend UI — a subject needing Written + Oral + Project, or
+a separate Internal Assessment component, had nowhere to go. Scoped
+deliberately narrow to limit blast radius: **Theory/Practical stay exactly
+as they are today, unchanged, in every table and every screen.** This adds
+an *optional* extra layer for subjects that need more than those two —
+every existing subject has zero rows in the new tables and is completely
+unaffected.
+
+**Schema** (`20260905030000_subject_extra_components.sql`, not yet
+applied — same live-project caveat as Phases A/B/C): `exam_subject_extra_components`
+(`exam_subject_id`, `component_label`, `max_marks`, `pass_marks`, optional
+own date/time, `sort_order`). `student_component_marks`
+(`exam_subject_extra_component_id`/`student_id`/`marks_obtained`/`is_absent`)
+— unique on the pair. Template support (`exam_template_subjects` gaining
+the same shape) deliberately deferred — covers real, manually-scheduled
+exams first.
+
+**Computation core** (`resultComputation.ts`): `ExamSubjectRow` gains
+optional `extra_components: {id, max_marks, pass_marks}[]`;
+`StudentMarkRow` gains optional `extra_component_marks: {component_id,
+obtained, is_absent}[]`. `computeSubjectOutcome` sums every extra
+component's marks into the subject total (right after the existing
+Theory+Practical-or-plain block, before moderation), and under
+`per_subject` pass criteria each extra component must individually clear
+its own pass mark too — generalizing the exact same semantics
+Theory/Practical already had, just N-wide instead of 2-wide. Trusts
+`subject.max_marks` as the already-server-recomputed grand total rather
+than re-deriving it, so it never double-counts a component's max back into
+the total. 4 new unit tests (aggregate sum correctness, per-component pass
+enforcement — marks still count even when the subject fails on one
+component, absence/no-row-at-all both contribute zero, byte-identical
+with zero extra components).
+
+**Backend** (`exam/routes.ts`): `GET/POST /subjects/:id/components` —
+bulk replace-all for one subject's extra components, gated the same as
+`POST /subjects/add`. Recomputes the parent's `max_marks` by backing the
+*previous* set of components' total out of the subject's current
+`max_marks` (rather than re-deriving a "plain-or-split base" some other
+way, which would be wrong for an unsplit subject) — idempotent across
+repeated calls, same "server always recomputes, never trusts a
+client-sent total" rule Theory/Practical already established.
+`GET /:id/marks/:class_id` now also returns every relevant subject's extra
+components and any existing component marks (flat arrays, frontend groups
+client-side — same convention every other list on that route already
+follows). `POST /:id/marks` accepts `extra_component_marks` per student
+row in the same payload, upserted into the new child table alongside the
+existing `student_marks` write. `POST /:id/generate-results` fetches
+extra components + their marks (batched with `fetchAllRows`, same
+discipline as everything else on that route) and threads them into
+`examSubjectRows`/`marksBySubjectId`.
+
+**Frontend**: `EditSubjectModal` gains an "Extra Components" repeatable
+row builder (label/max/pass), fetched via the new GET and saved via the
+new POST — deliberately NOT added to `AddSubjectModal` (a brand-new
+subject has no id yet to attach components to; add the subject, then
+manage its components from Edit, same "create-only gap, fixed via a
+separate edit path" pattern this file's own `EditSubjectModal` comment
+already documents for date/marks). Marks Entry renders one column per
+extra component (own Input + Absent checkbox) alongside the existing
+Theory/Practical/plain columns, for whichever subject actually has any —
+most render zero extra columns, unchanged from before this phase.
+
+### Verification
+
+- `npx esbuild` clean on every touched/new file (backend and frontend).
+- `resultComputation.test.ts`: 44/44 (40 prior + 4 new), all passing.
+- Full backend suite re-run (all four phases together): 502 passed, 1
+  skipped, 1 pre-existing unrelated failure (the same already-documented
+  flaky timing assertion in the timetable engine's realistic-scale test)
+  — no regressions anywhere touched across Phases A-D.
+- **Not yet done, deliberately**: same as Phases A/B/C — no migration
+  applied, no live-data script run, pending the same go-ahead.
+
+---
+
+## Gap-closing plan — status after Phases A-D (2026-09-05)
+
+All four gaps from the original review are now code-complete: compartment
+re-exams, co-scholastic grading, systemic moderation, and multi-component
+subjects. International point-based grading (IB/IGCSE) remains explicitly
+out of scope (see the top of this section) pending a real prospect.
+
+**Migrations applied** (2026-09-05, later the same day): all four
+(`20260905000000` through `20260905030000`) were run directly against the
+real project — `backend/.env`'s `SUPABASE_URL` project, `vttauscgobqqjaerzudr`
+— via a direct `psql` connection (the Supabase MCP connector attached to
+this session pointed at a different, unrelated project the whole time, and
+the local Supabase CLI wasn't logged into the account that owns this one,
+so neither could be used). Verified post-apply: all 6 new tables exist
+(`report_card_revisions`, `coscholastic_areas`, `coscholastic_assessments`,
+`exam_moderation_rules`, `exam_subject_extra_components`,
+`student_component_marks`), the 5 seeded co-scholastic areas are present,
+`exams_exam_type_check` now includes `'compartment'`, and
+`report_cards.moderation_marks_applied_total` exists. All four ran clean,
+no errors.
+
+**Still outstanding**: no live-data walkthrough has been run yet against a
+real class/exam/student — a manual UI test pass (see chat) is the next
+step, not yet done as of this entry.
+
+## Gap-closing follow-up: Co-Scholastic grading needed a real grade picker (2026-09-05)
+
+UI testing caught it immediately: the Term detail page's grading grid
+shipped as a plain free-text `Input` per cell, but a school's actual need
+is a click-to-select dropdown of *configured* grade labels — the free-text
+choice in Phase B's own plan entry ("no scale table exists for this")
+turned out to be the wrong tradeoff, not an acceptable one.
+
+Fixed by reusing `exam_grade_scales` — the same reusable letter-grade
+table scholastic grading already uses — rather than building a parallel
+system. The one real design wrinkle: `coscholastic_areas`' 5 seeded rows
+are SHARED system rows (`school_id IS NULL`) across every school, so a
+`grade_scale_id` column directly on that table would leak one school's
+scale choice to every other school the instant they set one — caught
+before it shipped, not after. Fixed with a school-scoped mapping table
+instead (`20260905040000_coscholastic_grade_scale.sql`,
+`coscholastic_area_grade_scales`, PK `(school_id, area_id)`) — works
+identically whether the area is a shared system row or a school's own
+custom one, with zero cross-school leakage.
+
+**Backend**: `coscholasticAreas.routes.ts` — `GET /` now left-joins each
+area with this school's own scale (if any) via the mapping table; new
+`PUT /:id/grade-scale` sets or clears it (valid on a system OR custom area
+alike — assigning a scale isn't "editing the built-in definition" the
+`is_system` guard exists to protect, so it doesn't apply here).
+`resultGroups.routes.ts`'s `GET /:id/coscholastic` (the grading grid's own
+fetch) does the same join so the grid has what it needs in one request.
+
+**Frontend**: Result Settings' Co-Scholastic Areas tab gains a per-area
+Select (reusing the already-fetched `exam-grade-scales` query, so this is
+free) with a "Free text (no scale)" option that clears the mapping. The
+Term detail page's grading grid renders a `Select` of that scale's grade
+labels when one's configured, falling back to the original free-text
+`Input` when it isn't — so an area a school hasn't gotten around to
+configuring yet still works exactly as before, it just isn't a dropdown.
+
+### Verification
+
+- `npx esbuild` clean on every touched file (backend and frontend).
+- `resultComputation.test.ts` re-run clean (44/44) — untouched, this fix
+  never came near the computation core.
+- Migration applied to the live database and verified
+  (`coscholastic_area_grade_scales` exists with the expected FK/PK shape).
+- Not yet done: a live click-through of the actual picker + grid (assign a
+  scale to Discipline, confirm the Term grid renders a dropdown of that
+  scale's labels, confirm a different school/class sees free text until
+  it configures its own scale).

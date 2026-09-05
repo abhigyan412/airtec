@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useParams, useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { api, admitCardApi, documentsApi, classesApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -10,7 +10,7 @@ import { STATUS_VARIANT } from '@/components/exams/statusVariant'
 import { DatesheetGrid } from '@/components/exams/DatesheetGrid'
 import { AnnounceExamDialog } from '@/components/exams/AnnounceExamDialog'
 import { cn, formatDate } from '@/lib/utils'
-import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone, BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone, BookOpen, ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
@@ -32,7 +32,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select'
 
-const TABS = ['Datesheet', 'Marks Entry', 'Results']
+const TABS = ['Datesheet', 'Marks Entry', 'Results', 'Moderation']
 
 const titleCase = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
@@ -40,6 +40,7 @@ export default function ExamDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { can } = usePermissions()
   const canGenerateResults = can('exam.result_generate')
+  const canManageSettings = can('exam.result_settings_manage')
   const searchParams = useSearchParams()
   const initialTab = searchParams.get('tab')
   const [tab, setTab] = useState(TABS.includes(initialTab as any) ? initialTab! : 'Datesheet')
@@ -178,7 +179,7 @@ export default function ExamDetailPage() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
-          {TABS.map(t => (
+          {TABS.filter(t => t !== 'Moderation' || canManageSettings).map(t => (
             <TabsTrigger key={t} value={t}>{t}</TabsTrigger>
           ))}
         </TabsList>
@@ -237,11 +238,18 @@ export default function ExamDetailPage() {
             <TermMembershipWarning memberships={exam.term_memberships ?? []} />
             {(exam.term_memberships ?? []).length > 0 && <ComponentReleasePipeline examId={id} exam={exam} />}
             <FreezePublishPipeline examId={id} exam={exam} />
+            <CompartmentActionCard examId={id} exam={exam} />
             {(exam.term_memberships ?? []).length > 0
               ? <ScoresheetView examId={id} />
               : <ResultsView examId={id} />}
           </div>
         </TabsContent>
+
+        {canManageSettings && (
+          <TabsContent value="Moderation" className="mt-6">
+            <ModerationTab examId={id} examSubjects={examSubjects} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {showAddSubject && (
@@ -885,6 +893,10 @@ function MarksEntry({ examId, exam }: any) {
 
   const selectedSubjectRow = subjectsForClass.find((sub: any) => sub.id === selectedSubject)
   const isSplit = selectedSubjectRow?.theory_max_marks != null && selectedSubjectRow?.practical_max_marks != null
+  // Extra components (Written/Oral/Project/...), beyond Theory/Practical
+  // above — most subjects have none, so this is usually an empty array
+  // and nothing about the Theory/Practical/plain rendering below changes.
+  const extraComponents = (sheetData?.extra_components ?? []).filter((c: any) => c.exam_subject_id === selectedSubject)
   // Resolved once per class by GET /marks/:class_id (Result Settings ->
   // Class Rules/Subject Overrides), keyed by subject name — tells this
   // screen whether the subject is grade_only (no numeric marks at all)
@@ -909,6 +921,10 @@ function MarksEntry({ examId, exam }: any) {
           marks_obtained: m.absent ? null : Number(m.marks),
           is_absent: m.absent ?? false,
         }),
+        extra_component_marks: extraComponents.map((c: any) => {
+          const cv = m.components?.[c.id] ?? {}
+          return { component_id: c.id, marks_obtained: cv.absent ? null : (cv.obtained === '' || cv.obtained == null ? null : Number(cv.obtained)), is_absent: cv.absent ?? false }
+        }),
       })),
     }),
     onSuccess: () => {
@@ -923,6 +939,13 @@ function MarksEntry({ examId, exam }: any) {
   const initMarks = () => {
     if (!sheetData || !selectedSubject) return
     const existing = (sheetData.marks ?? []).filter((m: any) => m.exam_subject_id === selectedSubject)
+    const componentIdsForSubject = new Set((sheetData.extra_components ?? []).filter((c: any) => c.exam_subject_id === selectedSubject).map((c: any) => c.id))
+    const componentMarksByStudent = new Map<string, Record<string, any>>()
+    for (const cm of (sheetData.component_marks ?? [])) {
+      if (!componentIdsForSubject.has(cm.exam_subject_extra_component_id)) continue
+      if (!componentMarksByStudent.has(cm.student_id)) componentMarksByStudent.set(cm.student_id, {})
+      componentMarksByStudent.get(cm.student_id)![cm.exam_subject_extra_component_id] = { obtained: cm.marks_obtained ?? '', absent: cm.is_absent }
+    }
     const init: Record<string, any> = {}
     for (const m of existing) {
       init[m.student_id] = {
@@ -930,7 +953,14 @@ function MarksEntry({ examId, exam }: any) {
         theory: m.theory_marks_obtained ?? '', practical: m.practical_marks_obtained ?? '',
         theoryAbsent: m.theory_is_absent ?? false, practicalAbsent: m.practical_is_absent ?? false,
         grade: m.grade ?? '',
+        components: componentMarksByStudent.get(m.student_id) ?? {},
       }
+    }
+    // A student with no student_marks row yet for this subject can still
+    // have entered extra-component marks in a prior save (or vice versa) —
+    // make sure every student with ANY component mark gets an entry too.
+    for (const [studentId, components] of componentMarksByStudent) {
+      if (!init[studentId]) init[studentId] = { marks: '', absent: false, theory: '', practical: '', theoryAbsent: false, practicalAbsent: false, grade: '', components }
     }
     setMarksData(init)
   }
@@ -1018,6 +1048,9 @@ function MarksEntry({ examId, exam }: any) {
                         <TableHead className="w-24">Absent</TableHead>
                       </>
                     )}
+                    {extraComponents.map((c: any) => (
+                      <TableHead key={c.id} className="w-28">{c.component_label} (out of {c.max_marks})</TableHead>
+                    ))}
                     {canOverride && <TableHead className="w-20"></TableHead>}
                   </TableRow>
                 </TableHeader>
@@ -1098,6 +1131,24 @@ function MarksEntry({ examId, exam }: any) {
                             </TableCell>
                           </>
                         )}
+                        {extraComponents.map((c: any) => {
+                          const cv = m.components?.[c.id] ?? {}
+                          return (
+                            <TableCell key={c.id}>
+                              <div className="flex items-center gap-1">
+                                <Input type="number" min="0" max={c.max_marks}
+                                  value={cv.obtained ?? ''}
+                                  disabled={cv.absent}
+                                  onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], components: { ...d[s.id]?.components, [c.id]: { ...cv, obtained: e.target.value } } } }))}
+                                  className="h-8" />
+                                <input type="checkbox" checked={cv.absent ?? false}
+                                  aria-label={`Mark ${s.first_name} ${s.last_name} absent for ${c.component_label}`}
+                                  onChange={e => setMarksData(d => ({ ...d, [s.id]: { ...d[s.id], components: { ...d[s.id]?.components, [c.id]: { ...cv, absent: e.target.checked, obtained: '' } } } }))}
+                                  className="h-4 w-4 shrink-0 rounded border-input accent-primary" />
+                              </div>
+                            </TableCell>
+                          )
+                        })}
                         {canOverride && (
                           <TableCell>
                             <Button variant="ghost" size="sm" className="text-xs text-muted-foreground hover:text-primary"
@@ -1212,6 +1263,231 @@ function StudentOverrideModal({ examId, student, examSubjectId, onClose }: any) 
 // section instead, collapsed by default, so opening the page doesn't
 // dump a thousand rows at once and each group's rank is locally
 // meaningful again.
+
+// A compartment re-take is a real exam of its own (exam_type='compartment',
+// linked back via compartment_of_exam_id) so it reuses Datesheet/Marks
+// Entry/Generate Results completely unmodified — this card only surfaces
+// the two compartment-specific moments: creating that exam from exactly
+// the subjects each flagged student failed, and merging its results back
+// onto the original report card once it has its own results generated.
+// A cohort-wide, auditable, reversible adjustment — the systemic
+// counterpart to the per-student grace-marks Override action already on
+// Marks Entry, which only ever touches one student at a time. Deleting a
+// rule and re-running Generate Results is the entire "reverse it"
+// mechanism; nothing here is separately applied or materialized, so the
+// note below always tells the admin to (re)run Generate Results.
+function ModerationTab({ examId, examSubjects }: { examId: string, examSubjects: any[] }) {
+  const qc = useQueryClient()
+  const [ruleType, setRuleType] = useState<'flat_grace_band' | 'scale_factor'>('flat_grace_band')
+  const [subjectId, setSubjectId] = useState<string>('')
+  const [bandMin, setBandMin] = useState('')
+  const [bandMax, setBandMax] = useState('')
+  const [graceAmount, setGraceAmount] = useState('')
+  const [scaleFactor, setScaleFactor] = useState('')
+
+  const { data: rules, isLoading } = useQuery({
+    queryKey: ['moderation-rules', examId],
+    queryFn: () => api.get(`/exams/${examId}/moderation-rules`).then(r => r.data.data as any[]),
+  })
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['moderation-rules', examId] })
+
+  const createMutation = useMutation({
+    mutationFn: () => api.post(`/exams/${examId}/moderation-rules`, {
+      exam_subject_id: subjectId || null,
+      rule_type: ruleType,
+      band_min_percent: ruleType === 'flat_grace_band' && bandMin !== '' ? Number(bandMin) : null,
+      band_max_percent: ruleType === 'flat_grace_band' && bandMax !== '' ? Number(bandMax) : null,
+      grace_amount: ruleType === 'flat_grace_band' ? Number(graceAmount) : null,
+      scale_factor: ruleType === 'scale_factor' ? Number(scaleFactor) : null,
+    }),
+    onSuccess: () => {
+      toast.success('Rule added — run Generate Results again for it to take effect.')
+      setBandMin(''); setBandMax(''); setGraceAmount(''); setScaleFactor(''); setSubjectId('')
+      invalidate()
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to add rule'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (ruleId: string) => api.delete(`/exams/${examId}/moderation-rules/${ruleId}`),
+    onSuccess: () => { toast.success('Rule removed — run Generate Results again to reverse its effect.'); invalidate() },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to remove rule'),
+  })
+
+  const canSubmit = ruleType === 'flat_grace_band' ? graceAmount !== '' : scaleFactor !== ''
+
+  return (
+    <div className="space-y-5">
+      <Card className="space-y-4 p-5">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Add a moderation rule</h3>
+          <p className="text-xs text-muted-foreground">
+            A cohort-wide adjustment to raw scores — before any per-student grace marks, before the aggregate is
+            computed. Applies to every student in this exam matching the rule, not one at a time. Add or remove
+            rules freely, then (re)run Generate Results on the Results tab for the change to take effect.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Subject</Label>
+            <Select value={subjectId || 'all'} onValueChange={v => setSubjectId(v === 'all' ? '' : v)}>
+              <SelectTrigger className="h-9 w-48"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Every subject</SelectItem>
+                {examSubjects.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.subject_name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Type</Label>
+            <Select value={ruleType} onValueChange={v => setRuleType(v as any)}>
+              <SelectTrigger className="h-9 w-48"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="flat_grace_band">Grace marks in a band</SelectItem>
+                <SelectItem value="scale_factor">Scale factor</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {ruleType === 'flat_grace_band' ? (
+            <>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Band min %</Label>
+                <Input className="h-9 w-24" type="number" value={bandMin} onChange={e => setBandMin(e.target.value)} placeholder="e.g. 28" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Band max %</Label>
+                <Input className="h-9 w-24" type="number" value={bandMax} onChange={e => setBandMax(e.target.value)} placeholder="e.g. 32" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Grace marks</Label>
+                <Input className="h-9 w-24" type="number" value={graceAmount} onChange={e => setGraceAmount(e.target.value)} placeholder="e.g. 5" />
+              </div>
+            </>
+          ) : (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Scale factor</Label>
+              <Input className="h-9 w-24" type="number" step="0.01" value={scaleFactor} onChange={e => setScaleFactor(e.target.value)} placeholder="e.g. 1.1" />
+            </div>
+          )}
+          <Button size="sm" onClick={() => createMutation.mutate()} disabled={createMutation.isPending || !canSubmit}>
+            <Plus className="h-4 w-4" /> Add Rule
+          </Button>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="border-b border-border px-6 py-4">
+          <h3 className="text-sm font-semibold text-foreground">Active rules</h3>
+        </div>
+        {isLoading ? (
+          <div className="space-y-2 p-6">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+        ) : !rules?.length ? (
+          <div className="p-6"><EmptyState icon={BarChart2} title="No moderation rules" description="Nothing is being adjusted for this exam — every student's raw marks feed straight into results." /></div>
+        ) : (
+          <div className="divide-y divide-border">
+            {rules.map((r: any) => (
+              <div key={r.id} className="flex items-center justify-between gap-3 px-6 py-3">
+                <div className="text-sm text-foreground">
+                  <span className="font-medium">{r.exam_subjects?.subject_name ?? 'Every subject'}</span>
+                  {' — '}
+                  {r.rule_type === 'flat_grace_band'
+                    ? `+${r.grace_amount} marks for ${r.band_min_percent ?? 0}–${r.band_max_percent ?? 100}%`
+                    : `×${r.scale_factor} scale`}
+                </div>
+                <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" onClick={() => deleteMutation.mutate(r.id)} disabled={deleteMutation.isPending}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+function CompartmentActionCard({ examId, exam }: { examId: string, exam: any }) {
+  const router = useRouter()
+  const { can } = usePermissions()
+  const canGenerate = can('exam.result_generate')
+  const [reason, setReason] = useState('')
+
+  // Shares the same queryKey ResultsView already fetches under — react
+  // query dedupes this against that request rather than firing a second
+  // one, so checking for compartment-status rows here is free.
+  const { data: resultsData } = useQuery({
+    queryKey: ['results', examId],
+    queryFn: () => api.get(`/exams/${examId}/results`).then(r => r.data.data),
+  })
+  const hasCompartmentStudents = (resultsData ?? []).some((r: any) => r.result_status === 'compartment')
+
+  const createMutation = useMutation({
+    mutationFn: () => api.post(`/exams/${examId}/compartment/create`, {}),
+    onSuccess: (r: any) => {
+      toast.success(`Compartment exam created — ${r.data.data.subjects_created} subject row(s) for ${r.data.data.students_involved} student(s).`)
+      router.push(`/exams/${r.data.data.exam.id}`)
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to create compartment exam'),
+  })
+
+  const finalizeMutation = useMutation({
+    mutationFn: () => api.post(`/exams/${examId}/compartment/finalize`, { reason: reason.trim() }),
+    onSuccess: (r: any) => {
+      toast.success(`Finalized ${r.data.data.finalized_count} student(s)' compartment results.`)
+      setReason('')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to finalize compartment results'),
+  })
+
+  if (exam.exam_type === 'compartment') {
+    if (!canGenerate) return null
+    const canFinalize = ['result_declared', 'result_frozen', 'result_verified', 'result_published'].includes(exam.status)
+    return (
+      <Card className="space-y-3 p-4">
+        <div className="flex items-center gap-2">
+          <BarChart2 className="h-4 w-4 text-primary" />
+          <h4 className="text-sm font-semibold text-foreground">Finalize Compartment Results</h4>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Merges this exam's marks back onto the original exam's report cards, subject by subject — a re-take
+          replaces the failed attempt entirely, it never averages with it. Needs this exam's own results
+          generated first (Generate Results, above, once it's Completed).
+        </p>
+        <div className="space-y-1.5">
+          <Label htmlFor="compartment-reason">Reason (required — kept as an audit trail)</Label>
+          <Textarea
+            id="compartment-reason" rows={2} value={reason} onChange={e => setReason(e.target.value)}
+            placeholder="e.g. Compartment exam conducted 12 Oct 2026, results verified by Exam Controller"
+          />
+        </div>
+        <Button
+          onClick={() => finalizeMutation.mutate()}
+          disabled={finalizeMutation.isPending || !reason.trim() || !canFinalize}
+          title={!canFinalize ? 'Generate this exam\'s own results first' : undefined}
+        >
+          {finalizeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+          Finalize Compartment Results
+        </Button>
+      </Card>
+    )
+  }
+
+  if (!hasCompartmentStudents || !canGenerate) return null
+  return (
+    <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
+      <div>
+        <h4 className="text-sm font-semibold text-foreground">Compartment students found</h4>
+        <p className="text-xs text-muted-foreground">
+          Schedule a compartment re-take exam covering exactly the subjects each flagged student failed.
+        </p>
+      </div>
+      <Button variant="outline" onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
+        {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+        Schedule Compartment Exam
+      </Button>
+    </Card>
+  )
+}
 
 function ResultsView({ examId }: { examId: string }) {
   const { data, isLoading } = useQuery({
@@ -1336,6 +1612,11 @@ function ResultsView({ examId }: { examId: string }) {
                         </TableCell>
                         <TableCell>
                           <ResultStatusBadge status={rc.result_status} isPass={rc.is_pass} />
+                          {rc.compartment_revised_at && (
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              Compartment result recorded {formatDate(rc.compartment_revised_at)}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell>
                           <a href={documentsApi.reportCard(rc.exam_id, rc.student_id)}
@@ -1751,10 +2032,29 @@ function EditSubjectModal({ subject, onClose }: any) {
     theory_max_marks: subject.theory_max_marks ?? 70, theory_pass_marks: subject.theory_pass_marks ?? 25,
     practical_max_marks: subject.practical_max_marks ?? 30, practical_pass_marks: subject.practical_pass_marks ?? 10,
   })
+  const [components, setComponents] = useState<{ component_label: string; max_marks: number; pass_marks: number }[] | null>(null)
 
   const { data: timeSlots } = useQuery({
     queryKey: ['exam-time-slots'],
     queryFn: () => api.get('/exams/time-slots').then(r => r.data.data),
+  })
+
+  const { data: existingComponents } = useQuery({
+    queryKey: ['subject-components', subject.id],
+    queryFn: () => api.get(`/exams/subjects/${subject.id}/components`).then(r => r.data.data as any[]),
+  })
+  // Seed the editable list from the fetch exactly once — after that this
+  // component's own state is the source of truth for the row builder.
+  useEffect(() => {
+    if (components === null && existingComponents !== undefined) {
+      setComponents(existingComponents.map(c => ({ component_label: c.component_label, max_marks: Number(c.max_marks), pass_marks: Number(c.pass_marks) })))
+    }
+  }, [existingComponents])
+
+  const saveComponentsMutation = useMutation({
+    mutationFn: () => api.post(`/exams/subjects/${subject.id}/components`, { components: components ?? [] }),
+    onSuccess: () => toast.success('Components saved'),
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to save components'),
   })
 
   const updateMutation = useMutation({
@@ -1878,6 +2178,44 @@ function EditSubjectModal({ subject, onClose }: any) {
               </p>
             </div>
           )}
+
+          <div className="space-y-2 border-t border-border pt-4">
+            <div className="flex items-center justify-between">
+              <Label>Extra Components (beyond Theory/Practical)</Label>
+              <Button type="button" variant="ghost" size="sm"
+                onClick={() => setComponents(c => [...(c ?? []), { component_label: '', max_marks: 0, pass_marks: 0 }])}>
+                <Plus className="h-3.5 w-3.5" /> Add Component
+              </Button>
+            </div>
+            {!components?.length && (
+              <p className="text-xs text-muted-foreground">e.g. Written + Oral + Project, or a separate Internal Assessment component — none configured for this subject.</p>
+            )}
+            {components !== null && (
+              <div className="space-y-2">
+                {components.map((c, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Input placeholder="Label (e.g. Oral)" value={c.component_label}
+                      onChange={e => setComponents(cs => (cs ?? []).map((row, j) => j === i ? { ...row, component_label: e.target.value } : row))}
+                      className="h-8" />
+                    <Input type="number" placeholder="Max" value={c.max_marks}
+                      onChange={e => setComponents(cs => (cs ?? []).map((row, j) => j === i ? { ...row, max_marks: Number(e.target.value) } : row))}
+                      className="h-8 w-20" />
+                    <Input type="number" placeholder="Pass" value={c.pass_marks}
+                      onChange={e => setComponents(cs => (cs ?? []).map((row, j) => j === i ? { ...row, pass_marks: Number(e.target.value) } : row))}
+                      className="h-8 w-20" />
+                    <button type="button" onClick={() => setComponents(cs => (cs ?? []).filter((_, j) => j !== i))}
+                      className="text-muted-foreground hover:text-destructive">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <Button type="button" variant="outline" size="sm" onClick={() => saveComponentsMutation.mutate()} disabled={saveComponentsMutation.isPending}>
+                  {saveComponentsMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Save Components
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
         <DialogFooter className="sm:justify-between">
           <Button variant="ghost" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}

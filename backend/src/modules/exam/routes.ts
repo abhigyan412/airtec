@@ -13,9 +13,11 @@ import { ensureResultFreezePublishWorkflowDefinition } from '../rbac/seed'
 import resultSettingsRouter from './resultSettings.routes'
 import resultGroupsRouter, { resolveComponentRelease } from './resultGroups.routes'
 import termTemplatesRouter from './termTemplates.routes'
+import coscholasticAreasRouter from './coscholasticAreas.routes'
 import {
   ExamType, EffectiveSubjectRule, LEGACY_SUBJECT_RULE,
   resolveEffectiveClassRule, resolveEffectiveSubjectRule, gradeForPercent, computeReportCard,
+  overlayCompartmentMarks, StudentMarkRow, ModerationRule,
 } from './services/resultComputation'
 import { loadClassRules, loadSubjectOverrides, syncSubjectSplitOverride, fillSubjectMarksDefaults } from './services/resultRuleLoader'
 
@@ -24,6 +26,7 @@ router.use(authenticate)
 router.use('/result-settings', resultSettingsRouter)
 router.use('/result-groups', resultGroupsRouter)
 router.use('/term-templates', termTemplatesRouter)
+router.use('/coscholastic-areas', coscholasticAreasRouter)
 
 const CreateExamSchema = z.object({
     name: z.string().min(1),
@@ -474,6 +477,71 @@ router.delete('/subjects/:id', requirePermissionV2('exam.schedule'),
         const { error } = await supabase.from('exam_subjects').delete().eq('id', req.params.id).eq('school_id', req.user!.school_id)
         if (error) return res.status(400).json({ success: false, error: error.message })
         res.json({ success: true })
+    })
+)
+
+// ── POST /subjects/:id/components — extra components beyond the
+// existing Theory/Practical split (Written/Oral/Project/Internal
+// Assessment/...), which this never touches. Bulk replace-all for one
+// subject, same "server always recomputes the combined total, never
+// trusts a client-sent one" rule Theory/Practical already follows —
+// max_marks becomes this subject's own plain-or-split total PLUS every
+// component's max_marks. Derives that plain-or-split base by backing the
+// PREVIOUS set of components' total out of the subject's current
+// max_marks (rather than re-deriving it from theory/practical alone,
+// which would be wrong for a plain, unsplit subject) — idempotent across
+// repeated calls.
+const ExtraComponentSchema = z.object({
+    component_label: z.string().min(1),
+    max_marks: z.number().positive(),
+    pass_marks: z.number().min(0),
+    component_date: z.string().optional(),
+    start_time: z.string().optional(),
+    end_time: z.string().optional(),
+})
+const SetComponentsSchema = z.object({ components: z.array(ExtraComponentSchema) })
+
+router.get('/subjects/:id/components', requirePermissionV2('exam.schedule'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const { data, error } = await supabase.from('exam_subject_extra_components')
+            .select('*').eq('exam_subject_id', req.params.id).eq('school_id', req.user!.school_id).order('sort_order')
+        if (error) return res.status(500).json({ success: false, error: error.message })
+        res.json({ success: true, data })
+    })
+)
+
+router.post('/subjects/:id/components', requirePermissionV2('exam.schedule'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const { components } = SetComponentsSchema.parse(req.body)
+        const school_id = req.user!.school_id
+        const { data: subject } = await supabase.from('exam_subjects').select('*').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+        if (!subject) return res.status(404).json({ success: false, error: 'Subject not found' })
+
+        const { data: existingComponents } = await supabase.from('exam_subject_extra_components')
+            .select('max_marks').eq('exam_subject_id', req.params.id)
+        const oldExtraSum = (existingComponents ?? []).reduce((s, c) => s + Number(c.max_marks), 0)
+        const baseMax = Number(subject.max_marks) - oldExtraSum
+        const newExtraSum = components.reduce((s, c) => s + c.max_marks, 0)
+
+        const { error: deleteErr } = await supabase.from('exam_subject_extra_components').delete().eq('exam_subject_id', req.params.id)
+        if (deleteErr) return res.status(400).json({ success: false, error: deleteErr.message })
+
+        if (components.length) {
+            const { error: insertErr } = await supabase.from('exam_subject_extra_components').insert(
+                components.map((c, i) => ({
+                    school_id, exam_subject_id: req.params.id, component_label: c.component_label,
+                    max_marks: c.max_marks, pass_marks: c.pass_marks,
+                    component_date: c.component_date || null, start_time: c.start_time || null, end_time: c.end_time || null,
+                    sort_order: i,
+                })),
+            )
+            if (insertErr) return res.status(400).json({ success: false, error: insertErr.message })
+        }
+
+        const { data, error } = await supabase.from('exam_subjects')
+            .update({ max_marks: baseMax + newExtraSum }).eq('id', req.params.id).select().single()
+        if (error) return res.status(400).json({ success: false, error: error.message })
+        res.json({ success: true, data })
     })
 )
 
@@ -1005,12 +1073,39 @@ router.post('/auto-start/run', requirePermissionV2('exam.create'), asyncHandler(
 router.get('/:id/marks/:class_id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id, class_id } = req.params
     const school_id = req.user!.school_id
-    const [{ data: subjects }, { data: students }, { data: exam }] = await Promise.all([
+    const [{ data: subjects }, { data: allStudents }, { data: exam }] = await Promise.all([
         supabase.from('exam_subjects').select('*').eq('exam_id', id).eq('class_id', class_id).eq('school_id', school_id),
         supabase.from('students').select('id, first_name, last_name, roll_number, admission_number').eq('class_id', class_id).eq('school_id', school_id).eq('status', 'active').order('roll_number'),
-        supabase.from('exams').select('exam_type').eq('id', id).eq('school_id', school_id).maybeSingle(),
+        supabase.from('exams').select('exam_type, compartment_of_exam_id').eq('id', id).eq('school_id', school_id).maybeSingle(),
     ])
-    const { data: marks } = await supabase.from('student_marks').select('*').eq('exam_id', id).eq('school_id', school_id).in('student_id', (students ?? []).map(s => s.id))
+
+    // A compartment exam's roster is only ever the students who actually
+    // carry result_status='compartment' on the original exam — narrower
+    // than "every active student in the class," so a teacher isn't shown
+    // (and can't accidentally enter marks for) a student who already
+    // passed and has nothing to re-take.
+    let students = allStudents ?? []
+    if (exam?.exam_type === 'compartment' && exam.compartment_of_exam_id) {
+        const { data: compartmentCards } = await supabase.from('report_cards')
+            .select('student_id').eq('exam_id', exam.compartment_of_exam_id).eq('school_id', school_id).eq('result_status', 'compartment')
+        const eligibleIds = new Set((compartmentCards ?? []).map(c => c.student_id))
+        students = students.filter(s => eligibleIds.has(s.id))
+    }
+
+    const { data: marks } = await supabase.from('student_marks').select('*').eq('exam_id', id).eq('school_id', school_id).in('student_id', students.map(s => s.id))
+
+    // Extra components (Written/Oral/Project/...), beyond Theory/Practical
+    // — most subjects have none. Returned flat; the frontend groups by
+    // exam_subject_id itself, same convention every other flat list on
+    // this route already follows.
+    const subjectIds = (subjects ?? []).map(s => s.id)
+    const { data: extraComponents } = subjectIds.length
+        ? await supabase.from('exam_subject_extra_components').select('*').in('exam_subject_id', subjectIds).order('sort_order')
+        : { data: [] as any[] }
+    const componentIds = (extraComponents ?? []).map(c => c.id)
+    const { data: componentMarks } = componentIds.length
+        ? await supabase.from('student_component_marks').select('*').in('exam_subject_extra_component_id', componentIds)
+        : { data: [] as any[] }
 
     const examType = (exam?.exam_type ?? 'other') as ExamType
     const [classRules, subjectOverrides] = await Promise.all([
@@ -1023,7 +1118,7 @@ router.get('/:id/marks/:class_id', asyncHandler(async (req: AuthRequest, res: Re
         subjectRules[s.subject_name] = resolveEffectiveSubjectRule(classRule, subjectOverrides, class_id, examType, s.subject_name)
     }
 
-    res.json({ success: true, data: { subjects, students, marks, class_rule: classRule, subject_rules: subjectRules } })
+    res.json({ success: true, data: { subjects, students, marks, class_rule: classRule, subject_rules: subjectRules, extra_components: extraComponents ?? [], component_marks: componentMarks ?? [] } })
 }))
 
 router.post('/:id/marks', requirePermissionV2('exam.marks_entry'),
@@ -1092,6 +1187,25 @@ router.post('/:id/marks', requirePermissionV2('exam.marks_entry'),
         })
         const { data, error } = await supabase.from('student_marks').upsert(rows, { onConflict: 'exam_subject_id,student_id' }).select()
         if (error) return res.status(400).json({ success: false, error: error.message })
+
+        // Extra components (Written/Oral/Project/...), beyond Theory/
+        // Practical above — a separate child table, upserted alongside the
+        // main sheet save in the same request rather than a second round
+        // trip from the frontend. Absent here for every subject with no
+        // configured extra components (the overwhelming majority today).
+        const componentRows = marksData.flatMap((m: any) =>
+            (m.extra_component_marks ?? []).map((cm: any) => ({
+                school_id, exam_subject_extra_component_id: cm.component_id, student_id: m.student_id,
+                marks_obtained: cm.is_absent ? null : (cm.marks_obtained ?? null), is_absent: cm.is_absent ?? false,
+                entered_by: req.user!.id,
+            })),
+        )
+        if (componentRows.length) {
+            const { error: componentErr } = await supabase.from('student_component_marks')
+                .upsert(componentRows, { onConflict: 'exam_subject_extra_component_id,student_id' })
+            if (componentErr) return res.status(400).json({ success: false, error: componentErr.message })
+        }
+
         res.json({ success: true, data, count: rows.length })
     })
 )
@@ -1198,6 +1312,28 @@ router.post('/:id/generate-results', requirePermissionV2('exam.result_generate')
             supabase.from('student_marks').select('*', { count: 'exact' }).eq('exam_id', id).eq('school_id', school_id).order('id').range(from, to))
         if (!rawMarks?.length) return res.status(400).json({ success: false, error: 'No marks uploaded yet' })
 
+        // Extra components (Written/Oral/Project/...), beyond the existing
+        // Theory/Practical split — additive, most exams have zero rows
+        // here. Batched the same fetchAllRows way as everything else in
+        // this route, for the same reason.
+        const subjectIds = rawSubjects.map(s => s.id)
+        const rawExtraComponents = await fetchAllRows<any>((from, to) =>
+            supabase.from('exam_subject_extra_components').select('*', { count: 'exact' }).in('exam_subject_id', subjectIds).order('sort_order').range(from, to))
+        const componentIds = rawExtraComponents.map(c => c.id)
+        const rawComponentMarks = componentIds.length
+            ? await fetchAllRows<any>((from, to) =>
+                supabase.from('student_component_marks').select('*', { count: 'exact' }).in('exam_subject_extra_component_id', componentIds).order('id').range(from, to))
+            : []
+        const extraComponentsBySubject = new Map<string, any[]>()
+        for (const c of rawExtraComponents) {
+            if (!extraComponentsBySubject.has(c.exam_subject_id)) extraComponentsBySubject.set(c.exam_subject_id, [])
+            extraComponentsBySubject.get(c.exam_subject_id)!.push(c)
+        }
+        const componentMarkByStudentAndComponent = new Map<string, any>()
+        for (const cm of rawComponentMarks) {
+            componentMarkByStudentAndComponent.set(`${cm.student_id}:${cm.exam_subject_extra_component_id}`, cm)
+        }
+
         // An exam that's also a Term member still gets its own full
         // report card computed here — reverted from an earlier attempt
         // at skipping this for Term members (kept only the marks-
@@ -1226,10 +1362,19 @@ router.post('/:id/generate-results', requirePermissionV2('exam.result_generate')
         }
         const involvedClassIds = [...new Set([...subjectsByClass.keys(), ...classIdByStudent.values()])]
 
-        const [classRules, subjectOverrides] = await Promise.all([
+        const [classRules, subjectOverrides, { data: rawModerationRules }] = await Promise.all([
             loadClassRules(school_id, involvedClassIds),
             loadSubjectOverrides(school_id, involvedClassIds),
+            supabase.from('exam_moderation_rules').select('*').eq('exam_id', id).eq('school_id', school_id),
         ])
+        const moderationRules: ModerationRule[] = (rawModerationRules ?? []).map(r => ({
+            exam_subject_id: r.exam_subject_id,
+            rule_type: r.rule_type,
+            band_min_percent: r.band_min_percent == null ? null : Number(r.band_min_percent),
+            band_max_percent: r.band_max_percent == null ? null : Number(r.band_max_percent),
+            grace_amount: r.grace_amount == null ? null : Number(r.grace_amount),
+            scale_factor: r.scale_factor == null ? null : Number(r.scale_factor),
+        }))
 
         const marksByStudent = new Map<string, typeof rawMarks>()
         for (const m of rawMarks) {
@@ -1249,6 +1394,9 @@ router.post('/:id/generate-results', requirePermissionV2('exam.result_generate')
                 theory_pass_marks: s.theory_pass_marks == null ? null : Number(s.theory_pass_marks),
                 practical_max_marks: s.practical_max_marks == null ? null : Number(s.practical_max_marks),
                 practical_pass_marks: s.practical_pass_marks == null ? null : Number(s.practical_pass_marks),
+                extra_components: (extraComponentsBySubject.get(s.id) ?? []).map(c => ({
+                    id: c.id, max_marks: Number(c.max_marks), pass_marks: Number(c.pass_marks),
+                })),
             }))
             const marksBySubjectId = new Map(marks.map(m => [m.exam_subject_id, {
                 marks_obtained: m.marks_obtained == null ? null : Number(m.marks_obtained),
@@ -1260,6 +1408,10 @@ router.post('/:id/generate-results', requirePermissionV2('exam.result_generate')
                 grade: m.grade,
                 grace_marks_applied: Number(m.grace_marks_applied ?? 0),
                 result_status_override: m.result_status_override,
+                extra_component_marks: (extraComponentsBySubject.get(m.exam_subject_id) ?? []).map(c => {
+                    const cm = componentMarkByStudentAndComponent.get(`${student_id}:${c.id}`)
+                    return { component_id: c.id, obtained: cm?.marks_obtained == null ? null : Number(cm.marks_obtained), is_absent: cm?.is_absent ?? false }
+                }),
             }]))
 
             const result = computeReportCard({
@@ -1270,6 +1422,7 @@ router.post('/:id/generate-results', requirePermissionV2('exam.result_generate')
                     classId
                         ? resolveEffectiveSubjectRule(classRule, subjectOverrides, classId, examType, subjectName)
                         : LEGACY_SUBJECT_RULE,
+                moderationRules,
             })
 
             return {
@@ -1278,6 +1431,7 @@ router.post('/:id/generate-results', requirePermissionV2('exam.result_generate')
                 grade: result.grade, overall_cgpa: result.overall_cgpa,
                 is_pass: result.is_pass, result_status: result.result_status,
                 grace_marks_applied_total: result.grace_marks_applied_total,
+                moderation_marks_applied_total: result.moderation_marks_applied_total,
                 remarks: result.remarks, remarks_source: result.remarks_source,
             }
         })
@@ -1300,6 +1454,335 @@ router.post('/:id/generate-results', requirePermissionV2('exam.result_generate')
         await supabase.from('exams').update({ status: released ? 'result_frozen' : 'result_declared' }).eq('id', id)
 
         res.json({ success: true, data: { report_cards_generated: data?.length, released } })
+    })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// MODERATION RULES — cohort-wide, auditable, reversible adjustments
+// ═══════════════════════════════════════════════════════════════
+//
+// The systemic counterpart to per-student grace marks (PATCH
+// .../marks/:student_id/:exam_subject_id/override), which only ever touch
+// one student at a time. Rules are read fresh by generate-results every
+// time it runs (see above) — since that route already recomputes and
+// upserts every report_cards row unconditionally, adding, editing or
+// deleting a rule here and simply re-running Generate Results is the
+// entire apply/reverse mechanism; nothing here is ever separately
+// materialized.
+
+router.get('/:id/moderation-rules', requirePermissionV2('exam.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { data, error } = await supabase.from('exam_moderation_rules')
+        .select('*, exam_subjects(subject_name)').eq('exam_id', req.params.id).eq('school_id', req.user!.school_id).order('created_at')
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+}))
+
+const CreateModerationRuleSchema = z.object({
+    exam_subject_id: z.string().nullable().optional(),
+    rule_type: z.enum(['flat_grace_band', 'scale_factor']),
+    band_min_percent: z.number().nullable().optional(),
+    band_max_percent: z.number().nullable().optional(),
+    grace_amount: z.number().nullable().optional(),
+    scale_factor: z.number().nullable().optional(),
+}).refine(b => b.rule_type !== 'flat_grace_band' || b.grace_amount != null, { message: 'grace_amount is required for a flat_grace_band rule' })
+  .refine(b => b.rule_type !== 'scale_factor' || b.scale_factor != null, { message: 'scale_factor is required for a scale_factor rule' })
+
+router.post('/:id/moderation-rules', requirePermissionV2('exam.result_settings_manage'), asyncHandler(async (req: AuthRequest, res: Response) => {
+    const body = CreateModerationRuleSchema.parse(req.body)
+    const { data, error } = await supabase.from('exam_moderation_rules')
+        .insert({ ...body, exam_id: req.params.id, school_id: req.user!.school_id, created_by: req.user!.id })
+        .select('*, exam_subjects(subject_name)').single()
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.status(201).json({ success: true, data })
+}))
+
+router.delete('/:id/moderation-rules/:rule_id', requirePermissionV2('exam.result_settings_manage'), asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { error } = await supabase.from('exam_moderation_rules')
+        .delete().eq('id', req.params.rule_id).eq('exam_id', req.params.id).eq('school_id', req.user!.school_id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    res.json({ success: true })
+}))
+
+// ═══════════════════════════════════════════════════════════════
+// COMPARTMENT RE-EXAMS
+// ═══════════════════════════════════════════════════════════════
+//
+// compartment_policy ('allow' + compartment_max_failed_subjects) has always
+// been able to flag a report_cards row result_status='compartment', but
+// nothing let a school act on that flag — no way to record the student's
+// re-take and produce a revised final result. A compartment re-take is
+// modeled as a real exam (exam_type='compartment', linked back via
+// compartment_of_exam_id) so the entire existing lifecycle — datesheet,
+// Marks Entry, generate-results — works completely unmodified; these two
+// routes only handle the two compartment-specific moments: building that
+// exam's datesheet from exactly the subjects each compartment student
+// failed, and merging its results back onto the original report card.
+
+type ExamSubjectRowRaw = {
+    id: string; class_id: string; subject_name: string; section_id?: string | null
+    max_marks: number; pass_marks: number
+    theory_max_marks: number | null; theory_pass_marks: number | null
+    practical_max_marks: number | null; practical_pass_marks: number | null
+}
+
+function toExamSubjectRow(s: ExamSubjectRowRaw) {
+    return {
+        id: s.id, subject_name: s.subject_name,
+        max_marks: Number(s.max_marks), pass_marks: Number(s.pass_marks),
+        theory_max_marks: s.theory_max_marks == null ? null : Number(s.theory_max_marks),
+        theory_pass_marks: s.theory_pass_marks == null ? null : Number(s.theory_pass_marks),
+        practical_max_marks: s.practical_max_marks == null ? null : Number(s.practical_max_marks),
+        practical_pass_marks: s.practical_pass_marks == null ? null : Number(s.practical_pass_marks),
+    }
+}
+
+function toStudentMarkRow(m: any): StudentMarkRow {
+    return {
+        marks_obtained: m?.marks_obtained == null ? null : Number(m.marks_obtained),
+        is_absent: m?.is_absent ?? false,
+        theory_marks_obtained: m?.theory_marks_obtained == null ? null : Number(m.theory_marks_obtained),
+        practical_marks_obtained: m?.practical_marks_obtained == null ? null : Number(m.practical_marks_obtained),
+        theory_is_absent: m?.theory_is_absent ?? false,
+        practical_is_absent: m?.practical_is_absent ?? false,
+        grade: m?.grade ?? null,
+        grace_marks_applied: Number(m?.grace_marks_applied ?? 0),
+        result_status_override: m?.result_status_override ?? null,
+    }
+}
+
+router.post('/:id/compartment/create', requirePermissionV2('exam.result_generate'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const { id } = req.params
+        const school_id = req.user!.school_id
+
+        const { data: original } = await supabase.from('exams').select('id, name, exam_type, academic_year_id').eq('id', id).eq('school_id', school_id).maybeSingle()
+        if (!original) return res.status(404).json({ success: false, error: 'Exam not found' })
+
+        const { data: compartmentCards } = await supabase.from('report_cards')
+            .select('id, student_id').eq('exam_id', id).eq('school_id', school_id).eq('result_status', 'compartment')
+        if (!compartmentCards?.length) {
+            return res.status(400).json({ success: false, error: 'No compartment-status students found for this exam.' })
+        }
+
+        const studentIds = compartmentCards.map(c => c.student_id)
+        const [rawSubjects, rawMarks, { data: studentRows }] = await Promise.all([
+            fetchAllRows<ExamSubjectRowRaw>((from, to) =>
+                supabase.from('exam_subjects').select('*', { count: 'exact' }).eq('exam_id', id).eq('school_id', school_id).order('id').range(from, to)),
+            fetchAllRows<any>((from, to) =>
+                supabase.from('student_marks').select('*', { count: 'exact' }).eq('exam_id', id).eq('school_id', school_id).in('student_id', studentIds).order('id').range(from, to)),
+            supabase.from('students').select('id, class_id').eq('school_id', school_id).in('id', studentIds),
+        ])
+
+        const examType = (original.exam_type ?? 'other') as ExamType
+        const classIdByStudent = new Map((studentRows ?? []).map(s => [s.id, s.class_id as string]))
+        const involvedClassIds = [...new Set(classIdByStudent.values())]
+        const [classRules, subjectOverrides] = await Promise.all([
+            loadClassRules(school_id, involvedClassIds),
+            loadSubjectOverrides(school_id, involvedClassIds),
+        ])
+        const subjectsByClass = new Map<string, ExamSubjectRowRaw[]>()
+        for (const s of rawSubjects ?? []) {
+            if (!subjectsByClass.has(s.class_id)) subjectsByClass.set(s.class_id, [])
+            subjectsByClass.get(s.class_id)!.push(s)
+        }
+        const marksByStudent = new Map<string, any[]>()
+        for (const m of rawMarks ?? []) {
+            if (!marksByStudent.has(m.student_id)) marksByStudent.set(m.student_id, [])
+            marksByStudent.get(m.student_id)!.push(m)
+        }
+
+        // Union of (class_id, subject) pairs failed by AT LEAST ONE
+        // compartment student in that class — the new compartment exam's
+        // own datesheet. A student who passed a given subject just never
+        // gets marks entered for it here (same "not every student needs
+        // every row" tolerance ScoresheetView already relies on).
+        const failedSubjectsByClass = new Map<string, Map<string, ExamSubjectRowRaw>>()
+        for (const studentId of studentIds) {
+            const classId = classIdByStudent.get(studentId)
+            if (!classId) continue
+            const subjectsForClass = subjectsByClass.get(classId) ?? []
+            const classRule = resolveEffectiveClassRule(classRules, classId, examType)
+            const marks = marksByStudent.get(studentId) ?? []
+            const marksBySubjectId = new Map(marks.map(m => [m.exam_subject_id, toStudentMarkRow(m)]))
+            const result = computeReportCard({
+                subjects: subjectsForClass.map(toExamSubjectRow),
+                marksBySubjectId,
+                classRule,
+                resolveSubjectRule: subjectName => resolveEffectiveSubjectRule(classRule, subjectOverrides, classId, examType, subjectName),
+            })
+            if (!failedSubjectsByClass.has(classId)) failedSubjectsByClass.set(classId, new Map())
+            const classMap = failedSubjectsByClass.get(classId)!
+            for (const o of result.subject_outcomes) {
+                if (o.include_in_aggregate && !o.is_pass && !classMap.has(o.subject_name)) {
+                    const originalSubject = subjectsForClass.find(s => s.subject_name === o.subject_name)
+                    if (originalSubject) classMap.set(o.subject_name, originalSubject)
+                }
+            }
+        }
+
+        if (![...failedSubjectsByClass.values()].some(m => m.size > 0)) {
+            return res.status(400).json({ success: false, error: 'Could not determine any failed subjects to re-examine — the compartment-flagged students may have no per-subject failures under the current rules.' })
+        }
+
+        const { data: newExam, error: examErr } = await supabase.from('exams').insert({
+            school_id, name: `${original.name} — Compartment`, exam_type: 'compartment',
+            academic_year_id: original.academic_year_id, compartment_of_exam_id: id,
+            status: 'draft', created_by: req.user!.id,
+        }).select().single()
+        if (examErr || !newExam) return res.status(400).json({ success: false, error: examErr?.message ?? 'Failed to create compartment exam' })
+
+        const newSubjectRows: any[] = []
+        for (const [classId, subjectsMap] of failedSubjectsByClass) {
+            for (const s of subjectsMap.values()) {
+                newSubjectRows.push({
+                    school_id, exam_id: newExam.id, class_id: classId, subject_name: s.subject_name,
+                    section_id: s.section_id ?? null,
+                    max_marks: s.max_marks, pass_marks: s.pass_marks,
+                    theory_max_marks: s.theory_max_marks, theory_pass_marks: s.theory_pass_marks,
+                    practical_max_marks: s.practical_max_marks, practical_pass_marks: s.practical_pass_marks,
+                })
+            }
+        }
+        const { error: subjErr } = await supabase.from('exam_subjects').insert(newSubjectRows)
+        if (subjErr) {
+            // Roll back the orphaned exam rather than leave a subject-less
+            // compartment exam behind — same whole-request-rollback
+            // convention every other apply-a-template route in this module
+            // already uses.
+            await supabase.from('exams').delete().eq('id', newExam.id)
+            return res.status(400).json({ success: false, error: subjErr.message })
+        }
+
+        res.status(201).json({ success: true, data: { exam: newExam, subjects_created: newSubjectRows.length, students_involved: studentIds.length } })
+    })
+)
+
+// ── POST /:id/compartment/finalize ────────────────────────────
+// :id is the COMPARTMENT exam. Merges its marks back onto the ORIGINAL
+// exam's report_cards, one final time — a re-take supersedes the failed
+// attempt it's replacing, never averages with it. Always resolves the
+// class's DEFAULT rule (examType: null), never the original exam's own
+// type-specific override or a nonexistent 'compartment' one — the
+// promotion decision belongs to the class's overall policy, matching how
+// a composite Term's own generate-results already resolves
+// (resultGroups.routes.ts).
+router.post('/:id/compartment/finalize', requirePermissionV2('exam.result_generate'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const { id } = req.params
+        const school_id = req.user!.school_id
+        const reason = String(req.body?.reason ?? '').trim()
+        if (!reason) return res.status(400).json({ success: false, error: 'A reason is required to finalize compartment results.' })
+
+        const { data: compartmentExam } = await supabase.from('exams')
+            .select('id, exam_type, compartment_of_exam_id').eq('id', id).eq('school_id', school_id).maybeSingle()
+        if (!compartmentExam || compartmentExam.exam_type !== 'compartment' || !compartmentExam.compartment_of_exam_id) {
+            return res.status(400).json({ success: false, error: 'Not a compartment exam.' })
+        }
+        const originalExamId = compartmentExam.compartment_of_exam_id as string
+
+        const [{ data: compartmentSubjects }, { data: compartmentMarks }] = await Promise.all([
+            supabase.from('exam_subjects').select('id, subject_name').eq('exam_id', id).eq('school_id', school_id),
+            supabase.from('student_marks').select('*').eq('exam_id', id).eq('school_id', school_id),
+        ])
+        if (!compartmentMarks?.length) {
+            return res.status(400).json({ success: false, error: 'No marks recorded for the compartment exam yet.' })
+        }
+        const compartmentSubjectNameById = new Map((compartmentSubjects ?? []).map(s => [s.id, s.subject_name as string]))
+
+        const { data: originalCards } = await supabase.from('report_cards')
+            .select('*').eq('exam_id', originalExamId).eq('school_id', school_id).eq('result_status', 'compartment')
+        if (!originalCards?.length) return res.status(400).json({ success: false, error: 'No compartment-status report cards found on the original exam.' })
+
+        const studentIds = originalCards.map(c => c.student_id)
+        const [{ data: studentRows }, rawOriginalSubjects, rawOriginalMarks] = await Promise.all([
+            supabase.from('students').select('id, class_id').eq('school_id', school_id).in('id', studentIds),
+            fetchAllRows<ExamSubjectRowRaw>((from, to) =>
+                supabase.from('exam_subjects').select('*', { count: 'exact' }).eq('exam_id', originalExamId).eq('school_id', school_id).order('id').range(from, to)),
+            fetchAllRows<any>((from, to) =>
+                supabase.from('student_marks').select('*', { count: 'exact' }).eq('exam_id', originalExamId).eq('school_id', school_id).in('student_id', studentIds).order('id').range(from, to)),
+        ])
+
+        const classIdByStudent = new Map((studentRows ?? []).map(s => [s.id, s.class_id as string]))
+        const involvedClassIds = [...new Set(classIdByStudent.values())]
+        const [classRules, subjectOverrides] = await Promise.all([
+            loadClassRules(school_id, involvedClassIds),
+            loadSubjectOverrides(school_id, involvedClassIds),
+        ])
+
+        const originalSubjectsByClass = new Map<string, ExamSubjectRowRaw[]>()
+        for (const s of rawOriginalSubjects ?? []) {
+            if (!originalSubjectsByClass.has(s.class_id)) originalSubjectsByClass.set(s.class_id, [])
+            originalSubjectsByClass.get(s.class_id)!.push(s)
+        }
+        const originalMarksByStudent = new Map<string, any[]>()
+        for (const m of rawOriginalMarks ?? []) {
+            if (!originalMarksByStudent.has(m.student_id)) originalMarksByStudent.set(m.student_id, [])
+            originalMarksByStudent.get(m.student_id)!.push(m)
+        }
+        const compartmentMarksByStudent = new Map<string, any[]>()
+        for (const m of compartmentMarks) {
+            if (!compartmentMarksByStudent.has(m.student_id)) compartmentMarksByStudent.set(m.student_id, [])
+            compartmentMarksByStudent.get(m.student_id)!.push(m)
+        }
+
+        const revisions: any[] = []
+        const cardUpdates: any[] = []
+        for (const card of originalCards) {
+            const studentId = card.student_id as string
+            const classId = classIdByStudent.get(studentId)
+            if (!classId) continue
+            const originalSubjects = originalSubjectsByClass.get(classId) ?? []
+            const originalSubjectIdByName = new Map(originalSubjects.map(s => [s.subject_name, s.id]))
+
+            const originalMarksBySubjectId = new Map(
+                (originalMarksByStudent.get(studentId) ?? []).map(m => [m.exam_subject_id as string, toStudentMarkRow(m)]),
+            )
+            const compartmentMarksBySubjectName = new Map(
+                (compartmentMarksByStudent.get(studentId) ?? [])
+                    .map(m => [compartmentSubjectNameById.get(m.exam_subject_id), toStudentMarkRow(m)] as const)
+                    .filter((entry): entry is [string, StudentMarkRow] => entry[0] != null),
+            )
+            const mergedMarksBySubjectId = overlayCompartmentMarks(originalMarksBySubjectId, originalSubjectIdByName as Map<string, string>, compartmentMarksBySubjectName)
+
+            // Class default rule (examType: null) — never a type-specific
+            // override, see the route comment above.
+            const defaultClassRule = resolveEffectiveClassRule(classRules, classId, null)
+            const result = computeReportCard({
+                subjects: originalSubjects.map(toExamSubjectRow),
+                marksBySubjectId: mergedMarksBySubjectId,
+                classRule: defaultClassRule,
+                resolveSubjectRule: subjectName => resolveEffectiveSubjectRule(defaultClassRule, subjectOverrides, classId, null, subjectName),
+            })
+
+            revisions.push({
+                school_id, report_card_id: card.id, exam_id: originalExamId, student_id: studentId,
+                compartment_exam_id: id, reason, revised_by: req.user!.id,
+                previous_snapshot: {
+                    total_marks: card.total_marks, obtained_marks: card.obtained_marks, percentage: card.percentage,
+                    grade: card.grade, overall_cgpa: card.overall_cgpa, is_pass: card.is_pass,
+                    result_status: card.result_status, remarks: card.remarks, rank: card.rank,
+                },
+            })
+            cardUpdates.push({
+                id: card.id,
+                total_marks: result.total_marks, obtained_marks: result.obtained_marks, percentage: result.percentage,
+                grade: result.grade, overall_cgpa: result.overall_cgpa, is_pass: result.is_pass,
+                result_status: result.result_status, grace_marks_applied_total: result.grace_marks_applied_total,
+                remarks: result.remarks, remarks_source: result.remarks_source,
+            })
+        }
+
+        if (!cardUpdates.length) return res.status(400).json({ success: false, error: 'Nothing to finalize.' })
+
+        const { error: revErr } = await supabase.from('report_card_revisions').insert(revisions)
+        if (revErr) return res.status(400).json({ success: false, error: revErr.message })
+
+        for (const update of cardUpdates) {
+            const { id: cardId, ...patch } = update
+            await supabase.from('report_cards').update(patch).eq('id', cardId)
+        }
+
+        res.json({ success: true, data: { finalized_count: cardUpdates.length } })
     })
 )
 
@@ -1716,6 +2199,27 @@ router.get('/:id/results', asyncHandler(async (req: AuthRequest, res: Response) 
 
     const { data, error } = await query.order('rank')
     if (error) return res.status(500).json({ success: false, error: error.message })
+
+    // A card that's been through Compartment finalize once carries its
+    // most recent revision's timestamp so the Results tab can show
+    // "Compartment result recorded on <date>" instead of silently
+    // presenting the revised figures as if they were the original run.
+    const cardIds = (data ?? []).map((c: any) => c.id)
+    if (cardIds.length) {
+        const { data: revisions } = await supabase
+            .from('report_card_revisions')
+            .select('report_card_id, revised_at')
+            .in('report_card_id', cardIds)
+            .order('revised_at', { ascending: false })
+        const latestRevisionByCard = new Map<string, string>()
+        for (const r of revisions ?? []) {
+            if (!latestRevisionByCard.has(r.report_card_id)) latestRevisionByCard.set(r.report_card_id, r.revised_at)
+        }
+        for (const card of (data ?? []) as any[]) {
+            card.compartment_revised_at = latestRevisionByCard.get(card.id) ?? null
+        }
+    }
+
     res.json({ success: true, data })
 }))
 

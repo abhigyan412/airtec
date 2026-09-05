@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   computeGrade, gradeForPercent, roundValue, computeReportCard, computeSubjectOutcome,
   resolveEffectiveClassRule, resolveEffectiveSubjectRule, applyBestOfN, applySubstitution,
+  overlayCompartmentMarks,
   LEGACY_CLASS_RULE, LEGACY_SUBJECT_RULE, EffectiveClassRule, EffectiveSubjectRule,
-  ExamSubjectRow, StudentMarkRow, GradeBand,
+  ExamSubjectRow, StudentMarkRow, GradeBand, ModerationRule,
 } from './resultComputation'
 
 function subject(overrides: Partial<ExamSubjectRow> = {}): ExamSubjectRow {
@@ -180,9 +181,9 @@ describe('computeSubjectOutcome — grade_only excluded from aggregate', () => {
 describe('applyBestOfN', () => {
   it('drops the lowest-scoring subjects beyond N from the aggregate', () => {
     const outcomes = [
-      { exam_subject_id: 'a', subject_name: 'A', max_marks: 100, obtained_marks: 90, is_pass: true, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null },
-      { exam_subject_id: 'b', subject_name: 'B', max_marks: 100, obtained_marks: 30, is_pass: true, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null },
-      { exam_subject_id: 'c', subject_name: 'C', max_marks: 100, obtained_marks: 60, is_pass: true, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null },
+      { exam_subject_id: 'a', subject_name: 'A', max_marks: 100, obtained_marks: 90, is_pass: true, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null, moderation_marks_applied: 0 },
+      { exam_subject_id: 'b', subject_name: 'B', max_marks: 100, obtained_marks: 30, is_pass: true, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null, moderation_marks_applied: 0 },
+      { exam_subject_id: 'c', subject_name: 'C', max_marks: 100, obtained_marks: 60, is_pass: true, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null, moderation_marks_applied: 0 },
     ]
     const result = applyBestOfN(outcomes, 2)
     expect(result.find(o => o.exam_subject_id === 'a')!.include_in_aggregate).toBe(true)
@@ -190,7 +191,7 @@ describe('applyBestOfN', () => {
     expect(result.find(o => o.exam_subject_id === 'b')!.include_in_aggregate).toBe(false)
   })
   it('is a no-op when n is null', () => {
-    const outcomes = [{ exam_subject_id: 'a', subject_name: 'A', max_marks: 100, obtained_marks: 90, is_pass: true, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null }]
+    const outcomes = [{ exam_subject_id: 'a', subject_name: 'A', max_marks: 100, obtained_marks: 90, is_pass: true, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null, moderation_marks_applied: 0 }]
     expect(applyBestOfN(outcomes, null)).toEqual(outcomes)
   })
 })
@@ -198,8 +199,8 @@ describe('applyBestOfN', () => {
 describe('applySubstitution', () => {
   it('replaces a failed compulsory subject with a passing additional one', () => {
     const outcomes = [
-      { exam_subject_id: 'compulsory', subject_name: 'Sanskrit', max_marks: 100, obtained_marks: 10, is_pass: false, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null },
-      { exam_subject_id: 'additional', subject_name: 'IT', max_marks: 100, obtained_marks: 88, is_pass: true, grade: null, grade_point: null, is_additional: true, include_in_aggregate: true, subject_group_key: null, status_override: null },
+      { exam_subject_id: 'compulsory', subject_name: 'Sanskrit', max_marks: 100, obtained_marks: 10, is_pass: false, grade: null, grade_point: null, is_additional: false, include_in_aggregate: true, subject_group_key: null, status_override: null, moderation_marks_applied: 0 },
+      { exam_subject_id: 'additional', subject_name: 'IT', max_marks: 100, obtained_marks: 88, is_pass: true, grade: null, grade_point: null, is_additional: true, include_in_aggregate: true, subject_group_key: null, status_override: null, moderation_marks_applied: 0 },
     ]
     const result = applySubstitution(outcomes, true)
     const compulsory = result.find(o => o.exam_subject_id === 'compulsory')!
@@ -228,6 +229,213 @@ describe('computeReportCard — compartment', () => {
     })
     expect(result.result_status).toBe('compartment')
     expect(result.is_pass).toBe(false)
+  })
+})
+
+describe('overlayCompartmentMarks', () => {
+  it('supersedes the original subject\'s marks with the compartment re-take, matched by subject name', () => {
+    const original = new Map([
+      ['s1-maths', mark({ marks_obtained: 10 })],
+      ['s1-science', mark({ marks_obtained: 80 })],
+    ])
+    const originalIdByName = new Map([['Maths', 's1-maths'], ['Science', 's1-science']])
+    const compartmentByName = new Map([['Maths', mark({ marks_obtained: 55 })]])
+    const merged = overlayCompartmentMarks(original, originalIdByName, compartmentByName)
+    expect(merged.get('s1-maths')!.marks_obtained).toBe(55)
+    expect(merged.get('s1-science')!.marks_obtained).toBe(80)
+  })
+  it('never averages the re-take with the original — the new mark fully replaces it', () => {
+    const original = new Map([['s1-maths', mark({ marks_obtained: 10 })]])
+    const originalIdByName = new Map([['Maths', 's1-maths']])
+    const compartmentByName = new Map([['Maths', mark({ marks_obtained: 60 })]])
+    const merged = overlayCompartmentMarks(original, originalIdByName, compartmentByName)
+    expect(merged.get('s1-maths')!.marks_obtained).toBe(60)
+  })
+  it('ignores a compartment mark for a subject name with no original match', () => {
+    const original = new Map([['s1-maths', mark({ marks_obtained: 10 })]])
+    const originalIdByName = new Map([['Maths', 's1-maths']])
+    const compartmentByName = new Map([['Unknown Subject', mark({ marks_obtained: 60 })]])
+    const merged = overlayCompartmentMarks(original, originalIdByName, compartmentByName)
+    expect(merged.size).toBe(1)
+    expect(merged.get('s1-maths')!.marks_obtained).toBe(10)
+  })
+  it('is a no-op when there are no compartment marks to overlay', () => {
+    const original = new Map([['s1-maths', mark({ marks_obtained: 10 })]])
+    const merged = overlayCompartmentMarks(original, new Map(), new Map())
+    expect(merged).toEqual(original)
+  })
+})
+
+describe('computeReportCard — compartment finalize end-to-end', () => {
+  it('a student who fails Maths, then passes the compartment re-take, gets a final Pass', () => {
+    const rule: EffectiveClassRule = {
+      ...LEGACY_CLASS_RULE, pass_criteria_mode: 'per_subject', aggregate_pass_percent: 33,
+      compartment_policy: 'allow', compartment_max_failed_subjects: 1,
+    }
+    const subjects = [
+      subject({ id: 's1', subject_name: 'Maths', max_marks: 100, pass_marks: 33 }),
+      subject({ id: 's2', subject_name: 'Science', max_marks: 100, pass_marks: 33 }),
+    ]
+    const originalMarks = new Map([
+      ['s1', mark({ marks_obtained: 10 })], // failed
+      ['s2', mark({ marks_obtained: 80 })],
+    ])
+    const originalIdByName = new Map([['Maths', 's1'], ['Science', 's2']])
+    const compartmentByName = new Map([['Maths', mark({ marks_obtained: 60 })]]) // re-take passes
+    const merged = overlayCompartmentMarks(originalMarks, originalIdByName, compartmentByName)
+
+    const result = computeReportCard({
+      subjects, marksBySubjectId: merged, classRule: rule,
+      resolveSubjectRule: () => ({ ...LEGACY_SUBJECT_RULE, pass_criteria_mode: 'per_subject' }),
+    })
+    expect(result.result_status).toBe('pass')
+    expect(result.is_pass).toBe(true)
+    expect(result.obtained_marks).toBe(140) // 60 + 80, not 10 + 80 and not averaged
+  })
+  it('stays flagged compartment (not a hard fail) if the re-take is still below the pass mark — the same class rule that allowed compartment the first time applies again on finalize; a school that doesn\'t allow a second attempt uses the existing per-student manual override to force it to Fail', () => {
+    const rule: EffectiveClassRule = {
+      ...LEGACY_CLASS_RULE, pass_criteria_mode: 'per_subject', aggregate_pass_percent: 33,
+      compartment_policy: 'allow', compartment_max_failed_subjects: 1,
+    }
+    const subjects = [subject({ id: 's1', subject_name: 'Maths', max_marks: 100, pass_marks: 33 })]
+    const originalMarks = new Map([['s1', mark({ marks_obtained: 10 })]])
+    const originalIdByName = new Map([['Maths', 's1']])
+    const compartmentByName = new Map([['Maths', mark({ marks_obtained: 20 })]])
+    const merged = overlayCompartmentMarks(originalMarks, originalIdByName, compartmentByName)
+
+    const result = computeReportCard({
+      subjects, marksBySubjectId: merged, classRule: rule,
+      resolveSubjectRule: () => ({ ...LEGACY_SUBJECT_RULE, pass_criteria_mode: 'per_subject' }),
+    })
+    expect(result.result_status).toBe('compartment')
+    expect(result.is_pass).toBe(false)
+  })
+})
+
+describe('computeSubjectOutcome — extra components (beyond Theory/Practical)', () => {
+  // Written 70 + Oral 20 + Project 10 = 100, matching how the route
+  // recomputes max_marks as the sum of every component (server-side,
+  // same rule Theory+Practical already followed).
+  const s = subject({
+    id: 's1', subject_name: 'English', max_marks: 100, pass_marks: 33,
+    extra_components: [
+      { id: 'written', max_marks: 70, pass_marks: 23 },
+      { id: 'oral', max_marks: 20, pass_marks: 7 },
+      { id: 'project', max_marks: 10, pass_marks: 3 },
+    ],
+  })
+
+  it('sums every component into the subject total', () => {
+    const m = mark({ marks_obtained: 0, extra_component_marks: [
+      { component_id: 'written', obtained: 60, is_absent: false },
+      { component_id: 'oral', obtained: 18, is_absent: false },
+      { component_id: 'project', obtained: 9, is_absent: false },
+    ] })
+    const result = computeSubjectOutcome(s, m, LEGACY_SUBJECT_RULE)
+    expect(result.obtained_marks).toBe(87)
+    expect(result.max_marks).toBe(100)
+  })
+
+  it('under per_subject criteria, every component must individually clear its own pass mark', () => {
+    const rule: EffectiveSubjectRule = { ...LEGACY_SUBJECT_RULE, pass_criteria_mode: 'per_subject' }
+    const m = mark({ marks_obtained: 0, extra_component_marks: [
+      { component_id: 'written', obtained: 65, is_absent: false },
+      { component_id: 'oral', obtained: 19, is_absent: false },
+      { component_id: 'project', obtained: 1, is_absent: false }, // fails its own /3 pass mark
+    ] })
+    const result = computeSubjectOutcome(s, m, rule)
+    expect(result.obtained_marks).toBe(85) // 65+19+1 — the marks still count...
+    expect(result.is_pass).toBe(false) // ...but the subject still fails overall
+  })
+
+  it('treats a component with no entered mark as zero, and an absent component contributes zero', () => {
+    const m = mark({ marks_obtained: 0, extra_component_marks: [
+      { component_id: 'written', obtained: 60, is_absent: false },
+      { component_id: 'oral', obtained: 15, is_absent: true }, // marked absent — obtained ignored
+      // project: no row at all
+    ] })
+    const result = computeSubjectOutcome(s, m, LEGACY_SUBJECT_RULE)
+    expect(result.obtained_marks).toBe(60)
+  })
+
+  it('a subject with zero extra components behaves exactly as before (byte-identical)', () => {
+    const plain = subject({ id: 's2', max_marks: 100, pass_marks: 33 })
+    const withEmptyArray = subject({ id: 's2', max_marks: 100, pass_marks: 33, extra_components: [] })
+    const m = mark({ marks_obtained: 80 })
+    expect(computeSubjectOutcome(plain, m, LEGACY_SUBJECT_RULE)).toEqual(computeSubjectOutcome(withEmptyArray, m, LEGACY_SUBJECT_RULE))
+  })
+})
+
+describe('computeSubjectOutcome — moderation', () => {
+  const s = subject({ id: 's1', subject_name: 'Maths', max_marks: 100, pass_marks: 33 })
+
+  it('a flat_grace_band rule adds marks only within the matching percentage band', () => {
+    const rules: ModerationRule[] = [{ exam_subject_id: 's1', rule_type: 'flat_grace_band', band_min_percent: 28, band_max_percent: 32, grace_amount: 5, scale_factor: null }]
+    const inBand = computeSubjectOutcome(s, mark({ marks_obtained: 30 }), LEGACY_SUBJECT_RULE, rules)
+    expect(inBand.obtained_marks).toBe(35)
+    expect(inBand.moderation_marks_applied).toBe(5)
+
+    const outOfBand = computeSubjectOutcome(s, mark({ marks_obtained: 50 }), LEGACY_SUBJECT_RULE, rules)
+    expect(outOfBand.obtained_marks).toBe(50)
+    expect(outOfBand.moderation_marks_applied).toBe(0)
+  })
+
+  it('a scale_factor rule multiplies every matching student\'s raw obtained marks', () => {
+    const rules: ModerationRule[] = [{ exam_subject_id: 's1', rule_type: 'scale_factor', band_min_percent: null, band_max_percent: null, grace_amount: null, scale_factor: 1.1 }]
+    const result = computeSubjectOutcome(s, mark({ marks_obtained: 50 }), LEGACY_SUBJECT_RULE, rules)
+    expect(result.obtained_marks).toBe(55)
+    expect(result.moderation_marks_applied).toBe(5)
+  })
+
+  it('caps a moderated result at max_marks, never inflating past 100%', () => {
+    const rules: ModerationRule[] = [{ exam_subject_id: 's1', rule_type: 'scale_factor', band_min_percent: null, band_max_percent: null, grace_amount: null, scale_factor: 2 }]
+    const result = computeSubjectOutcome(s, mark({ marks_obtained: 90 }), LEGACY_SUBJECT_RULE, rules)
+    expect(result.obtained_marks).toBe(100)
+  })
+
+  it('a rule scoped to a different exam_subject_id never applies', () => {
+    const rules: ModerationRule[] = [{ exam_subject_id: 'some-other-subject', rule_type: 'flat_grace_band', band_min_percent: 0, band_max_percent: 100, grace_amount: 20, scale_factor: null }]
+    const result = computeSubjectOutcome(s, mark({ marks_obtained: 30 }), LEGACY_SUBJECT_RULE, rules)
+    expect(result.obtained_marks).toBe(30)
+    expect(result.moderation_marks_applied).toBe(0)
+  })
+
+  it('a null exam_subject_id applies to every subject in the exam', () => {
+    const rules: ModerationRule[] = [{ exam_subject_id: null, rule_type: 'flat_grace_band', band_min_percent: 28, band_max_percent: 32, grace_amount: 5, scale_factor: null }]
+    const result = computeSubjectOutcome(s, mark({ marks_obtained: 30 }), LEGACY_SUBJECT_RULE, rules)
+    expect(result.obtained_marks).toBe(35)
+  })
+
+  it('never touches a grade_only or status-overridden outcome', () => {
+    const rules: ModerationRule[] = [{ exam_subject_id: 's1', rule_type: 'scale_factor', band_min_percent: null, band_max_percent: null, grace_amount: null, scale_factor: 2 }]
+    const overridden = computeSubjectOutcome(s, mark({ marks_obtained: 30, result_status_override: 'Absent - Medical' }), LEGACY_SUBJECT_RULE, rules)
+    expect(overridden.moderation_marks_applied).toBe(0)
+    const gradeOnly = computeSubjectOutcome(s, mark({ grade: 'A' }), { ...LEGACY_SUBJECT_RULE, grading_mode: 'grade_only' }, rules)
+    expect(gradeOnly.moderation_marks_applied).toBe(0)
+  })
+
+  it('is a no-op with no rules — byte-identical to the pre-moderation default', () => {
+    const withDefault = computeSubjectOutcome(s, mark({ marks_obtained: 50 }), LEGACY_SUBJECT_RULE)
+    const withEmpty = computeSubjectOutcome(s, mark({ marks_obtained: 50 }), LEGACY_SUBJECT_RULE, [])
+    expect(withDefault).toEqual(withEmpty)
+    expect(withDefault.obtained_marks).toBe(50)
+  })
+})
+
+describe('computeReportCard — moderation end-to-end', () => {
+  it('a scale_factor rule can flip a borderline fail to a pass', () => {
+    const rule: EffectiveClassRule = { ...LEGACY_CLASS_RULE, pass_criteria_mode: 'per_subject', aggregate_pass_percent: 33 }
+    const subjects = [subject({ id: 's1', subject_name: 'Maths', max_marks: 100, pass_marks: 33 })]
+    const marks = new Map([['s1', mark({ marks_obtained: 30 })]])
+    const moderationRules: ModerationRule[] = [{ exam_subject_id: 's1', rule_type: 'scale_factor', band_min_percent: null, band_max_percent: null, grace_amount: null, scale_factor: 1.2 }]
+
+    const unmoderated = computeReportCard({ subjects, marksBySubjectId: marks, classRule: rule, resolveSubjectRule: () => ({ ...LEGACY_SUBJECT_RULE, pass_criteria_mode: 'per_subject' }) })
+    expect(unmoderated.is_pass).toBe(false)
+
+    const moderated = computeReportCard({ subjects, marksBySubjectId: marks, classRule: rule, resolveSubjectRule: () => ({ ...LEGACY_SUBJECT_RULE, pass_criteria_mode: 'per_subject' }), moderationRules })
+    expect(moderated.obtained_marks).toBe(36)
+    expect(moderated.is_pass).toBe(true)
+    expect(moderated.moderation_marks_applied_total).toBe(6)
   })
 })
 

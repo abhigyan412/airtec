@@ -37,7 +37,7 @@ const titleCase = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.to
 // Kept in step with the sidebar's Result Settings sub-items
 // (components/layout/Sidebar.tsx) — each links straight into one tab
 // via ?tab=, landing here instead of always opening on Class Rules.
-const RESULT_SETTINGS_TABS = ['Class Rules', 'Subject Overrides', 'Grade Scales', 'Remarks Rules', 'Term Templates', 'Apply Preset', 'Publish Workflow']
+const RESULT_SETTINGS_TABS = ['Class Rules', 'Subject Overrides', 'Grade Scales', 'Remarks Rules', 'Co-Scholastic Areas', 'Term Templates', 'Apply Preset', 'Publish Workflow']
 
 // "One class" edits a single class's rule/overrides directly; "Multiple
 // classes" configures the same form once and applies it to a ticked set —
@@ -114,6 +114,7 @@ function ResultSettingsView() {
           <TabsTrigger value="Subject Overrides">Subject Overrides</TabsTrigger>
           <TabsTrigger value="Grade Scales">Grade Scales</TabsTrigger>
           <TabsTrigger value="Remarks Rules">Remarks Rules</TabsTrigger>
+          <TabsTrigger value="Co-Scholastic Areas">Co-Scholastic Areas</TabsTrigger>
           <TabsTrigger value="Term Templates">Term Templates</TabsTrigger>
           <TabsTrigger value="Apply Preset">Apply Preset</TabsTrigger>
           <TabsTrigger value="Publish Workflow">Publish Workflow</TabsTrigger>
@@ -176,6 +177,10 @@ function ResultSettingsView() {
 
         <TabsContent value="Remarks Rules" className="mt-6">
           <RemarksRulesTab />
+        </TabsContent>
+
+        <TabsContent value="Co-Scholastic Areas" className="mt-6">
+          <CoscholasticAreasTab />
         </TabsContent>
 
         <TabsContent value="Term Templates" className="mt-6">
@@ -1125,6 +1130,98 @@ function SubjectOverrideRow({ classId, subjectName, examType, existing, onSaved 
 // ═══════════════════════════════════════════════════════════════
 // GRADE SCALES
 // ═══════════════════════════════════════════════════════════════
+
+// Qualitative grading areas (Discipline, Work Education, ...) — graded
+// once per Term on the Term detail page's own Co-Scholastic tab, not here.
+// This tab only configures WHICH areas exist, same system-row/custom-row
+// shape as Grade Scales.
+function CoscholasticAreasTab() {
+  const qc = useQueryClient()
+  const [newName, setNewName] = useState('')
+
+  const { data: areas, isLoading } = useQuery({
+    queryKey: ['coscholastic-areas'],
+    queryFn: () => api.get('/exams/coscholastic-areas').then(r => r.data.data as any[]),
+  })
+  // Same scales every subject's Grade Scales tab manages — reused here so
+  // there's one place to define grade labels, not two.
+  const { data: scales } = useQuery({
+    queryKey: ['exam-grade-scales'],
+    queryFn: () => api.get('/exams/result-settings/grade-scales').then(r => r.data.data as any[]),
+  })
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['coscholastic-areas'] })
+
+  const createMutation = useMutation({
+    mutationFn: () => api.post('/exams/coscholastic-areas', { name: newName.trim(), sort_order: (areas?.length ?? 0) + 1 }),
+    onSuccess: () => { toast.success('Area added'); setNewName(''); invalidate() },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to add area'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/exams/coscholastic-areas/${id}`),
+    onSuccess: () => { toast.success('Area removed'); invalidate() },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to remove'),
+  })
+
+  const setScaleMutation = useMutation({
+    mutationFn: ({ areaId, gradeScaleId }: { areaId: string; gradeScaleId: string | null }) =>
+      api.put(`/exams/coscholastic-areas/${areaId}/grade-scale`, { grade_scale_id: gradeScaleId }),
+    onSuccess: () => { toast.success('Grade scale updated'); invalidate() },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to update grade scale'),
+  })
+
+  if (isLoading) return <Skeleton className="h-64 w-full rounded-2xl" />
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm">Co-Scholastic Areas</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Qualitative areas graded per student, per Term, alongside — not inside — the scholastic percentage.
+          The seeded CBSE set covers Discipline, Work Education, Health & Physical Education, Attitude & Values
+          and Life Skills; add, rename or remove as your school needs. Pick a grade scale for each area so grading
+          on the Term page is a dropdown of your configured labels, not free text — percent ranges on that scale
+          are ignored here, only the grade labels matter.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          {(areas ?? []).map((a: any) => (
+            <div key={a.id} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-foreground">{a.name}</span>
+                {a.is_system && <Badge variant="secondary">Built-in</Badge>}
+              </div>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={a.grade_scale?.id ?? 'none'}
+                  onValueChange={v => setScaleMutation.mutate({ areaId: a.id, gradeScaleId: v === 'none' ? null : v })}
+                >
+                  <SelectTrigger className="h-8 w-56"><SelectValue placeholder="Free text" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Free text (no scale)</SelectItem>
+                    {(scales ?? []).map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {!a.is_system && (
+                  <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" onClick={() => deleteMutation.mutate(a.id)} disabled={deleteMutation.isPending}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 border-t border-border pt-4">
+          <Input value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Art Education" className="max-w-xs" />
+          <Button size="sm" onClick={() => createMutation.mutate()} disabled={createMutation.isPending || !newName.trim()}>
+            <Plus className="h-4 w-4" /> Add Area
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
 
 function GradeScalesTab() {
   const qc = useQueryClient()

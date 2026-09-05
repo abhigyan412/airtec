@@ -19,7 +19,13 @@
 // it's replicating.
 // ═══════════════════════════════════════════════════════════════
 
-export type ExamType = 'unit_test' | 'monthly' | 'half_yearly' | 'annual' | 'pre_board' | 'practical' | 'other'
+// 'compartment' is a real exam_type (see 20260905000000_compartment_exams.sql)
+// so a compartment re-take exam flows through the entire ordinary exam
+// lifecycle unmodified, but it's deliberately never a valid key in
+// exam_class_result_rules/exam_subject_result_overrides — a compartment
+// exam always resolves the class's DEFAULT rule (examType: null passed to
+// resolveEffectiveClassRule at finalize time), never a type-specific one.
+export type ExamType = 'unit_test' | 'monthly' | 'half_yearly' | 'annual' | 'pre_board' | 'practical' | 'other' | 'compartment'
 export type ResultStatus = 'pass' | 'fail' | 'compartment' | 'not_eligible' | 'withheld'
 
 export interface GradeBand {
@@ -213,6 +219,20 @@ export function remarksFor(status: ResultStatus, percentage: number | null, band
 
 // ── Per-subject outcome ─────────────────────────────────────────
 
+// An optional THIRD-and-beyond component (Written/Oral/Project/Internal
+// Assessment/...), additive alongside Theory/Practical which stay exactly
+// as they are everywhere — every existing subject has zero of these.
+// subject.max_marks is always the server-recomputed grand total
+// (plain-or-split-total + sum of every extra component's own max_marks,
+// same "never trust a client-sent combined total" rule already applied to
+// Theory+Practical) — this function trusts it as-is rather than
+// re-deriving it, so it must never add these back into maxMarks itself.
+export interface ExamSubjectExtraComponent {
+  id: string
+  max_marks: number
+  pass_marks: number
+}
+
 export interface ExamSubjectRow {
   id: string
   subject_name: string
@@ -222,6 +242,7 @@ export interface ExamSubjectRow {
   theory_pass_marks: number | null
   practical_max_marks: number | null
   practical_pass_marks: number | null
+  extra_components?: ExamSubjectExtraComponent[]
 }
 
 export interface StudentMarkRow {
@@ -231,6 +252,7 @@ export interface StudentMarkRow {
   practical_marks_obtained: number | null
   theory_is_absent: boolean
   practical_is_absent: boolean
+  extra_component_marks?: { component_id: string; obtained: number | null; is_absent: boolean }[]
   grade: string | null // manually-entered grade label, used only when grading_mode='grade_only'
   grace_marks_applied: number
   result_status_override: string | null
@@ -248,6 +270,54 @@ export interface SubjectOutcome {
   include_in_aggregate: boolean
   subject_group_key: string | null
   status_override: string | null
+  moderation_marks_applied: number
+}
+
+// A cohort-wide, auditable, reversible adjustment — the systemic
+// counterpart to per-student grace marks (PATCH .../override), which only
+// ever touch one student at a time. exam_subject_id null means "every
+// subject in the exam." 'flat_grace_band' adds grace_amount to any
+// student's raw percentage falling within [band_min_percent,
+// band_max_percent] (either bound null means unbounded on that side);
+// 'scale_factor' multiplies every matching student's raw obtained marks.
+// Deleting a rule and re-running generate-results is the entire "reverse
+// it" mechanism — nothing here is ever separately materialized.
+export interface ModerationRule {
+  exam_subject_id: string | null
+  rule_type: 'flat_grace_band' | 'scale_factor'
+  band_min_percent: number | null
+  band_max_percent: number | null
+  grace_amount: number | null
+  scale_factor: number | null
+}
+
+// Applied to the RAW obtained marks — before any per-student grace marks
+// fold in, before per-component (Theory/Practical) pass checks are
+// decided — same stage a board's own moderation would apply, upstream of
+// anything student-specific. Scoped to whichever subject-level total the
+// caller passes in: for a split subject that's the Theory+Practical sum,
+// not each component separately — a school moderates a subject's overall
+// score, not component by component. Multiple matching rules apply in
+// order; result is always clamped to [0, maxMarks].
+function applyModerationToObtained(obtained: number, maxMarks: number, examSubjectId: string, rules: ModerationRule[]): number {
+  if (!rules.length || maxMarks <= 0) return obtained
+  let result = obtained
+  const percent = (obtained / maxMarks) * 100
+  for (const rule of rules) {
+    if (rule.exam_subject_id != null && rule.exam_subject_id !== examSubjectId) continue
+    if (rule.rule_type === 'scale_factor' && rule.scale_factor != null) {
+      result = result * rule.scale_factor
+    } else if (rule.rule_type === 'flat_grace_band' && rule.grace_amount != null) {
+      const min = rule.band_min_percent ?? -Infinity
+      const max = rule.band_max_percent ?? Infinity
+      if (percent >= min && percent <= max) result = result + rule.grace_amount
+    }
+  }
+  // Rounded to 2 decimals — a scale_factor multiply routinely produces
+  // float noise (e.g. 50 * 1.1 = 55.00000000000001) that would otherwise
+  // show up verbatim on a report card.
+  const rounded = Math.round(result * 100) / 100
+  return Math.min(Math.max(rounded, 0), maxMarks)
 }
 
 // A grade_only subject is deliberately excluded from the numeric
@@ -260,6 +330,7 @@ export function computeSubjectOutcome(
   subject: ExamSubjectRow,
   mark: StudentMarkRow | undefined,
   rule: EffectiveSubjectRule,
+  moderationRules: ModerationRule[] = [],
 ): SubjectOutcome {
   const base = {
     exam_subject_id: subject.id,
@@ -278,6 +349,7 @@ export function computeSubjectOutcome(
       grade_point: null,
       include_in_aggregate: false,
       status_override: mark.result_status_override,
+      moderation_marks_applied: 0,
     }
   }
 
@@ -293,6 +365,7 @@ export function computeSubjectOutcome(
       grade_point: band?.grade_point ?? null,
       include_in_aggregate: false,
       status_override: null,
+      moderation_marks_applied: 0,
     }
   }
 
@@ -314,6 +387,30 @@ export function computeSubjectOutcome(
     obtained = mark?.is_absent ? 0 : Number(mark?.marks_obtained ?? 0)
   }
 
+  // Extra components (Written/Oral/Project/Internal Assessment/...) —
+  // additive alongside Theory/Practical above, which are untouched by
+  // this. Each one's own marks add to the subject total; under
+  // per_subject criteria each must also individually clear its own pass
+  // mark, same semantics as the Theory/Practical check above, generalized
+  // to however many extra components this subject actually has.
+  if (subject.extra_components?.length) {
+    for (const ec of subject.extra_components) {
+      const cm = mark?.extra_component_marks?.find(m => m.component_id === ec.id)
+      const componentObtained = cm?.is_absent ? 0 : Number(cm?.obtained ?? 0)
+      obtained += componentObtained
+      if (rule.pass_criteria_mode === 'per_subject' && componentObtained < ec.pass_marks) {
+        componentsPassed = false
+      }
+    }
+  }
+
+  // Moderation applies to the RAW obtained marks — before per-student
+  // grace marks fold in, upstream of anything student-specific — same
+  // stage a board's own moderation circular would apply.
+  const rawObtained = obtained
+  obtained = applyModerationToObtained(obtained, maxMarks, subject.id, moderationRules)
+  const moderationMarksApplied = obtained - rawObtained
+
   const graceApplied = mark?.grace_marks_applied ?? 0
   const obtainedWithGrace = obtained + graceApplied
   const meetsSubjectPassMark = obtainedWithGrace >= subject.pass_marks
@@ -323,6 +420,7 @@ export function computeSubjectOutcome(
 
   return {
     ...base,
+    moderation_marks_applied: moderationMarksApplied,
     max_marks: maxMarks,
     obtained_marks: obtainedWithGrace,
     is_pass: subjectPassed,
@@ -428,6 +526,7 @@ export interface ComputeReportCardInput {
   classRule: EffectiveClassRule
   resolveSubjectRule: (subjectName: string) => EffectiveSubjectRule
   attendancePercent?: number | null
+  moderationRules?: ModerationRule[]
 }
 
 export interface ComputedReportCard {
@@ -439,13 +538,14 @@ export interface ComputedReportCard {
   is_pass: boolean
   result_status: ResultStatus
   grace_marks_applied_total: number
+  moderation_marks_applied_total: number
   remarks: string
   remarks_source: 'legacy' | 'rule' | 'manual'
   subject_outcomes: SubjectOutcome[]
 }
 
 export function computeReportCard(input: ComputeReportCardInput): ComputedReportCard {
-  const { subjects, marksBySubjectId, classRule, resolveSubjectRule } = input
+  const { subjects, marksBySubjectId, classRule, resolveSubjectRule, moderationRules = [] } = input
 
   // 1. Eligibility gate — short-circuits everything else.
   const eligible = checkAttendanceEligibility(input.attendancePercent ?? null, classRule.min_attendance_percent)
@@ -453,6 +553,7 @@ export function computeReportCard(input: ComputeReportCardInput): ComputedReport
     return {
       total_marks: 0, obtained_marks: 0, percentage: 0, grade: null, overall_cgpa: null,
       is_pass: false, result_status: 'not_eligible', grace_marks_applied_total: 0,
+      moderation_marks_applied_total: 0,
       remarks: remarksFor('not_eligible', null, classRule.remarks_bands),
       remarks_source: classRule.remarks_bands ? 'rule' : 'legacy',
       subject_outcomes: [],
@@ -461,7 +562,7 @@ export function computeReportCard(input: ComputeReportCardInput): ComputedReport
 
   // 2. Per-subject outcomes.
   let outcomes = subjects.map(s =>
-    computeSubjectOutcome(s, marksBySubjectId.get(s.id), resolveSubjectRule(s.subject_name)),
+    computeSubjectOutcome(s, marksBySubjectId.get(s.id), resolveSubjectRule(s.subject_name), moderationRules),
   )
 
   // 3. Subject groups — "at least one of" overrides individual per-subject
@@ -532,10 +633,12 @@ export function computeReportCard(input: ComputeReportCardInput): ComputedReport
   }
 
   const graceTotal = Array.from(marksBySubjectId.values()).reduce((s, m) => s + (m.grace_marks_applied || 0), 0)
+  const moderationTotal = outcomes.reduce((s, o) => s + (o.moderation_marks_applied || 0), 0)
 
   return {
     total_marks: totalMax,
     obtained_marks: totalObtained,
+    moderation_marks_applied_total: moderationTotal,
     percentage,
     grade: classRule.grading_mode === 'grade_only' ? null : graded.grade,
     overall_cgpa,
@@ -546,6 +649,28 @@ export function computeReportCard(input: ComputeReportCardInput): ComputedReport
     remarks_source: classRule.remarks_bands ? 'rule' : 'legacy',
     subject_outcomes: outcomes,
   }
+}
+
+// ── Compartment re-exam merge ────────────────────────────────────
+//
+// A compartment exam has its own exam_subjects ids (a new exam, distinct
+// from the original) covering only the subjects some student failed —
+// matched back to the original exam's subject rows by name, since that's
+// the only stable link between the two datesheets. A re-take supersedes
+// the original attempt entirely for that subject; it never averages with
+// the failed attempt it's replacing.
+export function overlayCompartmentMarks(
+  originalMarksBySubjectId: Map<string, StudentMarkRow>,
+  originalSubjectIdByName: Map<string, string>,
+  compartmentMarksBySubjectName: Map<string, StudentMarkRow>,
+): Map<string, StudentMarkRow> {
+  const merged = new Map(originalMarksBySubjectId)
+  for (const [subjectName, mark] of compartmentMarksBySubjectName) {
+    const originalId = originalSubjectIdByName.get(subjectName)
+    if (!originalId) continue
+    merged.set(originalId, mark)
+  }
+  return merged
 }
 
 function averageGradePoint(outcomes: SubjectOutcome[]): number | null {
