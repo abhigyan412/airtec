@@ -114,15 +114,20 @@ export default function StudentDocumentsPage() {
         ) : (
           <div className="divide-y divide-border">
             {(docs ?? []).map((doc: any) => (
-              <div key={doc.id} className="flex items-center gap-5 px-8 py-5 hover:bg-muted/50 transition-colors">
-                <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-                  <span className="text-2xl leading-none">{DOC_ICONS[doc.document_type] ?? '📎'}</span>
-                </div>
+              <div key={doc.id} className="flex flex-col gap-3 px-4 py-4 hover:bg-muted/50 transition-colors sm:flex-row sm:items-center sm:gap-5 sm:px-8 sm:py-5">
+                <div className="flex items-start gap-3 sm:contents">
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+                    <span className="text-xl sm:text-2xl leading-none">{DOC_ICONS[doc.document_type] ?? '📎'}</span>
+                  </div>
 
-                <div className="flex-1 min-w-0 grid grid-cols-[1fr_auto_auto] gap-6 items-center">
-                  <div>
+                  {/* min-w-0 lets this actually wrap within the remaining
+                      row width instead of being squeezed by the action
+                      icons - those moved to their own row below on mobile
+                      specifically so this never has to share a line with
+                      them again. */}
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2.5 flex-wrap">
-                      <p className="font-semibold text-foreground text-base">{doc.document_name}</p>
+                      <p className="font-semibold text-foreground text-sm sm:text-base">{doc.document_name}</p>
                       <Badge className="border-transparent bg-primary/10 text-primary whitespace-nowrap">
                         {DOC_TYPES.find(t => t.value === doc.document_type)?.label ?? doc.document_type}
                       </Badge>
@@ -130,41 +135,46 @@ export default function StudentDocumentsPage() {
                     {doc.notes && (
                       <p className="text-sm text-muted-foreground mt-1.5 italic">"{doc.notes}"</p>
                     )}
-                  </div>
-
-                  <div className="text-right text-sm text-muted-foreground whitespace-nowrap hidden sm:block">
-                    <p>{formatDate(doc.created_at)}</p>
-                    <div className="flex items-center justify-end gap-1.5 mt-0.5 text-xs">
-                      {doc.file_size && <span>{doc.file_size}</span>}
-                      {doc.file_size && doc.users?.full_name && <span className="text-muted-foreground/50">·</span>}
-                      {doc.users?.full_name && <span>{doc.users.full_name}</span>}
+                    <div className="flex items-center gap-1.5 mt-1 text-xs text-muted-foreground sm:hidden">
+                      <span>{formatDate(doc.created_at)}</span>
+                      {doc.file_size && <><span className="text-muted-foreground/50">·</span><span>{doc.file_size}</span></>}
+                      {doc.users?.full_name && <><span className="text-muted-foreground/50">·</span><span>{doc.users.full_name}</span></>}
                     </div>
                   </div>
+                </div>
 
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" title="View">
-                      <a href={doc.file_url} target="_blank" rel="noreferrer" aria-label="View document">
-                        <Eye className="h-4 w-4" />
-                      </a>
-                    </Button>
-                    <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-success" title="Download">
-                      <a href={doc.file_url} download aria-label="Download document">
-                        <Download className="h-4 w-4" />
-                      </a>
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-muted-foreground hover:text-destructive"
-                      title="Delete"
-                      aria-label="Delete document"
-                      onClick={() => {
-                        if (confirm('Delete this document?')) deleteMutation.mutate(doc.id)
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                <div className="text-right text-sm text-muted-foreground whitespace-nowrap hidden sm:block">
+                  <p>{formatDate(doc.created_at)}</p>
+                  <div className="flex items-center justify-end gap-1.5 mt-0.5 text-xs">
+                    {doc.file_size && <span>{doc.file_size}</span>}
+                    {doc.file_size && doc.users?.full_name && <span className="text-muted-foreground/50">·</span>}
+                    {doc.users?.full_name && <span>{doc.users.full_name}</span>}
                   </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-1 flex-shrink-0 sm:justify-start">
+                  <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" title="View">
+                    <a href={doc.file_url} target="_blank" rel="noreferrer" aria-label="View document">
+                      <Eye className="h-4 w-4" />
+                    </a>
+                  </Button>
+                  <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-success" title="Download">
+                    <a href={doc.file_url} download aria-label="Download document">
+                      <Download className="h-4 w-4" />
+                    </a>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground hover:text-destructive"
+                    title="Delete"
+                    aria-label="Delete document"
+                    onClick={() => {
+                      if (confirm('Delete this document?')) deleteMutation.mutate(doc.id)
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               </div>
             ))}
