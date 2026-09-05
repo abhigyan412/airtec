@@ -484,12 +484,22 @@ function TeacherGroup({
   // Opens the per-period chooser rather than standing everything down:
   // which cover survives a teacher's return is the manager's call.
   const [returning, setReturning] = useState(false)
+  // Collapsed by default — with several absent teachers on the same day,
+  // every one of their periods rendered open at once made this screen a
+  // long, bulky scroll on a phone. The header's own summary (period
+  // count, how many still need cover, the reason) already carries enough
+  // to decide whether to open it.
+  const [isOpen, setIsOpen] = useState(false)
 
   return (
     <Card className="overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3">
+      <button
+        type="button"
+        onClick={() => setIsOpen(v => !v)}
+        className="flex w-full flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+      >
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">
             {initials(group.name)}
           </div>
           <div>
@@ -503,28 +513,40 @@ function TeacherGroup({
             </p>
           </div>
         </div>
-        {canManage && absence && (
-          <Button variant="ghost" size="sm" onClick={() => setReturning(true)}>
-            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-            They're back
-          </Button>
-        )}
-      </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {canManage && absence && (
+            // stopPropagation so tapping this doesn't also toggle the
+            // group open/closed underneath it.
+            <span
+              role="button" tabIndex={0}
+              onClick={e => { e.stopPropagation(); setReturning(true) }}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); setReturning(true) } }}
+              className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent"
+            >
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              They're back
+            </span>
+          )}
+          <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-180')} />
+        </div>
+      </button>
 
-      <div className="divide-y divide-border">
-        {group.rows.map(row => (
-          <ArrangementRow
-            key={row.id}
-            row={row}
-            canManage={canManage}
-            isExpanded={expanded === row.id}
-            onToggle={() => setExpanded(expanded === row.id ? null : row.id)}
-            showAll={showAll}
-            setShowAll={setShowAll}
-            onChange={onChange}
-          />
-        ))}
-      </div>
+      {isOpen && (
+        <div className="divide-y divide-border">
+          {group.rows.map(row => (
+            <ArrangementRow
+              key={row.id}
+              row={row}
+              canManage={canManage}
+              isExpanded={expanded === row.id}
+              onToggle={() => setExpanded(expanded === row.id ? null : row.id)}
+              showAll={showAll}
+              setShowAll={setShowAll}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+      )}
 
       {returning && absence && (
         <ReturnedDialog
