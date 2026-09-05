@@ -1,4 +1,5 @@
 import { Router, Response } from 'express'
+import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { authenticate, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler } from '../../shared/utils/helpers'
@@ -123,6 +124,121 @@ router.put('/roles/:id/permissions', requirePermissionV2('role.manage'),
     invalidateAllPermissions()
 
     res.json({ success: true, data: { role, permission_count: perms?.length ?? 0 } })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// POST /api/rbac/roles
+// Body: { name: string, clone_from_role_id?: string }
+//
+// Custom role creation, "duplicate + tweak": always starts from a
+// blank permission set unless clone_from_role_id is given, in which
+// case the new role's role_permissions_v2 rows are copied from the
+// source role so the admin can tweak from there instead of from zero.
+// ═══════════════════════════════════════════════════════════════
+const CreateRoleSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  clone_from_role_id: z.string().uuid().optional(),
+})
+
+router.post('/roles', requirePermissionV2('role.manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const parsed = CreateRoleSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid input' })
+    }
+    const { name, clone_from_role_id } = parsed.data
+    const school_id = req.user!.school_id
+
+    const { data: existing } = await supabase
+      .from('roles')
+      .select('id')
+      .eq('school_id', school_id)
+      .ilike('name', name)
+      .maybeSingle()
+    if (existing) {
+      return res.status(400).json({ success: false, error: `A role named "${name}" already exists.` })
+    }
+
+    let sourcePermissionIds: string[] = []
+    if (clone_from_role_id) {
+      const { data: sourceRole } = await supabase
+        .from('roles')
+        .select('id')
+        .eq('id', clone_from_role_id)
+        .eq('school_id', school_id)
+        .maybeSingle()
+      if (!sourceRole) {
+        return res.status(404).json({ success: false, error: 'Role to duplicate from was not found.' })
+      }
+      const { data: sourcePerms, error: sourcePermsErr } = await supabase
+        .from('role_permissions_v2')
+        .select('permission_id')
+        .eq('role_id', clone_from_role_id)
+      if (sourcePermsErr) return res.status(500).json({ success: false, error: sourcePermsErr.message })
+      sourcePermissionIds = (sourcePerms ?? []).map(p => p.permission_id)
+    }
+
+    const { data: newRole, error: insErr } = await supabase
+      .from('roles')
+      .insert({ school_id, name, is_system_role: false })
+      .select('id, name, description, is_system_role, created_at')
+      .single()
+    if (insErr) return res.status(500).json({ success: false, error: insErr.message })
+
+    if (sourcePermissionIds.length > 0) {
+      const rows = sourcePermissionIds.map(permission_id => ({ role_id: newRole.id, permission_id }))
+      const { error: cloneErr } = await supabase.from('role_permissions_v2').insert(rows)
+      if (cloneErr) return res.status(500).json({ success: false, error: cloneErr.message })
+    }
+
+    res.json({ success: true, data: { role: newRole, permission_count: sourcePermissionIds.length } })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// DELETE /api/rbac/roles/:id
+//
+// Blocked for system roles, and blocked whenever anything still
+// depends on this role — user_roles.role_id and workflow_steps.role_id
+// both cascade-delete on roles.id, and users.primary_role_id would
+// silently go null, so an unguarded delete would either wipe a live
+// approval chain or quietly unassign staff. Precise, count-based
+// refusal instead, so the admin knows exactly what to unwind first.
+// ═══════════════════════════════════════════════════════════════
+router.delete('/roles/:id', requirePermissionV2('role.manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+
+    const { data: role } = await supabase.from('roles').select('id, name, is_system_role').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!role) return res.status(404).json({ success: false, error: 'Role not found' })
+    if (role.is_system_role) {
+      return res.status(400).json({ success: false, error: 'System roles cannot be deleted.' })
+    }
+
+    const [{ count: userRoleCount }, { count: workflowStepCount }, { count: primaryCount }] = await Promise.all([
+      supabase.from('user_roles').select('id', { count: 'exact', head: true }).eq('role_id', id),
+      supabase.from('workflow_steps').select('id', { count: 'exact', head: true }).eq('role_id', id),
+      supabase.from('users').select('id', { count: 'exact', head: true }).eq('primary_role_id', id),
+    ])
+
+    const blockers: string[] = []
+    if (userRoleCount) blockers.push(`${userRoleCount} user${userRoleCount === 1 ? '' : 's'} assigned to it`)
+    if (primaryCount) blockers.push(`${primaryCount} user${primaryCount === 1 ? '' : 's'} with it as their primary role`)
+    if (workflowStepCount) blockers.push(`${workflowStepCount} approval workflow step${workflowStepCount === 1 ? '' : 's'} referencing it`)
+
+    if (blockers.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot delete "${role.name}" — it still has ${blockers.join(' and ')}. Reassign these first.`,
+      })
+    }
+
+    const { error: delErr } = await supabase.from('roles').delete().eq('id', id)
+    if (delErr) return res.status(500).json({ success: false, error: delErr.message })
+
+    res.json({ success: true, data: { id } })
   })
 )
 

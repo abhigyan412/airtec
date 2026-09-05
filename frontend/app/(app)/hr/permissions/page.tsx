@@ -3,12 +3,21 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { rbacApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { ArrowLeft, Loader2, Save, Check, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Loader2, Save, Check, ShieldCheck, Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+} from '@/components/ui/select'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { HrQuickNav } from '@/components/hr/HrQuickNav'
 
@@ -76,6 +85,10 @@ export default function RolePermissionsPage() {
   const qc = useQueryClient()
   const [activeRoleId, setActiveRoleId] = useState<string | null>(null)
   const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set())
+  const [newRoleOpen, setNewRoleOpen] = useState(false)
+  const [newRoleName, setNewRoleName] = useState('')
+  const [cloneFromRoleId, setCloneFromRoleId] = useState<string | undefined>(undefined)
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const { data: roles, isLoading: rolesLoading } = useQuery({
     queryKey: ['rbac-roles'],
@@ -88,6 +101,7 @@ export default function RolePermissionsPage() {
   })
 
   const editableRoles = (roles ?? []).filter((r: any) => !EXCLUDED_ROLES.includes(r.name))
+  const activeRole = (roles ?? []).find((r: any) => r.id === activeRoleId)
 
   useEffect(() => {
     if (!activeRoleId && editableRoles.length > 0) {
@@ -115,6 +129,30 @@ export default function RolePermissionsPage() {
       toast.success('Permissions saved')
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to save'),
+  })
+
+  const createRoleMutation = useMutation({
+    mutationFn: () => rbacApi.roles.create({ name: newRoleName.trim(), clone_from_role_id: cloneFromRoleId }),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['rbac-roles'] })
+      setNewRoleOpen(false)
+      setNewRoleName('')
+      setCloneFromRoleId(undefined)
+      setActiveRoleId(res?.data?.role?.id ?? null)
+      toast.success('Role created — tweak its permissions below')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to create role'),
+  })
+
+  const deleteRoleMutation = useMutation({
+    mutationFn: () => rbacApi.roles.delete(activeRoleId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rbac-roles'] })
+      setDeleteOpen(false)
+      setActiveRoleId(null)
+      toast.success('Role deleted')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to delete role'),
   })
 
   const toggle = (code: string) => {
@@ -159,6 +197,9 @@ export default function RolePermissionsPage() {
           actions={
             <>
             <HrQuickNav current="permissions" />
+            <Button variant="outline" onClick={() => setNewRoleOpen(true)}>
+              <Plus className="h-4 w-4" /> New Role
+            </Button>
             <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !activeRoleId}>
               {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Permissions
             </Button>
@@ -171,14 +212,22 @@ export default function RolePermissionsPage() {
       {rolesLoading ? (
         <Skeleton className="h-10 w-64 rounded-xl" />
       ) : (
-        <div className="flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1">
-          {editableRoles.map((r: any) => (
-            <button key={r.id} onClick={() => setActiveRoleId(r.id)}
-              className={cn('whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                activeRoleId === r.id ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
-              {r.name}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1">
+            {editableRoles.map((r: any) => (
+              <button key={r.id} onClick={() => setActiveRoleId(r.id)}
+                className={cn('whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                  activeRoleId === r.id ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
+                {r.name}
+              </button>
+            ))}
+          </div>
+          {activeRole && !activeRole.is_system_role && (
+            <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive"
+              onClick={() => setDeleteOpen(true)} aria-label={`Delete ${activeRole.name}`}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       )}
 
@@ -247,6 +296,53 @@ export default function RolePermissionsPage() {
           Changes take effect immediately for all users with this role — they may need to refresh their page to see updated menus.
         </p>
       </div>
+
+      <Dialog open={newRoleOpen} onOpenChange={setNewRoleOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>New Role</DialogTitle>
+            <DialogDescription>
+              Optionally duplicate an existing role's permissions as a starting point, then tweak them on the next screen.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="new-role-name">Role name</Label>
+              <Input id="new-role-name" value={newRoleName} onChange={e => setNewRoleName(e.target.value)}
+                placeholder="e.g. Senior Coordinator" autoComplete="off" />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Duplicate from (optional)</Label>
+              <Select value={cloneFromRoleId} onValueChange={setCloneFromRoleId}>
+                <SelectTrigger><SelectValue placeholder="Start with no permissions" /></SelectTrigger>
+                <SelectContent>
+                  {(roles ?? []).map((r: any) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setNewRoleOpen(false)} disabled={createRoleMutation.isPending}>Cancel</Button>
+            <Button onClick={() => createRoleMutation.mutate()} disabled={createRoleMutation.isPending || !newRoleName.trim()}>
+              {createRoleMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Create Role
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Delete "${activeRole?.name}"?`}
+        description="This cannot be undone. Roles still assigned to staff, set as anyone's primary role, or used in an approval workflow step can't be deleted until those are reassigned."
+        destructive
+        confirmLabel="Delete Role"
+        loading={deleteRoleMutation.isPending}
+        onConfirm={() => deleteRoleMutation.mutate()}
+      />
     </div>
   )
 }

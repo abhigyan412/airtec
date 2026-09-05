@@ -982,6 +982,9 @@ export const rbacApi = {
     getPermissions: (roleId: string) => api.get(`/rbac/roles/${roleId}/permissions`).then(r => r.data),
     setPermissions: (roleId: string, permission_codes: string[]) =>
       api.put(`/rbac/roles/${roleId}/permissions`, { permission_codes }).then(r => r.data),
+    create: (data: { name: string; clone_from_role_id?: string }) =>
+      api.post('/rbac/roles', data).then(r => r.data),
+    delete: (roleId: string) => api.delete(`/rbac/roles/${roleId}`).then(r => r.data),
   },
   permissions: {
     list: () => api.get('/rbac/permissions').then(r => r.data),
