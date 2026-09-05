@@ -135,7 +135,7 @@ export default function GeneratePage() {
       />
 
       <Tabs defaultValue="build">
-        <TabsList className="mb-4 h-auto flex-wrap">
+        <TabsList className="mb-4 w-full justify-start overflow-x-auto">
           <TabsTrigger value="build">Build</TabsTrigger>
           <TabsTrigger value="versions">
             History

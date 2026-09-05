@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  AlertTriangle, CheckCircle2, Circle, Clock, DoorOpen, Loader2, Plus,
+  AlertTriangle, CheckCircle2, ChevronRight, Circle, Clock, DoorOpen, Loader2, Plus,
   Settings as SettingsIcon, SlidersHorizontal, Trash2, Users,
 } from 'lucide-react'
 
@@ -63,7 +63,7 @@ export default function SetupPage() {
       />
 
       <Tabs defaultValue="checklist">
-        <TabsList className="mb-4 h-auto flex-wrap">
+        <TabsList className="mb-4 w-full justify-start overflow-x-auto">
           <TabsTrigger value="checklist">Checklist</TabsTrigger>
           <TabsTrigger value="day">School day</TabsTrigger>
           <TabsTrigger value="teachers">Teachers</TabsTrigger>
@@ -426,14 +426,17 @@ function TeachersTab({ canEdit }: { canEdit: boolean }) {
         />
       </div>
 
+      <p className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground lg:hidden">
+        Swipe left to see subjects, limits and edit <ChevronRight className="h-3 w-3" />
+      </p>
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-sm" style={{ minWidth: 800 }}>
           <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-3 py-2 font-medium">Teacher</th>
-              <th className="px-3 py-2 font-medium">Load</th>
-              <th className="px-3 py-2 font-medium">Subjects they can take</th>
-              <th className="px-3 py-2 font-medium">Limits</th>
+              <th className="whitespace-nowrap px-3 py-2 font-medium">Load</th>
+              <th className="whitespace-nowrap px-3 py-2 font-medium">Subjects they can take</th>
+              <th className="whitespace-nowrap px-3 py-2 font-medium">Limits</th>
               <th className="px-3 py-2" />
             </tr>
           </thead>

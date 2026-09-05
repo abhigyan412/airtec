@@ -122,7 +122,7 @@ export default function MyWeekPage() {
       )}
 
       <Tabs defaultValue="week">
-        <TabsList className="mb-4 h-auto flex-wrap">
+        <TabsList className="mb-4 w-full justify-start overflow-x-auto">
           <TabsTrigger value="week">Timetable</TabsTrigger>
           <TabsTrigger value="cover">
             Cover
