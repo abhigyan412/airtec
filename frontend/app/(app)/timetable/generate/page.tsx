@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  AlertTriangle, CheckCircle2, Download, Eye, History, Loader2, RotateCcw, Trash2, Wand2,
+  AlertTriangle, CheckCircle2, ChevronDown, Download, Eye, History, Loader2, RotateCcw, Trash2, Wand2,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -48,6 +48,7 @@ export default function GeneratePage() {
   const [lastRun, setLastRun] = useState<any>(null)
   const [confirming, setConfirming] = useState<{ kind: 'publish' | 'rollback' | 'discard'; version: any } | null>(null)
   const [previewing, setPreviewing] = useState<{ id: string; label: string } | null>(null)
+  const [feasibilityDetailsOpen, setFeasibilityDetailsOpen] = useState(false)
 
   const canPublish = can('timetable.publish')
   const canExport = can('timetable.export')
@@ -173,27 +174,38 @@ export default function GeneratePage() {
                           : 'Fix these first — generating now would only fail slowly.'}
                       </p>
 
-                      <div className="mt-3 space-y-3">
-                        {feasibility.data.groups.map((group: any) => (
-                          <div key={group.templateName}>
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                              {group.templateName} · {group.sections} sections · {group.periodsPerDay} periods a day
-                            </p>
-                            {group.readable.length ? (
-                              <ul className="mt-1 space-y-1">
-                                {group.readable.map((message: string, i: number) => (
-                                  <li key={i} className="flex items-start gap-2 text-sm">
-                                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />
-                                    <span className="text-muted-foreground">{message}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="mt-0.5 text-sm text-success">No problems found</p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setFeasibilityDetailsOpen(v => !v)}
+                        className="mt-2 flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                      >
+                        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', feasibilityDetailsOpen && 'rotate-180')} />
+                        {feasibilityDetailsOpen ? 'Hide details' : 'Show details'}
+                      </button>
+
+                      {feasibilityDetailsOpen && (
+                        <div className="mt-3 space-y-3">
+                          {feasibility.data.groups.map((group: any) => (
+                            <div key={group.templateName}>
+                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                {group.templateName} · {group.sections} sections · {group.periodsPerDay} periods a day
+                              </p>
+                              {group.readable.length ? (
+                                <ul className="mt-1 space-y-1">
+                                  {group.readable.map((message: string, i: number) => (
+                                    <li key={i} className="flex items-start gap-2 text-sm">
+                                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />
+                                      <span className="text-muted-foreground">{message}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="mt-0.5 text-sm text-success">No problems found</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>
