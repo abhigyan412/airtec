@@ -62,7 +62,7 @@ export default function StaffAttendancePage() {
             <>
               <HrQuickNav current="attendance" />
               <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-                <TabsList>
+                <TabsList className="h-auto flex-wrap">
                   <TabsTrigger value="mark"><ClipboardList className="h-4 w-4" /> Mark</TabsTrigger>
                   <TabsTrigger value="report"><BarChart3 className="h-4 w-4" /> Report</TabsTrigger>
                   <TabsTrigger value="requests"><Inbox className="h-4 w-4" /> Requests</TabsTrigger>
@@ -215,7 +215,7 @@ function MarkTab() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
         {syncStatus?.configured && (
           <>
             <Button variant="outline" onClick={() => setShowMapper(true)} disabled={syncMutation.isPending}

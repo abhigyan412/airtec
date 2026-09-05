@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
+import { useAuth } from './auth'
+import {
+  enableForegroundNotifications, grantPrivacyConsent, medianReady,
+  oneSignalInfo, oneSignalLogin, oneSignalLogout, oneSignalRegister, waitForPushOptIn,
+} from './median'
 
 // ── Web push subscription (design.md §6.2) ──────────────────────────
 //
@@ -31,11 +36,25 @@ export type PushBlocker =
   | 'insecure-context'
   /** Secure, not iOS, still no service worker or PushManager. */
   | 'unsupported-browser'
+  /**
+   * Inside the Median app, where push is native and the OS permission is
+   * off. Distinct from 'permission-denied' because it is recoverable from
+   * the phone's own settings, and because the browser advice under
+   * 'unsupported-browser' is actively wrong here.
+   */
+  | 'median-push-off'
   /** The user (or their admin policy) said no. Only site settings can undo it. */
   | 'permission-denied'
 
 export type PushState = {
-  /** Browser can do push at all (has SW + PushManager + Notification). */
+  /**
+   * How this device receives push. The Median app has no Web Push API at
+   * all, so it registers a OneSignal subscription id instead; every state
+   * below means the same thing either way, which is what lets the UI stay
+   * ignorant of the split.
+   */
+  transport: 'webpush' | 'onesignal'
+  /** This device can do push at all. */
   supported: boolean
   permission: NotificationPermission | 'unsupported'
   /** This browser holds a PushSubscription. */
@@ -99,6 +118,11 @@ export function describeBlocker(blocker: PushBlocker): { title: string; detail: 
         title: 'This browser cannot show notifications',
         detail: 'It has no push support — or it is in a private window, where push is disabled. Try a normal window in Chrome, Edge, Firefox or Safari.',
       }
+    case 'median-push-off':
+      return {
+        title: 'Notifications are switched off for this app',
+        detail: 'Open your phone\u2019s Settings, find this app under Notifications, and allow them \u2014 then come back and switch this on.',
+      }
     case 'permission-denied':
       return {
         title: 'Notifications are blocked for this site',
@@ -129,6 +153,7 @@ function messageFor(err: any, fallback: string): string {
 const resynced = new Set<string>()
 
 const INITIAL: PushState = {
+  transport: 'webpush',
   supported: false, permission: 'unsupported', subscribed: false, serverKnown: null,
   blocker: 'none', needsHomeScreenInstall: false, shouldOffer: false,
   canEnable: false, busy: false, error: null, ready: false,
@@ -136,15 +161,106 @@ const INITIAL: PushState = {
 
 export function usePushSubscription(app: 'staff' | 'family') {
   const [state, setState] = useState<PushState>(INITIAL)
+  // Only so OneSignal can label the device with our user id. Delivery
+  // never depends on it, so a missing user must not stop push working.
+  const { user } = useAuth()
+  const userId = user?.id ?? null
   // Set once the component unmounts, so a slow probe doesn't setState into
   // a torn-down tree.
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
 
+  /**
+   * Reconcile one device id with the server, whichever transport made it.
+   * Returns what the server believes, or null when we could not ask.
+   *
+   * The browser (or the OS) holding a subscription proves nothing on its
+   * own: if the POST that registers it ever failed, this device reports
+   * "on" while the server has no row and every push is silently skipped.
+   */
+  const reconcile = useCallback(async (
+    endpoint: string,
+    register: () => Promise<void>,
+  ): Promise<boolean | null> => {
+    try {
+      const { data } = await api.get('/notifications/push/subscriptions', { params: { endpoint } })
+      let known: boolean = !!data?.data?.thisDevice
+      if (!known && !resynced.has(endpoint)) {
+        resynced.add(endpoint)
+        // Registration upserts on endpoint, so re-sending is safe and
+        // repairs the mismatch instead of just reporting it.
+        await register()
+        known = true
+      }
+      return known
+    } catch {
+      // Offline or the endpoint is unreachable: leave it unknown rather
+      // than claiming either answer.
+      return null
+    }
+  }, [])
+
   const refresh = useCallback(async () => {
     if (typeof window === 'undefined') return
 
-    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
+    const webPushable = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
+
+    // ── Native (Median app) ──────────────────────────────────────
+    // Checked first and unconditionally preferred: a WebView that one day
+    // ships PushManager still should not be routed through a web push
+    // service when the wrapper has a real APNs/FCM connection.
+    //
+    // The second attempt is the one that matters in the app. A quick
+    // no-hint miss is cheap to be wrong about *unless* the fallback
+    // verdict would be 'unsupported-browser' — the one answer that is
+    // both false inside the app and useless everywhere ("install
+    // Chrome"). An iPhone in a Safari tab has a better answer already, so
+    // it is not made to wait; nor is an insecure origin.
+    const worthWaiting = !webPushable && !(isIOS() && !isStandalone()) && isSecure()
+    const median = (await medianReady())
+      ?? (worthWaiting ? await medianReady({ force: true, timeoutMs: 2500 }) : null)
+
+    if (median) {
+      // Before anything else. This is a display setting, not a
+      // subscription one, and it was being asserted only after the
+      // opted-in checks — so a device that had not settled yet kept the
+      // default, and every notification that arrived while the app was
+      // open was silently dropped.
+      await enableForegroundNotifications()
+
+      const info = await oneSignalInfo()
+      const deviceId = info?.deviceId ?? null
+      const optedIn = !!info?.optedIn
+
+      if (!alive.current) return
+      // Only claim the OS said no when the device is registered and still
+      // not allowed. Before registration there is nothing to report but
+      // "off" — saying "switched off in Settings" to someone who has
+      // never been asked sends them to a screen that already looks right.
+      const blocker: PushBlocker = deviceId && !optedIn ? 'median-push-off' : 'none'
+      setState(s => ({
+        ...s, transport: 'onesignal', supported: true,
+        permission: optedIn ? 'granted' : 'default',
+        subscribed: optedIn && !!deviceId,
+        blocker, needsHomeScreenInstall: false,
+        canEnable: !optedIn,
+        ready: true,
+        shouldOffer: !optedIn && blocker === 'none' && !recentlyDismissed(),
+      }))
+
+      if (!deviceId || !optedIn) {
+        if (alive.current) setState(s => ({ ...s, serverKnown: null }))
+        return
+      }
+      const known = await reconcile(deviceId, () =>
+        api.post('/notifications/push/subscribe', { provider: 'onesignal', subscriptionId: deviceId, app })
+          .then(() => undefined))
+      if (alive.current) setState(s => ({ ...s, serverKnown: known }))
+      return
+    }
+
+    // ── Web push (a real browser) ────────────────────────────────
+    const supported = webPushable
 
     if (!supported) {
       // Order matters: an iPhone in a Safari tab is *also* missing the
@@ -157,7 +273,8 @@ export function usePushSubscription(app: 'staff' | 'family') {
 
       if (!alive.current) return
       setState(s => ({
-        ...s, supported: false, permission: 'unsupported', subscribed: false, serverKnown: null,
+        ...s, transport: 'webpush',
+        supported: false, permission: 'unsupported', subscribed: false, serverKnown: null,
         blocker, needsHomeScreenInstall: blocker === 'ios-needs-install',
         canEnable: false, ready: true,
         // Worth telling an iPhone user how to enable this; pointless on a
@@ -179,7 +296,7 @@ export function usePushSubscription(app: 'staff' | 'family') {
 
     if (!alive.current) return
     setState(s => ({
-      ...s, supported: true, permission, subscribed,
+      ...s, transport: 'webpush', supported: true, permission, subscribed,
       blocker, needsHomeScreenInstall: false,
       canEnable: blocker === 'none' && !subscribed,
       ready: true,
@@ -193,36 +310,62 @@ export function usePushSubscription(app: 'staff' | 'family') {
       return
     }
 
-    // Reconcile with the server. The browser holding a subscription says
-    // nothing about whether the row that makes push actually send ever
-    // got written — if that POST failed once, this browser reports
-    // "notifications on" forever while every push is skipped server-side.
-    try {
-      const { data } = await api.get('/notifications/push/subscriptions', {
-        params: { endpoint: subscription.endpoint },
-      })
-      let known: boolean = !!data?.data?.thisDevice
-
-      if (!known && !resynced.has(subscription.endpoint)) {
-        resynced.add(subscription.endpoint)
-        // The register endpoint upserts on endpoint, so re-sending is safe
-        // and repairs the mismatch instead of just reporting it.
-        await api.post('/notifications/push/subscribe', { subscription: subscription.toJSON(), app })
-        known = true
-      }
-      if (alive.current) setState(s => ({ ...s, serverKnown: known }))
-    } catch {
-      // Offline or the endpoint is unreachable: leave it unknown rather
-      // than claiming either answer.
-      if (alive.current) setState(s => ({ ...s, serverKnown: null }))
-    }
-  }, [app])
+    const known = await reconcile(subscription.endpoint, () =>
+      api.post('/notifications/push/subscribe', { subscription: subscription!.toJSON(), app })
+        .then(() => undefined))
+    if (alive.current) setState(s => ({ ...s, serverKnown: known }))
+  }, [app, reconcile])
 
   useEffect(() => { refresh() }, [refresh])
 
   const subscribe = useCallback(async () => {
     setState(s => ({ ...s, busy: true, error: null }))
     try {
+      // ── Native (Median app) ────────────────────────────────────
+      // Same two-stage resolution as refresh(): by the time someone taps
+      // Turn on we have already decided this is the app, so waiting is
+      // correct rather than merely affordable.
+      if (await medianReady() ?? await medianReady({ force: true, timeoutMs: 2500 })) {
+        // Prompts the OS. Already-granted is a no-op, so this is also the
+        // repair path for a device that was opted out and has since been
+        // re-allowed in phone settings.
+        // Consent first, unconditionally. It was gated on reading
+        // requiresPrivacyConsent, but a build waiting on consent is
+        // exactly the one that reports nothing at all — so the gate shut
+        // off the call in the only case it was written for. Granting is a
+        // no-op everywhere else.
+        await grantPrivacyConsent()
+
+        await oneSignalRegister()
+        if (userId) await oneSignalLogin(userId)
+
+        // register() returns when the OS prompt is answered; OneSignal
+        // registers the subscription over the network after that. Wait
+        // for it rather than reading once and calling the gap a refusal.
+        const info = await waitForPushOptIn()
+        const deviceId = info?.deviceId
+        const optedIn = !!info?.optedIn
+
+        if (!deviceId || !optedIn) {
+          setState(s => ({
+            ...s, busy: false, subscribed: false, canEnable: true, shouldOffer: false,
+            blocker: 'median-push-off',
+          }))
+          return false
+        }
+
+        await enableForegroundNotifications()
+        await api.post('/notifications/push/subscribe', {
+          provider: 'onesignal', subscriptionId: deviceId, app,
+        })
+        resynced.add(deviceId)
+        setState(s => ({
+          ...s, busy: false, subscribed: true, serverKnown: true,
+          permission: 'granted', blocker: 'none', canEnable: false, shouldOffer: false,
+        }))
+        return true
+      }
+
       // navigator.serviceWorker.ready never settles if nothing ever
       // registers a worker, which would hang this button forever with no
       // explanation. Bound the wait and say so.
@@ -272,11 +415,27 @@ export function usePushSubscription(app: 'staff' | 'family') {
       setState(s => ({ ...s, busy: false, error: messageFor(err, 'Could not enable notifications') }))
       return false
     }
-  }, [app])
+  }, [app, userId])
 
   const unsubscribe = useCallback(async () => {
     setState(s => ({ ...s, busy: true, error: null }))
     try {
+      // ── Native (Median app) ────────────────────────────────────
+      // The OS permission is the user's to revoke, not ours; what we can
+      // do is stop addressing this device and unbind the identity, which
+      // is what "off" has to mean here.
+      if (await medianReady()) {
+        const info = await oneSignalInfo()
+        const deviceId = info?.deviceId
+        if (deviceId) {
+          await api.delete('/notifications/push/subscribe', { data: { endpoint: deviceId } })
+          resynced.delete(deviceId)
+        }
+        await oneSignalLogout()
+        setState(s => ({ ...s, busy: false, subscribed: false, serverKnown: null, canEnable: true }))
+        return
+      }
+
       const reg = await navigator.serviceWorker.getRegistration()
       const sub = await reg?.pushManager.getSubscription()
       if (sub) {
@@ -299,6 +458,12 @@ export function usePushSubscription(app: 'staff' | 'family') {
   const sendTest = useCallback(async (): Promise<{ delivered: boolean; reason: string | null }> => {
     setState(s => ({ ...s, busy: true, error: null }))
     try {
+      // Whoever taps this is looking at the app, so the notification is
+      // about to arrive at the one moment the wrapper suppresses by
+      // default. A test that cannot be seen is worse than no test: it
+      // reports success while proving nothing.
+      await enableForegroundNotifications()
+
       const { data } = await api.post('/notifications/test-push')
       const result = data?.data ?? {}
       setState(s => ({ ...s, busy: false }))

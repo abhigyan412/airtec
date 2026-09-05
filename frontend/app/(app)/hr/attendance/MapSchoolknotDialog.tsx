@@ -156,9 +156,9 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2">
-              <Input placeholder="Search staff…" value={q} onChange={e => setQ(e.target.value)} className="h-9" />
-              <Button variant="outline" size="sm" onClick={autoSuggest} disabled={loading} title="Fill unmapped staff with a best-guess device">
+            <div className="flex flex-wrap items-center gap-2">
+              <Input placeholder="Search staff…" value={q} onChange={e => setQ(e.target.value)} className="h-9 min-w-[10rem] flex-1" />
+              <Button variant="outline" size="sm" className="shrink-0" onClick={autoSuggest} disabled={loading} title="Fill unmapped staff with a best-guess device">
                 <Wand2 className="h-4 w-4" /> Auto-suggest
               </Button>
             </div>
@@ -175,7 +175,7 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
                     const curKey = cur ? `${cur.school}:${cur.reg}` : 'none'
                     const hit = cur ? rosterByKey.get(curKey) : undefined
                     return (
-                      <div key={s.email} className="flex items-center gap-3 px-3 py-2">
+                      <div key={s.email} className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:gap-3">
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium text-foreground">{s.full_name}</p>
                           <p className="truncate text-[11px] text-muted-foreground">{s.email}</p>
@@ -184,7 +184,7 @@ export function MapSchoolknotDialog({ open, onOpenChange, onSaved }: {
                           <span className="text-[11px] text-warning-foreground" title="This device is not in the current roster">reg not in feed</span>
                         )}
                         <Select value={curKey} onValueChange={v => set(s.email, v)}>
-                          <SelectTrigger className="h-8 w-[230px] text-xs">
+                          <SelectTrigger className="h-8 w-full text-xs sm:w-[230px]">
                             <SelectValue>
                               {cur ? `${schoolLabel(cur.school)} · ${cur.reg}${hit ? ` · ${hit.name}` : ''}` : <span className="text-muted-foreground">Not on a device</span>}
                             </SelectValue>

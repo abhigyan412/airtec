@@ -273,10 +273,10 @@ export default function ArrangementsPage() {
                 <div className="mt-2 space-y-2">
                   {(gapsExpanded ? staffingGaps : staffingGaps.slice(0, 2)).map((a: any) => (
                     <div key={a.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/20 bg-background px-3 py-2">
-                      <div className="min-w-0">
+                      className="flex flex-col gap-2 rounded-lg border border-destructive/20 bg-background px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                      <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="truncate text-sm font-medium text-foreground">{a.teacher_name}</p>
+                          <p className="min-w-0 truncate text-sm font-medium text-foreground">{a.teacher_name}</p>
                           <Chip tone={a.permanently_gone ? 'bad' : 'warn'}>
                             {a.permanently_gone ? 'fix the timetable' : 'needs a stand-in teacher'}
                           </Chip>
@@ -289,7 +289,7 @@ export default function ArrangementsPage() {
                       <div className="flex shrink-0 gap-2">
                         <Link
                           href="/timetable/block"
-                          className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+                          className="rounded-md border border-border px-2.5 py-1.5 text-center text-xs font-medium hover:bg-accent max-sm:w-full"
                         >
                           Reassign their periods →
                         </Link>
@@ -457,8 +457,8 @@ function ProposedAbsenceRow({ absence, date, onDone }: { absence: any; date: str
   const busy = confirm.isPending || dismiss.isPending
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2">
-      <div className="min-w-0">
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-background px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+      <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-foreground">{absence.teacher_name}</p>
         <p className="truncate text-xs text-muted-foreground">{absence.reason}</p>
       </div>
@@ -509,11 +509,11 @@ function TeacherGroup({
         onClick={() => setIsOpen(v => !v)}
         className="flex w-full flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50"
       >
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">
             {initials(group.name)}
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-semibold text-foreground">{group.name}</p>
             <p className="text-xs text-muted-foreground">
               {group.rows.length} period{group.rows.length === 1 ? '' : 's'}

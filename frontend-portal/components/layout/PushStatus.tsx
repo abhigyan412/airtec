@@ -44,12 +44,25 @@ export function PushStatus({ app }: { app: 'staff' | 'family' }) {
   return (
     <div className="flex-shrink-0 border-t border-border bg-muted/30 px-4 py-3">
       <div className="flex items-center gap-2.5">
-        <StatusIcon on={on} blocked={!!blocked || brokenSync} />
+        {/* A wall you can walk back from is not "Unavailable" — it is
+            just off. Saying otherwise next to a working Turn on button
+            contradicts itself, and the red triangle overstates it. */}
+        <StatusIcon on={on} blocked={(!!blocked && !canEnable) || brokenSync} />
         <p className="flex-1 text-xs font-semibold text-foreground">Push on this device</p>
         <span className={cn('text-[11px] font-semibold',
-          on ? 'text-success' : blocked || brokenSync ? 'text-destructive' : 'text-muted-foreground')}>
-          {on ? 'On' : blocked ? 'Unavailable' : brokenSync ? 'Not working' : 'Off'}
+          on ? 'text-success' : (blocked && !canEnable) || brokenSync ? 'text-destructive' : 'text-muted-foreground')}>
+          {on ? 'On' : blocked && !canEnable ? 'Unavailable' : brokenSync ? 'Not working' : 'Off'}
         </span>
+        {/* The only way into the diagnostics page from inside the wrapped
+            app, which has no address bar. It was shown only when a
+            blocker was set — so the moment push reported "On" while
+            notifications still weren't appearing, the one page that could
+            explain it became unreachable. "On" is not the same as
+            working, so it is always here now. */}
+        <a href="/push-debug" title="Push diagnostics" aria-label="Push diagnostics"
+          className="text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground">
+          ?
+        </a>
       </div>
 
       {blocked && (
@@ -68,7 +81,12 @@ export function PushStatus({ app }: { app: 'staff' | 'family' }) {
 
       {error && <p className="mt-1.5 pl-[26px] text-[11px] leading-relaxed text-destructive">{error}</p>}
 
-      {!blocked && (
+      {/* `canEnable` overrides the wall, because one wall is recoverable
+          from here: in the Median app a user who turns notifications back
+          on in phone settings needs a switch to come back to. Hiding it
+          would have left that copy pointing at a control that wasn't
+          there. Every other blocker leaves canEnable false. */}
+      {(!blocked || canEnable) && (
         <div className="mt-2 flex items-center gap-2 pl-[26px]">
           {canEnable && (
             <Button size="sm" onClick={subscribe} disabled={busy}>

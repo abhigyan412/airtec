@@ -293,9 +293,9 @@ export function Banner({
   }
   return (
     <div className={cn('flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between', tones[tone])}>
-      <div className="flex items-start gap-3">
+      <div className="flex min-w-0 flex-1 items-start gap-3">
         <AlertTriangle className={cn('mt-0.5 h-4 w-4 shrink-0', icons[tone])} />
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-foreground">{title}</p>
           {children && <div className="mt-0.5 text-sm text-muted-foreground">{children}</div>}
         </div>
