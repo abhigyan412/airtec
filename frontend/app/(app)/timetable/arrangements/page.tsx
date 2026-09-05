@@ -507,9 +507,9 @@ function TeacherGroup({
       <button
         type="button"
         onClick={() => setIsOpen(v => !v)}
-        className="flex w-full flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+        className="flex w-full flex-col items-start gap-2 border-b border-border bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:justify-between"
       >
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto sm:flex-1">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">
             {initials(group.name)}
           </div>
@@ -524,7 +524,7 @@ function TeacherGroup({
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 pl-12 sm:pl-0">
           {canManage && absence && (
             // stopPropagation so tapping this doesn't also toggle the
             // group open/closed underneath it.
