@@ -20,6 +20,39 @@ vi.mock('web-push', () => ({
 
 const sb = supabase as any
 
+/**
+ * OneSignal is reached over plain fetch, so the transport is stubbed the
+ * same way web-push is: what these assert is how the worker reads each
+ * documented answer, not that OneSignal can deliver.
+ *
+ * The response shapes below are the real ones. A 200 carrying
+ * `errors: ["All included players are not subscribed"]` and an empty `id`
+ * is what OneSignal actually returns for an audience of dead devices —
+ * verified against the live API — and reading that as a failure would
+ * retry a dead phone until the attempt ceiling on every notification.
+ */
+const oneSignalFetch = vi.fn()
+const realFetch = globalThis.fetch.bind(globalThis)
+// Everything else on this process — supabase-js very much included —
+// still needs a working fetch, so only OneSignal is intercepted.
+globalThis.fetch = ((url: any, init?: any) =>
+  String(url).includes('api.onesignal.com')
+    ? oneSignalFetch(url, init)
+    : realFetch(url, init)) as any
+const okJson = (body: any, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+
+/**
+ * The `provider` column ships with its own migration. Probed at module
+ * scope because `it.runIf` is evaluated when the file is collected — a
+ * flag set in `beforeAll` is still false by then, and every test below
+ * would skip forever, including after the migration landed.
+ */
+const hasProviderColumn = !(await sb.from('push_subscriptions').select('provider').limit(1)).error
+if (!hasProviderColumn) {
+  console.warn('[delivery.test] skipping the OneSignal suite: run the push provider migration first')
+}
+
 describe('delivery outbox', () => {
   let schoolId: string
   let userId: string
@@ -52,9 +85,13 @@ describe('delivery outbox', () => {
     })
     process.env.VAPID_PUBLIC_KEY ||= 'test-public'
     process.env.VAPID_PRIVATE_KEY ||= 'test-private'
+    process.env.ONESIGNAL_APP_ID ||= 'test-app-id'
+    process.env.ONESIGNAL_REST_API_KEY ||= 'test-rest-key'
+
   })
 
   afterAll(async () => {
+    globalThis.fetch = realFetch
     if (created.length) await sb.from('notifications').delete().in('id', created)
     await sb.from('push_subscriptions').delete().eq('user_id', userId)
     await sb.from('notification_preferences').delete().eq('user_id', userId)
@@ -66,6 +103,7 @@ describe('delivery outbox', () => {
 
   beforeEach(async () => {
     sendNotification.mockReset()
+    oneSignalFetch.mockReset()
     await sb.from('push_subscriptions').delete().eq('user_id', userId)
     await sb.from('notification_preferences').delete().eq('user_id', userId)
   })
@@ -223,6 +261,125 @@ describe('delivery outbox', () => {
         const rows = await deliveriesFor(n.id)
         expect(rows.filter((r: any) => r.status === 'claimed')).toHaveLength(0)
       }
+    })
+  })
+
+  // ── OneSignal, the transport the Median app actually uses ────────
+  //
+  // The wrapped app has no Web Push API, so these devices are the only
+  // ones a phone on the store can register. Every case below is one the
+  // web-push path already has, asserted again for the second transport:
+  // conflating them is how "push works" stays true on a laptop and false
+  // on every phone.
+  describe('push via OneSignal', () => {
+    const addPushDelivery = async () => {
+      const n = await makeNotification()
+      await sb.from('notification_deliveries').insert({ notification_id: n.id, channel: 'push' })
+      return n
+    }
+
+    const addDevice = async (endpoint: string) => {
+      const { error } = await sb.from('push_subscriptions').insert({
+        user_id: userId, school_id: schoolId, app: 'family',
+        provider: 'onesignal', endpoint, p256dh: null, auth: null,
+      })
+      if (error) throw new Error(error.message)
+    }
+
+    it.runIf(hasProviderColumn)('sends to the device and marks the delivery sent', async () => {
+      const endpoint = `os-sub-${Date.now()}`
+      await addDevice(endpoint)
+      oneSignalFetch.mockResolvedValue(okJson({ id: 'notif-uuid', recipients: 1 }))
+
+      const n = await addPushDelivery()
+      const result = await runDeliveries(50)
+
+      expect(result.sent).toBe(1)
+      expect((await deliveriesFor(n.id))[0].status).toBe('sent')
+
+      // Addressed by subscription id, with the credentials on the header.
+      const [url, init] = oneSignalFetch.mock.calls[0]
+      expect(url).toBe('https://api.onesignal.com/notifications')
+      expect(init.headers.Authorization).toMatch(/^Key /)
+      const body = JSON.parse(init.body)
+      expect(body.include_subscription_ids).toEqual([endpoint])
+      expect(body.headings.en).toBe('Fee overdue')
+    })
+
+    it.runIf(hasProviderColumn)('treats an empty audience as expired, not as a failure to retry', async () => {
+      await addDevice(`os-dead-${Date.now()}`)
+      // The real 200 for an audience of retired devices.
+      oneSignalFetch.mockResolvedValue(okJson({ id: '', errors: ['All included players are not subscribed'] }))
+
+      const n = await addPushDelivery()
+      await runDeliveries(50)
+
+      const row = (await deliveriesFor(n.id))[0]
+      expect(row.status).toBe('skipped')
+      expect(row.last_error).toContain('not subscribed')
+      // And the point of `skipped`: the worker never picks it up again.
+      // (`next_attempt_at` keeps its insert-time value on a settled row —
+      // status is what the claim query filters on.)
+      expect((await runDeliveries(50)).claimed).toBe(0)
+    })
+
+    it.runIf(hasProviderColumn)('retires ids OneSignal names as invalid', async () => {
+      const endpoint = `os-invalid-${Date.now()}`
+      await addDevice(endpoint)
+      oneSignalFetch.mockResolvedValue(okJson({ id: '', errors: { invalid_player_ids: [endpoint] } }))
+
+      await runDeliveries(50)
+      await addPushDelivery()
+      await runDeliveries(50)
+
+      const { data } = await sb.from('push_subscriptions').select('failed_at').eq('endpoint', endpoint).single()
+      expect(data.failed_at).toBeTruthy()
+    })
+
+    it.runIf(hasProviderColumn)('retries a 5xx rather than giving the device up', async () => {
+      await addDevice(`os-flaky-${Date.now()}`)
+      oneSignalFetch.mockResolvedValue(okJson({ errors: ['service unavailable'] }, 503))
+
+      const n = await addPushDelivery()
+      await runDeliveries(50)
+
+      const row = (await deliveriesFor(n.id))[0]
+      expect(row.status).toBe('pending')
+      expect(row.attempts).toBe(1)
+      expect(row.last_error).toContain('503')
+    })
+
+    it.runIf(hasProviderColumn)('reaches a laptop on web push and a phone on OneSignal from one notification', async () => {
+      await addDevice(`os-both-${Date.now()}`)
+      await sb.from('push_subscriptions').insert({
+        user_id: userId, school_id: schoolId, app: 'family', provider: 'webpush',
+        endpoint: `https://push.example.com/both-${Date.now()}`, p256dh: 'k', auth: 'a',
+      })
+      sendNotification.mockResolvedValue({ statusCode: 201 })
+      oneSignalFetch.mockResolvedValue(okJson({ id: 'notif-uuid', recipients: 1 }))
+
+      const n = await addPushDelivery()
+      await runDeliveries(50)
+
+      expect(sendNotification).toHaveBeenCalledTimes(1)
+      expect(oneSignalFetch).toHaveBeenCalledTimes(1)
+      expect((await deliveriesFor(n.id))[0].status).toBe('sent')
+    })
+
+    it.runIf(hasProviderColumn)('still delivers to the phone when web push is broken', async () => {
+      await addDevice(`os-solo-${Date.now()}`)
+      await sb.from('push_subscriptions').insert({
+        user_id: userId, school_id: schoolId, app: 'family', provider: 'webpush',
+        endpoint: `https://push.example.com/broken-${Date.now()}`, p256dh: 'k', auth: 'a',
+      })
+      sendNotification.mockRejectedValue(Object.assign(new Error('boom'), { statusCode: 500 }))
+      oneSignalFetch.mockResolvedValue(okJson({ id: 'notif-uuid', recipients: 1 }))
+
+      const n = await addPushDelivery()
+      await runDeliveries(50)
+
+      // One transport failing must not lose the delivery that succeeded.
+      expect((await deliveriesFor(n.id))[0].status).toBe('sent')
     })
   })
 })

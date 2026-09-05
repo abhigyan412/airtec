@@ -30,6 +30,24 @@ function configureVapid(): boolean {
   return true
 }
 
+// ── OneSignal (native push inside the Median wrapper) ───────────────
+//
+// The Median webview has no Web Push API — no PushManager, no
+// service-worker push — so a VAPID send can never reach a phone running
+// the wrapped app. Those devices register a OneSignal subscription id
+// instead and are pushed through APNs/FCM. Two transports, one outbox:
+// a delivery row is `sent` if either of them reached a device.
+
+const ONESIGNAL_API = 'https://api.onesignal.com/notifications'
+
+export function oneSignalConfigured(): boolean {
+  return !!process.env.ONESIGNAL_APP_ID && !!process.env.ONESIGNAL_REST_API_KEY
+}
+
+export function webPushConfigured(): boolean {
+  return !!process.env.VAPID_PUBLIC_KEY && !!process.env.VAPID_PRIVATE_KEY
+}
+
 /**
  * One `pending` row per (notification, channel) the user hasn't muted.
  *
@@ -83,10 +101,12 @@ async function fail(row: any, message: string) {
  * The caller counts real deliveries with it: "processed" and "delivered"
  * are different numbers, and conflating them is how a test-push button
  * reports success while the notification went nowhere.
+ *
+ * A user's devices can span both transports at once — a laptop on web
+ * push, a phone running the Median app on OneSignal — so this fans out
+ * per provider and succeeds if any device was reached.
  */
 async function deliverPush(row: any, notification: any): Promise<boolean> {
-  if (!configureVapid()) { await settle(row.id, { status: 'skipped', last_error: 'VAPID keys not configured' }); return false }
-
   const { data: subs } = await supabase
     .from('push_subscriptions')
     .select('*')
@@ -95,24 +115,70 @@ async function deliverPush(row: any, notification: any): Promise<boolean> {
 
   if (!subs?.length) { await settle(row.id, { status: 'skipped', last_error: 'no active subscription' }); return false }
 
-  const payload = JSON.stringify({
+  const web = subs.filter((s: any) => s.provider !== 'onesignal')
+  const native = subs.filter((s: any) => s.provider === 'onesignal')
+
+  const payload = {
     title: notification.title,
     body: notification.message,
     link: notification.link ?? '/',
     // Collapses repeats of the same alert in the OS tray rather than
     // stacking one per delivery attempt.
     tag: `${notification.type}:${notification.related_entity_id ?? notification.id}`,
-  })
+  }
 
   let delivered = 0
+  let expired = 0
   const errors: string[] = []
+  const notes: string[] = []
+
+  const absorb = (r: FanOut) => {
+    delivered += r.delivered; expired += r.expired
+    errors.push(...r.errors)
+    if (r.note) notes.push(r.note)
+  }
+
+  if (web.length) {
+    if (!webPushConfigured()) errors.push('VAPID keys not configured')
+    else if (configureVapid()) absorb(await sendWebPush(web, payload))
+  }
+
+  if (native.length) {
+    if (!oneSignalConfigured()) errors.push('OneSignal is not configured')
+    else absorb(await sendOneSignal(native, payload))
+  }
+
+  if (delivered) { await settle(row.id, { status: 'sent', sent_at: new Date().toISOString() }); return true }
+  if (errors.length) { await fail(row, errors.join('; ')); return false }
+  // Every subscription was expired — nothing to retry.
+  if (expired) {
+    await settle(row.id, { status: 'skipped', last_error: notes[0] ?? 'all subscriptions expired' })
+    return false
+  }
+  await settle(row.id, { status: 'skipped', last_error: 'no active subscription' })
+  return false
+}
+
+type FanOut = {
+  delivered: number
+  expired: number
+  /** Retryable failures. A non-empty list makes the delivery row retry. */
+  errors: string[]
+  /** Why nothing was delivered, when that is not worth retrying. */
+  note?: string
+}
+
+async function sendWebPush(subs: any[], payload: any): Promise<FanOut> {
+  const body = JSON.stringify(payload)
+  const out: FanOut = { delivered: 0, expired: 0, errors: [] }
+
   for (const sub of subs) {
     try {
       await webpush.sendNotification(
         { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-        payload,
+        body,
       )
-      delivered++
+      out.delivered++
       await supabase.from('push_subscriptions').update({ last_used_at: new Date().toISOString() }).eq('id', sub.id)
     } catch (err: any) {
       const status = err?.statusCode
@@ -120,18 +186,110 @@ async function deliverPush(row: any, notification: any): Promise<boolean> {
       // normal end of a subscription's life, not an error — retiring it
       // stops every future send from retrying a dead endpoint.
       if (status === 404 || status === 410) {
+        out.expired++
         await supabase.from('push_subscriptions').update({ failed_at: new Date().toISOString() }).eq('id', sub.id)
       } else {
-        errors.push(`${status ?? '?'}: ${err?.message ?? 'unknown'}`)
+        out.errors.push(`${status ?? '?'}: ${err?.message ?? 'unknown'}`)
       }
     }
   }
+  return out
+}
 
-  if (delivered) { await settle(row.id, { status: 'sent', sent_at: new Date().toISOString() }); return true }
-  if (errors.length) { await fail(row, errors.join('; ')); return false }
-  // Every subscription was expired — nothing to retry.
-  await settle(row.id, { status: 'skipped', last_error: 'all subscriptions expired' })
-  return false
+/**
+ * One REST call for all of this user's app devices. Targeting is by
+ * subscription id rather than external_id so a delivery still means "these
+ * specific devices" — the same thing a web-push send means — and so a
+ * device whose identity was never bound still receives.
+ *
+ * OneSignal answers 200 with no `id` when the audience turned out empty.
+ * That is not an error to retry: it means every id we hold is dead, which
+ * is the OneSignal equivalent of a 410.
+ */
+async function sendOneSignal(subs: any[], payload: any): Promise<FanOut> {
+  const out: FanOut = { delivered: 0, expired: 0, errors: [] }
+  const ids = subs.map((s: any) => s.endpoint)
+
+  let res: Response
+  try {
+    res = await fetch(ONESIGNAL_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Key ${process.env.ONESIGNAL_REST_API_KEY}`,
+      },
+      body: JSON.stringify({
+        app_id: process.env.ONESIGNAL_APP_ID,
+        include_subscription_ids: ids,
+        headings: { en: payload.title },
+        contents: { en: payload.body },
+        // Deep-links back into the webview at the notification's target.
+        url: absoluteLink(payload.link),
+        // Same collapse behaviour the web-push payload asks for.
+        android_group: payload.tag,
+        thread_id: payload.tag,
+      }),
+    })
+  } catch (err: any) {
+    out.errors.push(`onesignal: ${err?.message ?? 'request failed'}`)
+    return out
+  }
+
+  const bodyText = await res.text()
+  let json: any = {}
+  try { json = bodyText ? JSON.parse(bodyText) : {} } catch { /* non-JSON error page */ }
+
+  if (!res.ok) {
+    const detail = json?.errors ? JSON.stringify(json.errors) : bodyText.slice(0, 200)
+    out.errors.push(`onesignal ${res.status}: ${detail || 'unknown'}`)
+    return out
+  }
+
+  // `errors` comes back in two shapes on a 200, and they mean opposite
+  // things. An object names specific dead ids; an array is prose about
+  // the request as a whole — "All included players are not subscribed"
+  // is what an audience of retired devices looks like.
+  const errs = json?.errors
+  const invalid: string[] = Array.isArray(errs)
+    ? []
+    : (errs?.invalid_player_ids ?? errs?.invalid_subscription_ids ?? [])
+  const messages: string[] = Array.isArray(errs) ? errs.filter((e: any) => typeof e === 'string') : []
+
+  // Ids OneSignal rejected outright. Retire them so every later send
+  // stops carrying a dead device.
+  if (invalid.length) {
+    out.expired += invalid.length
+    await supabase.from('push_subscriptions')
+      .update({ failed_at: new Date().toISOString() })
+      .in('endpoint', invalid)
+  }
+
+  const live = ids.filter((id: string) => !invalid.includes(id))
+
+  // A real send always carries a notification id. OneSignal answers 200
+  // with an empty one when the audience resolved to nobody, which is its
+  // equivalent of a 410 — retrying it forever would never succeed.
+  if (json?.id && live.length) {
+    out.delivered += live.length
+    await supabase.from('push_subscriptions')
+      .update({ last_used_at: new Date().toISOString() })
+      .in('endpoint', live)
+  } else if (!json?.id) {
+    out.expired += live.length
+    out.note = messages[0] ?? 'OneSignal accepted the request but reached no device'
+  }
+  return out
+}
+
+/**
+ * OneSignal needs somewhere to send the tap; our notifications carry an
+ * app-relative path. Falls back to the raw path if no base is configured,
+ * which OneSignal treats as no link rather than as an error.
+ */
+function absoluteLink(link: string): string {
+  if (/^https?:\/\//i.test(link)) return link
+  const base = process.env.APP_BASE_URL?.replace(/\/$/, '')
+  return base ? `${base}${link.startsWith('/') ? '' : '/'}${link}` : link
 }
 
 async function deliverEmail(row: any, _notification: any): Promise<boolean> {

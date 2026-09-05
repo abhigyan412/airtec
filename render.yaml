@@ -48,6 +48,18 @@ services:
         sync: false
       - key: VAPID_SUBJECT
         sync: false
+      # OneSignal reaches the Median-wrapped app, which has no Web Push
+      # API and so can never be served by the VAPID keys above. Both are
+      # entered in the OneSignal dashboard and must match the credentials
+      # in Median App Studio's OneSignal plugin. APP_BASE_URL is what a
+      # push tap opens; without it a notification's link is relative and
+      # the tap lands on the app's default page.
+      - key: ONESIGNAL_APP_ID
+        sync: false
+      - key: ONESIGNAL_REST_API_KEY
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
 
   - type: web
     name: airtec-frontend

@@ -3,7 +3,7 @@ import { supabase } from '../../shared/db/client'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { asyncHandler, getPagination } from '../../shared/utils/helpers'
 import { runFeeReminders } from '../../shared/utils/feeReminders'
-import { runDeliveries } from '../../shared/utils/delivery'
+import { runDeliveries, oneSignalConfigured, webPushConfigured } from '../../shared/utils/delivery'
 import { createNotification } from '../../shared/utils/notifications'
 
 const router = Router()
@@ -103,20 +103,36 @@ router.get('/vapid-public-key', asyncHandler(async (_req: AuthRequest, res: Resp
 // second row, and a subscription that previously expired should come back
 // to life rather than stay retired.
 router.post('/push/subscribe', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { subscription, app } = req.body ?? {}
-  const endpoint = subscription?.endpoint
-  const p256dh = subscription?.keys?.p256dh
-  const auth = subscription?.keys?.auth
-  if (!endpoint || !p256dh || !auth) {
-    return res.status(400).json({ success: false, error: 'subscription with keys.p256dh and keys.auth is required' })
-  }
+  const { subscription, app, provider, subscriptionId } = req.body ?? {}
+
   if (app !== 'staff' && app !== 'family') {
     return res.status(400).json({ success: false, error: "app must be 'staff' or 'family'" })
   }
 
+  // A device inside the Median wrapper has no web-push endpoint at all —
+  // the OS holds the token and OneSignal addresses it by subscription id.
+  // That id goes in `endpoint` because it plays the same role: the
+  // globally unique name of one device, and the key everything else
+  // (reconcile, delete, retire) already looks a device up by.
+  let row: Record<string, any>
+  if (provider === 'onesignal') {
+    if (!subscriptionId || typeof subscriptionId !== 'string') {
+      return res.status(400).json({ success: false, error: 'subscriptionId is required for a OneSignal device' })
+    }
+    row = { provider: 'onesignal', endpoint: subscriptionId, p256dh: null, auth: null }
+  } else {
+    const endpoint = subscription?.endpoint
+    const p256dh = subscription?.keys?.p256dh
+    const auth = subscription?.keys?.auth
+    if (!endpoint || !p256dh || !auth) {
+      return res.status(400).json({ success: false, error: 'subscription with keys.p256dh and keys.auth is required' })
+    }
+    row = { provider: 'webpush', endpoint, p256dh, auth }
+  }
+
   const { error } = await supabase.from('push_subscriptions').upsert({
     user_id: req.user!.id, school_id: req.user!.school_id, app,
-    endpoint, p256dh, auth,
+    ...row,
     user_agent: req.get('user-agent') ?? null,
     last_used_at: new Date().toISOString(),
     failed_at: null,
@@ -177,7 +193,7 @@ router.put('/preferences', asyncHandler(async (req: AuthRequest, res: Response) 
 // compares the two, so that mismatch becomes visible instead of fatal.
 router.get('/push/subscriptions', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { data, error } = await supabase.from('push_subscriptions')
-    .select('id, app, endpoint, user_agent, last_used_at, created_at')
+    .select('id, app, endpoint, provider, user_agent, last_used_at, created_at')
     .eq('user_id', req.user!.id).is('failed_at', null)
     .order('created_at', { ascending: false })
   if (error) return res.status(400).json({ success: false, error: error.message })
@@ -188,11 +204,17 @@ router.get('/push/subscriptions', asyncHandler(async (req: AuthRequest, res: Res
     success: true,
     data: {
       active: subs.length,
-      // Whether *this* browser's subscription is one the server knows about.
+      // Whether *this* device's subscription is one the server knows
+      // about. In the Median app the "endpoint" is a OneSignal
+      // subscription id, but the question and the answer are the same.
       thisDevice: endpoint ? subs.some(s => s.endpoint === endpoint) : null,
-      configured: !!process.env.VAPID_PUBLIC_KEY && !!process.env.VAPID_PRIVATE_KEY,
+      // Either transport being configured means push can reach somebody.
+      // Reporting only VAPID here told an app user push was unconfigured
+      // on a server perfectly able to reach their phone.
+      configured: webPushConfigured() || oneSignalConfigured(),
+      providers: { webpush: webPushConfigured(), onesignal: oneSignalConfigured() },
       devices: subs.map(s => ({
-        id: s.id, app: s.app, user_agent: s.user_agent,
+        id: s.id, app: s.app, provider: s.provider ?? 'webpush', user_agent: s.user_agent,
         last_used_at: s.last_used_at, created_at: s.created_at,
       })),
     },
@@ -212,8 +234,14 @@ router.get('/push/subscriptions', asyncHandler(async (req: AuthRequest, res: Res
 //
 // Not gated by role: it can only ever notify the caller.
 router.post('/test-push', asyncHandler(async (req: AuthRequest, res: Response) => {
-  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
-    return res.status(503).json({ success: false, error: 'Push is not configured on this server (no VAPID keys).' })
+  // Gated on *any* transport. Requiring VAPID here made the test button
+  // dead on a server that can only reach the wrapped app — which is
+  // precisely the setup someone would be testing.
+  if (!webPushConfigured() && !oneSignalConfigured()) {
+    return res.status(503).json({
+      success: false,
+      error: 'Push is not configured on this server (no VAPID keys and no OneSignal credentials).',
+    })
   }
 
   const { count: subs } = await supabase.from('push_subscriptions')
