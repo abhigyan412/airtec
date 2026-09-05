@@ -592,7 +592,7 @@ function ArrangementRow({
   })
 
   return (
-    <div className={cn('px-4 py-3', needsCover && 'bg-destructive/[0.03]')}>
+    <div className={cn('px-6 py-3 sm:px-8', needsCover && 'bg-destructive/[0.03]')}>
       <div className="flex flex-wrap items-center gap-3">
         <div className="w-14 shrink-0 text-center">
           <p className="text-[10px] font-medium uppercase text-muted-foreground">Period</p>
@@ -637,16 +637,16 @@ function ArrangementRow({
       </div>
 
       {row.reason && !needsCover && (
-        <p className="mt-1.5 pl-[4.25rem] text-xs text-muted-foreground">Chosen because: {row.reason}</p>
+        <p className="mt-1.5 pl-[4.75rem] text-xs text-muted-foreground">Chosen because: {row.reason}</p>
       )}
       {row.status === 'declined' && row.decline_reason && (
-        <p className="mt-1.5 pl-[4.25rem] text-xs text-destructive">
+        <p className="mt-1.5 pl-[4.75rem] text-xs text-destructive">
           Declined: {row.decline_reason}
         </p>
       )}
 
       {isExpanded && canManage && (
-        <div className="mt-3 pl-0 sm:pl-[4.25rem]">
+        <div className="mt-3 pl-0 sm:pl-[4.75rem]">
           <CandidateList
             arrangementId={row.id}
             showAll={showAll}
