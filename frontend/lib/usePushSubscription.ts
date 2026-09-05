@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { useAuth } from './auth'
 import {
-  inMedianApp, medianReady, oneSignalInfo, oneSignalLogin, oneSignalLogout, oneSignalRegister,
+  medianReady, oneSignalInfo, oneSignalLogin, oneSignalLogout, oneSignalRegister,
 } from './median'
 
 // ── Web push subscription (design.md §6.2) ──────────────────────────
@@ -202,11 +202,24 @@ export function usePushSubscription(app: 'staff' | 'family') {
   const refresh = useCallback(async () => {
     if (typeof window === 'undefined') return
 
+    const webPushable = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
+
     // ── Native (Median app) ──────────────────────────────────────
     // Checked first and unconditionally preferred: a WebView that one day
     // ships PushManager still should not be routed through a web push
     // service when the wrapper has a real APNs/FCM connection.
-    if (inMedianApp() && await medianReady()) {
+    //
+    // The second attempt is the one that matters in the app. A quick
+    // no-hint miss is cheap to be wrong about *unless* the fallback
+    // verdict would be 'unsupported-browser' — the one answer that is
+    // both false inside the app and useless everywhere ("install
+    // Chrome"). An iPhone in a Safari tab has a better answer already, so
+    // it is not made to wait; nor is an insecure origin.
+    const worthWaiting = !webPushable && !(isIOS() && !isStandalone()) && isSecure()
+    const median = (await medianReady())
+      ?? (worthWaiting ? await medianReady({ force: true, timeoutMs: 2500 }) : null)
+
+    if (median) {
       const info = await oneSignalInfo()
       const deviceId = info?.subscription?.id ?? null
       const optedIn = !!info?.subscription?.optedIn
@@ -235,7 +248,7 @@ export function usePushSubscription(app: 'staff' | 'family') {
     }
 
     // ── Web push (a real browser) ────────────────────────────────
-    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
+    const supported = webPushable
 
     if (!supported) {
       // Order matters: an iPhone in a Safari tab is *also* missing the
@@ -297,7 +310,10 @@ export function usePushSubscription(app: 'staff' | 'family') {
     setState(s => ({ ...s, busy: true, error: null }))
     try {
       // ── Native (Median app) ────────────────────────────────────
-      if (inMedianApp() && await medianReady()) {
+      // Same two-stage resolution as refresh(): by the time someone taps
+      // Turn on we have already decided this is the app, so waiting is
+      // correct rather than merely affordable.
+      if (await medianReady() ?? await medianReady({ force: true, timeoutMs: 2500 })) {
         // Prompts the OS. Already-granted is a no-op, so this is also the
         // repair path for a device that was opted out and has since been
         // re-allowed in phone settings.
@@ -387,7 +403,7 @@ export function usePushSubscription(app: 'staff' | 'family') {
       // The OS permission is the user's to revoke, not ours; what we can
       // do is stop addressing this device and unbind the identity, which
       // is what "off" has to mean here.
-      if (inMedianApp() && await medianReady()) {
+      if (await medianReady()) {
         const info = await oneSignalInfo()
         const deviceId = info?.subscription?.id
         if (deviceId) {

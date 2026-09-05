@@ -70,17 +70,27 @@ let readyOnce: Promise<any | null> | null = null
  * injection never sees that callback fire and would otherwise wait out
  * the timeout for a bridge already sitting in `window`.
  *
- * A browser with no Median hint resolves immediately: making every
- * desktop wait four seconds before push can even be probed would trade
- * one broken platform for a slow one.
+ * Without a hint this answers immediately, because making every desktop
+ * wait seconds before push can be probed would trade one broken platform
+ * for a slow one. But the hint is only a hint: the user agent is
+ * configurable in App Studio and may say nothing about Median, and the
+ * bridge is injected a beat after first paint. So `force` exists for the
+ * one caller that can afford to wait — the code path that is otherwise
+ * about to tell someone their browser cannot do notifications at all.
+ * Being slow there is free; being wrong there is the whole bug.
  */
-export function medianReady(timeoutMs = 4000): Promise<any | null> {
+export function medianReady(
+  { timeoutMs = 4000, force = false }: { timeoutMs?: number; force?: boolean } = {},
+): Promise<any | null> {
   if (typeof window === 'undefined') return Promise.resolve(null)
   if (readyOnce) return readyOnce
 
+  // A negative answer from the fast path is not worth remembering: it may
+  // only mean "no hint yet", and a later forced call must be free to wait.
+  if (!force && !inMedianApp() && !bridge()?.onesignal) return Promise.resolve(null)
+
   readyOnce = new Promise(resolve => {
     if (bridge()?.onesignal) return resolve(bridge())
-    if (!inMedianApp()) return resolve(null)
 
     let settled = false
     const finish = () => {
@@ -100,6 +110,12 @@ export function medianReady(timeoutMs = 4000): Promise<any | null> {
 
     const poll = setInterval(() => { if (bridge()?.onesignal) finish() }, 200)
     const timer = setTimeout(finish, timeoutMs)
+  }).then(b => {
+    // Only a real bridge is worth caching. Caching a miss would mean one
+    // early probe, before injection, permanently decides this is not an
+    // app — and no later call could ever recover.
+    if (!b) readyOnce = null
+    return b
   })
   return readyOnce
 }
