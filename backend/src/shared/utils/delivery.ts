@@ -223,8 +223,12 @@ async function sendOneSignal(subs: any[], payload: any): Promise<FanOut> {
         include_subscription_ids: ids,
         headings: { en: payload.title },
         contents: { en: payload.body },
-        // Deep-links back into the webview at the notification's target.
-        url: absoluteLink(payload.link),
+        // `targetUrl` in the data payload, NOT OneSignal's `url` field.
+        // They look interchangeable and are not: `url` is the Launch URL,
+        // which the wrapper hands to a browser — taps opened Chrome,
+        // outside the app, signed out, with no JS bridge. `targetUrl` is
+        // reserved by Median and navigates the app itself.
+        data: { targetUrl: absoluteLink(payload.link) },
         // Same collapse behaviour the web-push payload asks for.
         android_group: payload.tag,
         thread_id: payload.tag,
@@ -285,6 +289,10 @@ async function sendOneSignal(subs: any[], payload: any): Promise<FanOut> {
  * OneSignal needs somewhere to send the tap; our notifications carry an
  * app-relative path. Falls back to the raw path if no base is configured,
  * which OneSignal treats as no link rather than as an error.
+ *
+ * APP_BASE_URL is therefore not optional in practice: without it every
+ * deep link is relative, and a relative target is not something a native
+ * notification can act on.
  */
 function absoluteLink(link: string): string {
   if (/^https?:\/\//i.test(link)) return link

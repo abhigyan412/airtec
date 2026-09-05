@@ -221,6 +221,13 @@ export function usePushSubscription(app: 'staff' | 'family') {
       ?? (worthWaiting ? await medianReady({ force: true, timeoutMs: 2500 }) : null)
 
     if (median) {
+      // Before anything else. This is a display setting, not a
+      // subscription one, and it was being asserted only after the
+      // opted-in checks — so a device that had not settled yet kept the
+      // default, and every notification that arrived while the app was
+      // open was silently dropped.
+      await enableForegroundNotifications()
+
       const info = await oneSignalInfo()
       const deviceId = info?.deviceId ?? null
       const optedIn = !!info?.optedIn
@@ -245,9 +252,6 @@ export function usePushSubscription(app: 'staff' | 'family') {
         if (alive.current) setState(s => ({ ...s, serverKnown: null }))
         return
       }
-      // Session-scoped in the app, so it is asserted on every probe.
-      await enableForegroundNotifications()
-
       const known = await reconcile(deviceId, () =>
         api.post('/notifications/push/subscribe', { provider: 'onesignal', subscriptionId: deviceId, app })
           .then(() => undefined))
@@ -454,6 +458,12 @@ export function usePushSubscription(app: 'staff' | 'family') {
   const sendTest = useCallback(async (): Promise<{ delivered: boolean; reason: string | null }> => {
     setState(s => ({ ...s, busy: true, error: null }))
     try {
+      // Whoever taps this is looking at the app, so the notification is
+      // about to arrive at the one moment the wrapper suppresses by
+      // default. A test that cannot be seen is worse than no test: it
+      // reports success while proving nothing.
+      await enableForegroundNotifications()
+
       const { data } = await api.post('/notifications/test-push')
       const result = data?.data ?? {}
       setState(s => ({ ...s, busy: false }))
