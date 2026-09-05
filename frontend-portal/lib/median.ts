@@ -18,17 +18,57 @@
 // the notification UI needs. Everything here answers falsy in a normal
 // browser, so callers can ask unconditionally.
 
-type OneSignalSubscription = { id?: string; token?: string; optedIn?: boolean }
+/**
+ * Median ships two different OneSignal integrations and the bridge
+ * reports a different object for each — this is the shape mismatch that
+ * made "Turn on" fail on a device where push was working fine.
+ *
+ * v5 (user-centric, Median's default) returns a nested subscription:
+ *     { oneSignalId, externalId, subscription: { id, token, optedIn } }
+ *
+ * Legacy Mode (iOS v3 / Android v4 SDK) returns a flat, device-centric
+ * object where the Player ID plays the part of the subscription id:
+ *     { oneSignalUserId, oneSignalPushToken, oneSignalSubscribed }
+ *
+ * Which one a build speaks is decided in App Studio, not by us, and an
+ * app can be migrated between them without the site being rebuilt. So
+ * nothing above this line is allowed to care: both are normalised to one
+ * shape, and `legacy` is inferred from the fields actually present
+ * rather than from the `legacy` flag, which the docs' own example
+ * contradicts.
+ */
+export type OneSignalDevice = {
+  /** Subscription id (v5) or Player ID (legacy). What a send addresses. */
+  deviceId: string | null
+  /** Whatever identity we last bound — our user id. */
+  externalId: string | null
+  /** The device is registered AND allowed to show notifications. */
+  optedIn: boolean
+  /** OneSignal is waiting on consent before it will initialise at all. */
+  requiresPrivacyConsent: boolean
+  legacy: boolean
+}
 
-/** What `median.onesignal.onesignalInfo()` resolves to. */
-export type MedianOneSignalInfo = {
-  /** OneSignal's own user id. Not what we address devices by. */
-  oneSignalId?: string
-  /** Whatever we last passed to `login()` — our user id. */
-  externalId?: string
-  /** The device. `id` is what a send is addressed to. */
-  subscription?: OneSignalSubscription
-  requiresUserPrivacyConsent?: boolean
+function normalise(raw: any): OneSignalDevice | null {
+  if (!raw || typeof raw !== 'object') return null
+  const legacy = 'oneSignalUserId' in raw || 'oneSignalSubscribed' in raw
+  return legacy
+    ? {
+        deviceId: raw.oneSignalUserId || null,
+        externalId: raw.externalId || null,
+        // A legacy build only reports a Player ID once the OS has allowed
+        // notifications, so the id's presence corroborates the flag.
+        optedIn: raw.oneSignalSubscribed === true || (!!raw.oneSignalUserId && raw.oneSignalSubscribed !== false),
+        requiresPrivacyConsent: raw.oneSignalRequiresUserPrivacyConsent === true,
+        legacy: true,
+      }
+    : {
+        deviceId: raw.subscription?.id || null,
+        externalId: raw.externalId || null,
+        optedIn: raw.subscription?.optedIn === true,
+        requiresPrivacyConsent: raw.requiresUserPrivacyConsent === true,
+        legacy: false,
+      }
 }
 
 declare global {
@@ -127,35 +167,50 @@ export async function oneSignal(): Promise<any | null> {
 }
 
 /**
- * Device + identity as OneSignal currently sees them.
+ * Device + identity as OneSignal currently sees them, normalised across
+ * both integrations.
  *
  * Median documents three ways to read this; the promise is the newest.
  * Older builds only call a global, so fall back to that rather than
  * reporting "no push" on an app that merely predates the promise API.
  */
-export async function oneSignalInfo(timeoutMs = 5000): Promise<MedianOneSignalInfo | null> {
+export async function oneSignalInfo(timeoutMs = 5000): Promise<OneSignalDevice | null> {
   const os = await oneSignal()
   if (!os) return null
 
   if (typeof os.onesignalInfo === 'function') {
-    try { return await os.onesignalInfo() } catch { /* fall through to the callback form */ }
+    try {
+      const raw = await os.onesignalInfo()
+      if (raw) return normalise(raw)
+    } catch { /* fall through to the callback form */ }
   }
 
   if (typeof os.info !== 'function') return null
-  return new Promise<MedianOneSignalInfo | null>(resolve => {
+  return new Promise<OneSignalDevice | null>(resolve => {
     const key = '__airtecOneSignalInfo'
     let settled = false
-    const finish = (v: MedianOneSignalInfo | null) => {
+    const finish = (v: any) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       try { delete (window as any)[key] } catch { /* non-configurable */ }
-      resolve(v)
+      resolve(normalise(v))
     }
-    ;(window as any)[key] = (data: MedianOneSignalInfo) => finish(data ?? null)
+    ;(window as any)[key] = (data: any) => finish(data)
     const timer = setTimeout(() => finish(null), timeoutMs)
     try { os.info({ callback: key }) } catch { finish(null) }
   })
+}
+
+/**
+ * OneSignal will not initialise — no device id, no token, nothing — while
+ * it is waiting on consent, and an app configured that way looks
+ * identical from here to one the user has denied. Granting is only ever
+ * reached from an explicit "Turn on", so the consent is real.
+ */
+export async function grantPrivacyConsent(): Promise<void> {
+  const os = await oneSignal()
+  await os?.userPrivacyConsent?.grant?.()
 }
 
 /** Ask the OS for notification permission. No-op outside the app. */
@@ -167,16 +222,24 @@ export async function oneSignalRegister(): Promise<void> {
 /**
  * Bind this device to our user, so a notification can also be addressed
  * by external id from the OneSignal dashboard. Delivery does not depend
- * on it — the server addresses subscription ids — but without it every
- * device in OneSignal is anonymous, which makes debugging one user's
- * missing notification guesswork.
+ * on it — the server addresses device ids — but without it every device
+ * in OneSignal is anonymous, which makes debugging one user's missing
+ * notification guesswork.
+ *
+ * The two integrations spell this differently, and calling the wrong one
+ * is silent: v5 has login/logout, Legacy Mode has externalUserId.set and
+ * .remove. Try the modern name first, fall back to the legacy pair.
  */
 export async function oneSignalLogin(externalId: string): Promise<void> {
   const os = await oneSignal()
-  await os?.login?.(externalId)
+  if (!os) return
+  if (typeof os.login === 'function') { await os.login(externalId); return }
+  await os.externalUserId?.set?.({ externalId })
 }
 
 export async function oneSignalLogout(): Promise<void> {
   const os = await oneSignal()
-  await os?.logout?.()
+  if (!os) return
+  if (typeof os.logout === 'function') { await os.logout(); return }
+  await os.externalUserId?.remove?.()
 }

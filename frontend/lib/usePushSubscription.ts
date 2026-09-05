@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { useAuth } from './auth'
 import {
-  medianReady, oneSignalInfo, oneSignalLogin, oneSignalLogout, oneSignalRegister,
+  grantPrivacyConsent, medianReady, oneSignalInfo, oneSignalLogin, oneSignalLogout, oneSignalRegister,
 } from './median'
 
 // ── Web push subscription (design.md §6.2) ──────────────────────────
@@ -221,10 +221,14 @@ export function usePushSubscription(app: 'staff' | 'family') {
 
     if (median) {
       const info = await oneSignalInfo()
-      const deviceId = info?.subscription?.id ?? null
-      const optedIn = !!info?.subscription?.optedIn
+      const deviceId = info?.deviceId ?? null
+      const optedIn = !!info?.optedIn
 
       if (!alive.current) return
+      // Only claim the OS said no when the device is registered and still
+      // not allowed. Before registration there is nothing to report but
+      // "off" — saying "switched off in Settings" to someone who has
+      // never been asked sends them to a screen that already looks right.
       const blocker: PushBlocker = deviceId && !optedIn ? 'median-push-off' : 'none'
       setState(s => ({
         ...s, transport: 'onesignal', supported: true,
@@ -317,12 +321,18 @@ export function usePushSubscription(app: 'staff' | 'family') {
         // Prompts the OS. Already-granted is a no-op, so this is also the
         // repair path for a device that was opted out and has since been
         // re-allowed in phone settings.
+        // Consent first: while OneSignal is waiting on it there is no
+        // device id to read, and the app looks identical to one the user
+        // has denied. No-op unless the build requires it.
+        const before = await oneSignalInfo()
+        if (before?.requiresPrivacyConsent) await grantPrivacyConsent()
+
         await oneSignalRegister()
         if (userId) await oneSignalLogin(userId)
 
         const info = await oneSignalInfo()
-        const deviceId = info?.subscription?.id
-        const optedIn = !!info?.subscription?.optedIn
+        const deviceId = info?.deviceId
+        const optedIn = !!info?.optedIn
 
         if (!deviceId || !optedIn) {
           // The OS said no, or OneSignal has not finished registering the
@@ -405,7 +415,7 @@ export function usePushSubscription(app: 'staff' | 'family') {
       // is what "off" has to mean here.
       if (await medianReady()) {
         const info = await oneSignalInfo()
-        const deviceId = info?.subscription?.id
+        const deviceId = info?.deviceId
         if (deviceId) {
           await api.delete('/notifications/push/subscribe', { data: { endpoint: deviceId } })
           resynced.delete(deviceId)
