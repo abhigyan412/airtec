@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { useAuth } from './auth'
 import {
-  grantPrivacyConsent, medianReady, oneSignalInfo, oneSignalLogin, oneSignalLogout, oneSignalRegister,
+  enableForegroundNotifications, grantPrivacyConsent, medianReady,
+  oneSignalInfo, oneSignalLogin, oneSignalLogout, oneSignalRegister,
 } from './median'
 
 // ── Web push subscription (design.md §6.2) ──────────────────────────
@@ -244,6 +245,9 @@ export function usePushSubscription(app: 'staff' | 'family') {
         if (alive.current) setState(s => ({ ...s, serverKnown: null }))
         return
       }
+      // Session-scoped in the app, so it is asserted on every probe.
+      await enableForegroundNotifications()
+
       const known = await reconcile(deviceId, () =>
         api.post('/notifications/push/subscribe', { provider: 'onesignal', subscriptionId: deviceId, app })
           .then(() => undefined))
@@ -344,6 +348,7 @@ export function usePushSubscription(app: 'staff' | 'family') {
           return false
         }
 
+        await enableForegroundNotifications()
         await api.post('/notifications/push/subscribe', {
           provider: 'onesignal', subscriptionId: deviceId, app,
         })

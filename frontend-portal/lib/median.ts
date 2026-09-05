@@ -213,6 +213,24 @@ export async function grantPrivacyConsent(): Promise<void> {
   await os?.userPrivacyConsent?.grant?.()
 }
 
+/**
+ * Show notifications even while the app is the focused window.
+ *
+ * Median suppresses them by default, which is a sane default for a
+ * marketing app and the wrong one here: the alerts this app sends —
+ * a period needing cover, a teacher marked absent — are most useful to
+ * someone already looking at it, and silently dropping them is
+ * indistinguishable from push being broken. It is also the first thing
+ * anyone testing push does: open the app and wait.
+ *
+ * Session-scoped, so it is re-asserted on every probe rather than set
+ * once at sign-in.
+ */
+export async function enableForegroundNotifications(): Promise<void> {
+  const os = await oneSignal()
+  try { await os?.enableForegroundNotifications?.(true) } catch { /* older build */ }
+}
+
 /** Ask the OS for notification permission. No-op outside the app. */
 export async function oneSignalRegister(): Promise<void> {
   const os = await oneSignal()
