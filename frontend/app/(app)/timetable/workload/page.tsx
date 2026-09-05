@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { AlertTriangle, ArrowRightLeft, Gauge, Loader2, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowRightLeft, ChevronRight, Gauge, Loader2, TrendingUp } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -321,6 +321,9 @@ function WorkloadTable({ data, onRedistribute }: { data: any; onRedistribute: (t
         ))}
       </div>
 
+      <p className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground lg:hidden">
+        Swipe left to see busiest day, longest run, cover done and rebalance <ChevronRight className="h-3 w-3" />
+      </p>
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-sm" style={{ minWidth: 860 }}>
           <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
@@ -342,18 +345,20 @@ function WorkloadTable({ data, onRedistribute }: { data: any; onRedistribute: (t
                   <p className="font-medium text-foreground">{t.name}</p>
                   {t.limits.exempt && <Chip tone="info">Exempt from cover</Chip>}
                 </td>
-                <td className="px-3 py-2">
+                <td className="whitespace-nowrap px-3 py-2">
                   <div className="flex items-center gap-2">
-                    <div className="h-2 w-20 overflow-hidden rounded-full bg-muted">
+                    <div className="h-2 w-20 shrink-0 overflow-hidden rounded-full bg-muted">
                       <div
                         className={cn('h-full rounded-full', t.utilization > 1 ? 'bg-destructive' : t.utilization > 0.9 ? 'bg-warning' : 'bg-primary')}
                         style={{ width: `${Math.min(100, t.utilization * 100)}%` }}
                       />
                     </div>
-                    <span className={cn('tabular-nums', t.totalPerWeek > t.limits.maxPerWeek && 'font-semibold text-destructive')}>
-                      {t.totalPerWeek}
+                    <span className="shrink-0 whitespace-nowrap tabular-nums">
+                      <span className={cn(t.totalPerWeek > t.limits.maxPerWeek && 'font-semibold text-destructive')}>
+                        {t.totalPerWeek}
+                      </span>
+                      <span className="text-xs text-muted-foreground">/{t.limits.maxPerWeek}</span>
                     </span>
-                    <span className="text-xs text-muted-foreground">/ {t.limits.maxPerWeek}</span>
                   </div>
                 </td>
                 <td className={cn('px-3 py-2 tabular-nums', t.maxPerDay > t.limits.maxPerDay && 'font-semibold text-destructive')}>
