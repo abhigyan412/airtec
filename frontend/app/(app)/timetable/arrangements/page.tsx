@@ -364,7 +364,7 @@ export default function ArrangementsPage() {
                   ) : undefined}
                 />
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-5">
                   {byTeacher.map(group => (
                     <TeacherGroup
                       key={group.teacherId}
@@ -503,11 +503,11 @@ function TeacherGroup({
   const [isOpen, setIsOpen] = useState(false)
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="overflow-hidden shadow-md ring-1 ring-border/60">
       <button
         type="button"
         onClick={() => setIsOpen(v => !v)}
-        className="flex w-full flex-col items-start gap-2 border-b border-border bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:justify-between"
+        className="flex w-full flex-col items-start gap-2 border-b border-border bg-muted/40 px-4 py-3 text-left transition-colors hover:bg-muted/60 sm:flex-row sm:items-center sm:justify-between"
       >
         <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto sm:flex-1">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">
@@ -543,7 +543,7 @@ function TeacherGroup({
       </button>
 
       {isOpen && (
-        <div className="divide-y divide-border">
+        <div className="space-y-2 bg-muted/10 px-5 py-3 sm:px-6">
           {group.rows.map(row => (
             <ArrangementRow
               key={row.id}
@@ -592,7 +592,7 @@ function ArrangementRow({
   })
 
   return (
-    <div className={cn('px-6 py-3 sm:px-8', needsCover && 'bg-destructive/[0.03]')}>
+    <div className={cn('rounded-lg border border-border bg-card px-4 py-3', needsCover && 'bg-destructive/[0.03]')}>
       <div className="flex flex-wrap items-center gap-3">
         <div className="w-14 shrink-0 text-center">
           <p className="text-[10px] font-medium uppercase text-muted-foreground">Period</p>
@@ -637,16 +637,16 @@ function ArrangementRow({
       </div>
 
       {row.reason && !needsCover && (
-        <p className="mt-1.5 pl-[4.75rem] text-xs text-muted-foreground">Chosen because: {row.reason}</p>
+        <p className="mt-1.5 pl-[4.25rem] text-xs text-muted-foreground">Chosen because: {row.reason}</p>
       )}
       {row.status === 'declined' && row.decline_reason && (
-        <p className="mt-1.5 pl-[4.75rem] text-xs text-destructive">
+        <p className="mt-1.5 pl-[4.25rem] text-xs text-destructive">
           Declined: {row.decline_reason}
         </p>
       )}
 
       {isExpanded && canManage && (
-        <div className="mt-3 pl-0 sm:pl-[4.75rem]">
+        <div className="mt-3 pl-0 sm:pl-[4.25rem]">
           <CandidateList
             arrangementId={row.id}
             showAll={showAll}
