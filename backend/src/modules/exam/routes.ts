@@ -3,14 +3,15 @@ import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { authenticate, AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
-import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId, fetchAllRows } from '../../shared/utils/helpers'
+import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId, fetchAllRows, isExamResultVisibleToNonStaff } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus, canActOnStep } from '../../shared/middleware/workflow-engine'
+import { getPermissionsForUser } from '../../shared/middleware/permissions-v2'
 import { toLocalDateStr } from '../../shared/utils/academicCalendar'
 import { createNotifications, getRecipientUserIdsForStudents } from '../../shared/utils/notifications'
 import { runExamAutoStart } from '../../shared/utils/examAutoStart'
 import { ensureResultFreezePublishWorkflowDefinition } from '../rbac/seed'
 import resultSettingsRouter from './resultSettings.routes'
-import resultGroupsRouter from './resultGroups.routes'
+import resultGroupsRouter, { resolveComponentRelease } from './resultGroups.routes'
 import termTemplatesRouter from './termTemplates.routes'
 import {
   ExamType, EffectiveSubjectRule, LEGACY_SUBJECT_RULE,
@@ -1284,8 +1285,21 @@ router.post('/:id/generate-results', requirePermissionV2('exam.result_generate')
         reportCards.forEach((rc, i) => { (rc as any).rank = i + 1 })
         const { data, error } = await supabase.from('report_cards').upsert(reportCards, { onConflict: 'exam_id,student_id' }).select()
         if (error) return res.status(400).json({ success: false, error: error.message })
-        await supabase.from('exams').update({ status: 'result_declared' }).eq('id', id)
-        res.json({ success: true, data: { report_cards_generated: data?.length } })
+
+        // Component Exam Release: a Term-member exam whose Term wasn't
+        // created from a template with its own configured workflow skips
+        // straight past 'result_declared' to 'result_frozen' — generate +
+        // release as one action, since a school that never bothered
+        // configuring a per-component workflow has no separate step for
+        // this exam to wait on. A configured workflow, or a standalone
+        // (non-member) exam, stops at 'result_declared' as before —
+        // release then needs POST /:id/start-component-workflow (or the
+        // original /:id/start-freeze-workflow for a standalone exam).
+        const { isTermMember, workflowId } = await resolveComponentRelease(id, school_id)
+        const released = isTermMember && !workflowId
+        await supabase.from('exams').update({ status: released ? 'result_frozen' : 'result_declared' }).eq('id', id)
+
+        res.json({ success: true, data: { report_cards_generated: data?.length, released } })
     })
 )
 
@@ -1487,6 +1501,185 @@ router.get('/:id/workflow-status', asyncHandler(async (req: AuthRequest, res: Re
     res.json({ success: true, data: { ...status, can_act } })
 }))
 
+// ═══════════════════════════════════════════════════════════════
+// COMPONENT EXAM RELEASE — a lighter release point for a Term-member
+// exam, separate from that exam's own (rarely used, for a Term member)
+// Freeze/Verify/Publish chain above, and from the Term's own official
+// publish. See resolveComponentRelease (resultGroups.routes.ts) and the
+// migration adding term_templates.component_workflow_id /
+// result_groups.term_template_id for the full reasoning: a real school
+// almost always reports the Term as the official result, so a component
+// exam essentially never runs the chain above on its own — but its marks
+// are final well before the Term's blended result exists, and View
+// Performance / the Scoresheet both need SOME point at which that
+// becomes visible to a student. Lands on exams.status='result_frozen'
+// either way (see isExamResultVisibleToNonStaff, shared/utils/helpers.ts)
+// — 'result_verified'/'result_published' stay reserved for the ORIGINAL
+// 'exam'-typed workflow above.
+// ═══════════════════════════════════════════════════════════════
+
+// ── POST /:id/component-freeze — the fallback when this exam's Term
+// wasn't created from a template with its own configured workflow.
+// Usually redundant: generate-results already does this in the same
+// request for that case. Exists for when results are regenerated after
+// a correction (back to result_declared, needs re-releasing). Gate is
+// deliberately looser than exam.freeze — a school that never configured
+// named approvers for component exams gets the person who actually
+// entered the marks as the approver, not necessarily the Exam Controller.
+router.post('/:id/component-freeze', asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+
+    const { data: exam } = await supabase.from('exams').select('id, status').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!exam) return res.status(404).json({ success: false, error: 'Exam not found' })
+    if (exam.status !== 'result_declared') {
+        return res.status(400).json({ success: false, error: `Results must be generated first (status='result_declared'). Current status: '${exam.status}'.` })
+    }
+
+    const { isTermMember, workflowId } = await resolveComponentRelease(id, school_id)
+    if (!isTermMember) {
+        return res.status(400).json({ success: false, error: 'This exam is not part of a Term — use Start Freeze Workflow instead.' })
+    }
+    if (workflowId) {
+        return res.status(400).json({ success: false, error: "This exam's Term has a configured release workflow — use that instead." })
+    }
+
+    const { permissionCodes, isSuperRole } = await getPermissionsForUser(req.user!.id, school_id)
+    let allowed = isSuperRole || permissionCodes.has('exam.freeze')
+    if (!allowed) {
+        const { data: entered } = await supabase.from('student_marks').select('id').eq('exam_id', id).eq('entered_by', req.user!.id).limit(1).maybeSingle()
+        allowed = !!entered
+    }
+    if (!allowed) {
+        return res.status(403).json({ success: false, error: "Only someone who entered this exam's marks, or holds exam.freeze, can release it." })
+    }
+
+    await supabase.from('exams').update({ status: 'result_frozen' }).eq('id', id).eq('school_id', school_id)
+    res.json({ success: true, data: { status: 'result_frozen' } })
+}))
+
+// ── POST /:id/start-component-workflow — only when this exam's Term
+// Template has a configured release workflow (resolveComponentRelease
+// returns a workflowId). Mirrors start-freeze-workflow exactly but on
+// entity_type='exam_component', so its instance never collides with the
+// original 'exam'-typed one. Gate stays exam.freeze, unlike the fallback
+// above — a school that bothered naming approvers for each step has
+// chosen who starts it too.
+router.post('/:id/start-component-workflow', requirePermissionV2('exam.freeze'),
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+        const { id } = req.params
+        const school_id = req.user!.school_id
+
+        const { data: exam, error: examErr } = await supabase
+            .from('exams').select('id, status').eq('id', id).eq('school_id', school_id).single()
+        if (examErr || !exam) return res.status(404).json({ success: false, error: 'Exam not found' })
+        if (exam.status !== 'result_declared') {
+            return res.status(400).json({ success: false, error: `Exam must have results generated first (status='result_declared'). Current status: '${exam.status}'.` })
+        }
+
+        const { workflowId } = await resolveComponentRelease(id, school_id)
+        if (!workflowId) {
+            return res.status(400).json({ success: false, error: 'This exam has no configured release workflow — use POST /:id/component-freeze instead.' })
+        }
+
+        const { data: definition } = await supabase.from('workflow_definitions').select('name').eq('id', workflowId).eq('school_id', school_id).maybeSingle()
+        if (!definition) return res.status(400).json({ success: false, error: 'Configured release workflow could not be found' })
+
+        const result = await startWorkflow({
+            schoolId: school_id,
+            workflowName: definition.name,
+            entityType: 'exam_component',
+            entityId: id,
+            initiatedBy: req.user!.id,
+        })
+        if (!result.success) return res.status(400).json({ success: false, error: result.error })
+        res.json({ success: true, data: result.instance })
+    })
+)
+
+// ── GET /:id/component-workflow-status ────────────────────────
+// has_configured_workflow is reported even with no instance yet, so the
+// frontend can tell apart "no workflow configured — the fallback freeze
+// already handled (or should handle) this exam" from "a workflow exists
+// but hasn't been started" — the same null `data` covers both otherwise.
+router.get('/:id/component-workflow-status', asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+
+    const { workflowId } = await resolveComponentRelease(id, school_id)
+    const status = await getWorkflowStatus('exam_component', id, school_id)
+    if (!status) {
+        return res.json({ success: true, data: null, has_configured_workflow: !!workflowId, message: 'No release workflow started for this exam' })
+    }
+
+    let can_act = false
+    const currentStep = (status as any).current_step
+    if ((status as any).status === 'in_progress' && currentStep?.role_id) {
+        const check = await canActOnStep({ schoolId: school_id, userId: req.user!.id, roleId: currentStep.role_id })
+        can_act = check.allowed
+    }
+
+    res.json({ success: true, data: { ...status, can_act }, has_configured_workflow: true })
+}))
+
+// ── POST /:id/component-workflow-action ───────────────────────
+// Body: { status: 'approved' | 'rejected' | 'commented', notes?: string }
+// Advances the component release workflow. Unlike workflow-action above,
+// approving the LAST step always lands on exams.status='result_frozen' —
+// never 'result_verified'/'result_published', which stay reserved for
+// the original 'exam'-typed workflow — regardless of how many steps a
+// school configured here, since this workflow's entire purpose is
+// reaching the one release point, not a verify/publish distinction.
+router.post('/:id/component-workflow-action', asyncHandler(async (req: AuthRequest, res: Response) => {
+    if (NON_STAFF_ROLES.includes(req.user!.role)) {
+        return res.status(403).json({ success: false, error: 'Only staff can act on this workflow' })
+    }
+    const { id } = req.params
+    const { status, notes } = req.body
+    const school_id = req.user!.school_id
+
+    if (!['approved', 'rejected', 'commented'].includes(status)) {
+        return res.status(400).json({ success: false, error: 'Invalid status. Must be approved, rejected, or commented.' })
+    }
+
+    const { data: instance, error: instErr } = await supabase
+        .from('workflow_instances')
+        .select('id, status')
+        .eq('entity_type', 'exam_component')
+        .eq('entity_id', id)
+        .eq('school_id', school_id)
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+    if (instErr || !instance) {
+        return res.status(404).json({ success: false, error: 'No release workflow instance found for this exam. Use POST /:id/start-component-workflow first.' })
+    }
+    if (instance.status !== 'in_progress') {
+        return res.status(400).json({ success: false, error: `Workflow already ${instance.status}` })
+    }
+
+    const result = await actOnWorkflow({
+        instanceId: instance.id,
+        userId: req.user!.id,
+        schoolId: school_id,
+        status,
+        notes,
+    })
+    if (!result.success) return res.status(400).json({ success: false, error: result.error })
+
+    if (status === 'rejected') {
+        await supabase.from('exams').update({ status: 'result_declared' }).eq('id', id).eq('school_id', school_id)
+    } else if (status === 'approved' && result.completed) {
+        await supabase.from('exams').update({ status: 'result_frozen' }).eq('id', id).eq('school_id', school_id)
+    }
+
+    res.json({
+        success: true,
+        data: { instance: result.instance, completed: result.completed, next_step: result.nextStep ?? null },
+    })
+}))
+
 // ── RESULTS — gated by publish status for students/parents ────
 //
 // users.role is constrained to: super_admin, school_admin, principal,
@@ -1533,16 +1726,20 @@ router.get('/:id/results', asyncHandler(async (req: AuthRequest, res: Response) 
 // instead of report_cards' aggregate the Results tab renders this as a
 // student x subject grid: every active student in the exam's classes,
 // every subject, raw marks — "NA" where nothing's been entered yet,
-// "Absent" where the student was actually marked absent. Gated
-// identically to /:id/results.
+// "Absent" where the student was actually marked absent. Gated via
+// isExamResultVisibleToNonStaff — same as /:id/results for a standalone
+// exam (needs result_published), but a Term-member exam also opens up at
+// result_frozen, its own lighter release point (see Component Exam
+// Release — POST /:id/component-freeze and /:id/start-component-workflow
+// below), since it rarely if ever runs the full publish chain on its own.
 router.get('/:id/scoresheet', asyncHandler(async (req: AuthRequest, res: Response) => {
     const { id } = req.params
     const school_id = req.user!.school_id
 
     if (NON_STAFF_ROLES.includes(req.user!.role)) {
         const { data: exam } = await supabase.from('exams').select('status').eq('id', id).eq('school_id', school_id).single()
-        if (!exam || exam.status !== 'result_published') {
-            return res.json({ success: true, data: { subjects: [], students: [], marks: [] }, message: 'Results have not been published yet' })
+        if (!exam || !(await isExamResultVisibleToNonStaff(id, exam.status))) {
+            return res.json({ success: true, data: { subjects: [], students: [], marks: [] }, message: 'Results have not been released yet' })
         }
     }
 

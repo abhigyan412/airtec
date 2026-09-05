@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, classesApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
-import { classLabel } from '@/lib/utils'
+import { classLabel, cn } from '@/lib/utils'
 import { useClassDisplayStyle } from '@/lib/useClassDisplayStyle'
 import { SlidersHorizontal, ShieldOff, Plus, Trash2, Loader2, RotateCcw, GraduationCap, GitBranch, ArrowUp, ArrowDown, Lock, Layers } from 'lucide-react'
 import { toast } from 'sonner'
@@ -37,7 +37,35 @@ const titleCase = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.to
 // Kept in step with the sidebar's Result Settings sub-items
 // (components/layout/Sidebar.tsx) — each links straight into one tab
 // via ?tab=, landing here instead of always opening on Class Rules.
-const RESULT_SETTINGS_TABS = ['Class Rules', 'Exam Type Rules', 'Subject Overrides', 'Grade Scales', 'Remarks Rules', 'Term Templates', 'Apply Preset', 'Publish Workflow']
+const RESULT_SETTINGS_TABS = ['Class Rules', 'Subject Overrides', 'Grade Scales', 'Remarks Rules', 'Term Templates', 'Apply Preset', 'Publish Workflow']
+
+// "One class" edits a single class's rule/overrides directly; "Multiple
+// classes" configures the same form once and applies it to a ticked set —
+// same underlying data and the same RuleFormFields, just reached
+// differently. Used to live as a separate "Exam Type Rules" tab whose two
+// sections were, confusingly, ALSO individually named "Class Rules" and
+// "Subject Max / Pass Marks" — a controller had to already know that tab
+// secretly duplicated its siblings at a different scope. Folding it in
+// here means there's exactly one place each concept lives.
+type Scope = 'one' | 'multiple'
+function ScopeToggle({ mode, onChange }: { mode: Scope; onChange: (m: Scope) => void }) {
+  return (
+    <div className="flex items-center gap-1 rounded-lg bg-muted p-1">
+      {([['one', 'One class'], ['multiple', 'Multiple classes']] as const).map(([m, label]) => (
+        <button
+          key={m}
+          onClick={() => onChange(m)}
+          className={cn(
+            'rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
+            mode === m ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 export default function ResultSettingsPage() {
   const { can, isLoading: permLoading } = usePermissions()
@@ -66,6 +94,8 @@ function ResultSettingsView() {
     if (urlTab && RESULT_SETTINGS_TABS.includes(urlTab) && urlTab !== tab) setTab(urlTab)
   }, [searchParams])
   const [selectedClass, setSelectedClass] = useState('')
+  const [classRulesScope, setClassRulesScope] = useState<Scope>('one')
+  const [subjectOverridesScope, setSubjectOverridesScope] = useState<Scope>('one')
   const displayStyle = useClassDisplayStyle()
 
   const { data: classes, isLoading: classesLoading } = useQuery({
@@ -81,7 +111,6 @@ function ResultSettingsView() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="Class Rules">Class Rules</TabsTrigger>
-          <TabsTrigger value="Exam Type Rules">Exam Type Rules</TabsTrigger>
           <TabsTrigger value="Subject Overrides">Subject Overrides</TabsTrigger>
           <TabsTrigger value="Grade Scales">Grade Scales</TabsTrigger>
           <TabsTrigger value="Remarks Rules">Remarks Rules</TabsTrigger>
@@ -91,51 +120,50 @@ function ResultSettingsView() {
         </TabsList>
 
         {(tab === 'Class Rules' || tab === 'Subject Overrides') && (
-          <div className="mt-6 mb-5 flex items-center gap-2">
-            <Label className="shrink-0">Class</Label>
-            {classesLoading ? (
-              <Skeleton className="h-9 w-48" />
-            ) : (
-              <Select value={selectedClass || undefined} onValueChange={setSelectedClass}>
-                <SelectTrigger className="h-9 min-w-[180px]"><SelectValue placeholder="Select class..." /></SelectTrigger>
-                <SelectContent>
-                  {sortedClasses.map((c: any) => (
-                    <SelectItem key={c.id} value={c.id}>{classLabel(c.name, c.numeric_level, displayStyle)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+          <div className="mt-6 mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              {(tab === 'Class Rules' ? classRulesScope : subjectOverridesScope) === 'one' && (
+                <>
+                  <Label className="shrink-0">Class</Label>
+                  {classesLoading ? (
+                    <Skeleton className="h-9 w-48" />
+                  ) : (
+                    <Select value={selectedClass || undefined} onValueChange={setSelectedClass}>
+                      <SelectTrigger className="h-9 min-w-[180px]"><SelectValue placeholder="Select class..." /></SelectTrigger>
+                      <SelectContent>
+                        {sortedClasses.map((c: any) => (
+                          <SelectItem key={c.id} value={c.id}>{classLabel(c.name, c.numeric_level, displayStyle)}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </>
+              )}
+            </div>
+            <ScopeToggle
+              mode={tab === 'Class Rules' ? classRulesScope : subjectOverridesScope}
+              onChange={tab === 'Class Rules' ? setClassRulesScope : setSubjectOverridesScope}
+            />
           </div>
         )}
 
         <TabsContent value="Class Rules" className={tab === 'Class Rules' ? '' : 'mt-0'}>
-          {!selectedClass ? (
+          {classRulesScope === 'multiple' ? (
+            <BulkExamRulesTab classes={sortedClasses} displayStyle={displayStyle} />
+          ) : !selectedClass ? (
             <Card><EmptyState icon={GraduationCap} title="Pick a class" description="Select a class above to view or edit its result rules." /></Card>
           ) : (
             <ClassRulesTab classId={selectedClass} className={classLabel(sortedClasses.find((c: any) => c.id === selectedClass)?.name ?? '', sortedClasses.find((c: any) => c.id === selectedClass)?.numeric_level, displayStyle)} />
           )}
         </TabsContent>
 
-        <TabsContent value="Exam Type Rules" className="mt-6 space-y-8">
-          <div className="space-y-4">
-            <div>
-              <h3 className="font-semibold text-foreground">Class Rules</h3>
-              <p className="text-xs text-muted-foreground">Pass criteria, grading mode and the rest of a class's result rule, applied to several classes at once.</p>
-            </div>
-            <BulkExamRulesTab classes={sortedClasses} displayStyle={displayStyle} />
-          </div>
-
-          <div className="space-y-4 border-t border-border pt-8">
-            <div>
-              <h3 className="font-semibold text-foreground">Subject Max / Pass Marks</h3>
-              <p className="text-xs text-muted-foreground">One subject's default Max Marks and Pass Marks (or Theory/Practical split), applied to several classes at once — the same numbers Add Subject pre-fills from.</p>
-            </div>
-            <BulkSubjectMarksTab classes={sortedClasses} displayStyle={displayStyle} />
-          </div>
-        </TabsContent>
-
         <TabsContent value="Subject Overrides" className={tab === 'Subject Overrides' ? '' : 'mt-0'}>
-          {!selectedClass ? (
+          {subjectOverridesScope === 'multiple' ? (
+            <div className="space-y-5">
+              <p className="text-sm text-muted-foreground">One subject's default Max Marks and Pass Marks (or Theory/Practical split) — the same numbers Add Subject pre-fills from — applied to a ticked set of classes in one go, instead of switching to "One class" and repeating this once per class.</p>
+              <BulkSubjectMarksTab classes={sortedClasses} displayStyle={displayStyle} />
+            </div>
+          ) : !selectedClass ? (
             <Card><EmptyState icon={GraduationCap} title="Pick a class" description="Select a class above to view or edit its subject-level overrides." /></Card>
           ) : (
             <SubjectOverridesTab classId={selectedClass} />
@@ -257,10 +285,10 @@ function ClassRulesTab({ classId, className }: { classId: string; className: str
 }
 
 // The full class-rule field set, presentational only — no data-fetching,
-// no save logic. Shared between RuleCard (one class at a time) and the
-// bulk "Exam Type Rules" tab (configure once, apply to several classes'
-// worth of exam-type overrides at once), so the ~15-field form only
-// exists in one place.
+// no save logic. Shared between RuleCard (one class at a time) and
+// BulkExamRulesTab, the Class Rules tab's "Multiple classes" mode
+// (configure once, apply to several classes' worth of exam-type overrides
+// at once), so the ~15-field form only exists in one place.
 function RuleFormFields({ form, update, showAdvanced, setShowAdvanced, scales, remarksRules, idPrefix }: {
   form: typeof DEFAULT_RULE_FORM; update: (patch: Partial<typeof DEFAULT_RULE_FORM>) => void
   showAdvanced: boolean; setShowAdvanced: (v: boolean | ((v: boolean) => boolean)) => void
@@ -508,11 +536,12 @@ function RuleCard({ title, description, classId, examType, existing, onSaved, re
 }
 
 // ═══════════════════════════════════════════════════════════════
-// EXAM TYPE RULES — configure one exam type's rule once, tick every
-// class it applies to, apply in one submit — the Class Rules tab's
-// "one class, then repeat per class" flow inverted: exam-type-first,
-// class-checklist-second, the same shape the Exam Structure wizard
-// (Examination Settings) already uses for a different resource.
+// BULK CLASS RULES — Class Rules tab's "Multiple classes" mode: configure
+// one exam type's rule once, tick every class it applies to, apply in one
+// submit — the "one class, then repeat per class" flow inverted:
+// exam-type-first, class-checklist-second, the same shape the Exam
+// Structure wizard (Examination Settings) already uses for a different
+// resource.
 // ═══════════════════════════════════════════════════════════════
 
 type BulkRuleRow = { exam_type: string; classIds: Set<string>; ruleForm: typeof DEFAULT_RULE_FORM; showAdvanced: boolean }
@@ -578,7 +607,7 @@ function BulkExamRulesTab({ classes, displayStyle }: { classes: any[]; displaySt
 
   return (
     <div className="space-y-5">
-      <p className="text-sm text-muted-foreground">Configure a result rule once for an exam type (or the class default), then tick every class it applies to — applied in one go instead of visiting Class Rules once per class.</p>
+      <p className="text-sm text-muted-foreground">Configure a result rule once for an exam type (or the class default), then tick every class it applies to — applied to all of them in one go, instead of switching to "One class" and repeating this once per class.</p>
 
       {rows.map((row, i) => (
         <Card key={i} className="p-4 space-y-4">
@@ -1443,6 +1472,7 @@ function TermTemplatesTab({ classes, displayStyle }: { classes: any[]; displaySt
   const qc = useQueryClient()
   const [showNew, setShowNew] = useState(false)
   const [applyTemplate, setApplyTemplate] = useState<any>(null)
+  const [workflowTemplate, setWorkflowTemplate] = useState<any>(null)
 
   const { data: templates, isLoading } = useQuery({
     queryKey: ['term-templates'],
@@ -1486,6 +1516,9 @@ function TermTemplatesTab({ classes, displayStyle }: { classes: any[]; displaySt
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
+                      <Button variant="outline" size="sm" onClick={() => setWorkflowTemplate(t)} title="Configure how a component exam under this Term gets released to students">
+                        <GitBranch className="h-3.5 w-3.5" /> Release Workflow
+                      </Button>
                       <Button variant="outline" size="sm" onClick={() => setApplyTemplate(t)}>Use This Template</Button>
                       <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
                         onClick={() => deleteMutation.mutate(t.id)} aria-label={`Remove template ${t.name}`}>
@@ -1506,7 +1539,88 @@ function TermTemplatesTab({ classes, displayStyle }: { classes: any[]; displaySt
       {applyTemplate && (
         <ApplyTermTemplateModal template={applyTemplate} classes={classes} displayStyle={displayStyle} onClose={() => setApplyTemplate(null)} />
       )}
+      {workflowTemplate && (
+        <ComponentWorkflowModal template={workflowTemplate} onClose={() => setWorkflowTemplate(null)} />
+      )}
     </div>
+  )
+}
+
+// A component exam (one member of a Term made from this template) almost
+// never runs the full school-wide Freeze->Verify->Publish chain on its
+// own — real schools report the Term as the official result. This is
+// where a school can OPTIONALLY name real approvers for a component
+// exam's release instead of the default: whoever entered its marks can
+// just freeze it themselves once they're done. See resolveComponentRelease
+// (backend resultGroups.routes.ts) for the full reasoning, and
+// termTemplates.routes.ts's GET/PUT /:id/workflow for the API this edits.
+function ComponentWorkflowModal({ template, onClose }: { template: any; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [steps, setSteps] = useState<WorkflowStepForm[] | null>(null)
+  const [dirty, setDirty] = useState(false)
+
+  const { data: workflow, isLoading: workflowLoading } = useQuery({
+    queryKey: ['term-template-workflow', template.id],
+    queryFn: () => api.get(`/exams/term-templates/${template.id}/workflow`).then(r => r.data.data),
+  })
+  const { data: roles, isLoading: rolesLoading } = useQuery({
+    queryKey: ['rbac-roles'],
+    queryFn: () => api.get('/rbac/roles').then(r => r.data.data as any[]),
+  })
+
+  const savedSteps: WorkflowStepForm[] = (workflow?.steps ?? []).map((s: any) => ({ role_id: s.role_id, action_name: s.action_name }))
+  const currentSteps = steps ?? savedSteps
+  const editable = workflow?.editable !== false
+  const hasWorkflow = currentSteps.length > 0
+
+  const saveMutation = useMutation({
+    mutationFn: () => api.put(`/exams/term-templates/${template.id}/workflow`, { steps: currentSteps }),
+    onSuccess: () => {
+      toast.success(hasWorkflow ? 'Release workflow saved.' : 'Cleared — component exams now fall back to a simple freeze once marks are entered.')
+      qc.invalidateQueries({ queryKey: ['term-template-workflow', template.id] })
+      onClose()
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to save workflow'),
+  })
+
+  const update = (next: WorkflowStepForm[]) => { setSteps(next); setDirty(true) }
+  const canSave = currentSteps.every(s => s.role_id && s.action_name.trim())
+
+  return (
+    <Dialog open onOpenChange={o => { if (!o) onClose() }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Release workflow — {template.name}</DialogTitle>
+        </DialogHeader>
+        {workflowLoading || rolesLoading ? (
+          <Skeleton className="h-48 w-full rounded-2xl" />
+        ) : (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Optional. Name real approval steps for releasing any single component exam under a Term made from this template — separate from that Term's own official publish. Leave empty and a component exam instead falls back to a simple Freeze, doable by whoever entered its marks, the moment results are generated.
+            </p>
+            {!editable && (
+              <div className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning">
+                <Lock className="h-3.5 w-3.5 shrink-0" />
+                A component exam is currently mid-release on this workflow — finish or reject that first before changing the steps.
+              </div>
+            )}
+            {!hasWorkflow && (
+              <p className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                No steps configured — the simple fallback freeze applies. Add a step below to require named approval instead.
+              </p>
+            )}
+            <WorkflowStepEditor steps={currentSteps} onChange={update} roles={roles ?? []} editable={editable} minSteps={0} />
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => saveMutation.mutate()} disabled={!editable || !dirty || !canSave || saveMutation.isPending}>
+            {saveMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1818,6 +1932,72 @@ const WORKFLOW_PRESETS: Record<'1' | '2' | '3', (roles: any[]) => WorkflowStepFo
   ],
 }
 
+// Shared add/remove/reorder/preset editor over a {role_id, action_name}[]
+// step list — used here by the school-wide Publish Workflow tab, and by
+// the per-Term-Template Component Release workflow config (TermTemplates
+// Tab below), so the same editing UI only exists in one place. minSteps
+// controls the floor the remove button won't go below — 1 for the
+// school-wide workflow (it must always have at least one step), 0 for
+// the per-template one (0 steps is itself a valid, meaningful choice:
+// "no workflow, use the fallback freeze").
+function WorkflowStepEditor({ steps, onChange, roles, editable, minSteps = 1 }: {
+  steps: WorkflowStepForm[]; onChange: (next: WorkflowStepForm[]) => void
+  roles: any[]; editable: boolean; minSteps?: number
+}) {
+  const updateStep = (i: number, patch: Partial<WorkflowStepForm>) => onChange(steps.map((s, j) => j === i ? { ...s, ...patch } : s))
+  const addStep = () => onChange([...steps, { role_id: '', action_name: '' }])
+  const removeStep = (i: number) => onChange(steps.filter((_, j) => j !== i))
+  const moveStep = (i: number, dir: -1 | 1) => {
+    const j = i + dir
+    if (j < 0 || j >= steps.length) return
+    const next = [...steps]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    onChange(next)
+  }
+  const applyPreset = (key: '1' | '2' | '3') => { if (roles) onChange(WORKFLOW_PRESETS[key](roles)) }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted-foreground">Quick setup:</span>
+        {(['1', '2', '3'] as const).map(k => (
+          <Button key={k} variant="outline" size="sm" disabled={!editable} onClick={() => applyPreset(k)}>
+            {k}-step{k === '3' ? ' (default)' : ''}
+          </Button>
+        ))}
+      </div>
+
+      <div className="space-y-3">
+        {steps.map((step, i) => (
+          <div key={i} className="flex items-center gap-2 rounded-lg border border-border p-3">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">{i + 1}</span>
+            <Select value={step.role_id || undefined} onValueChange={v => updateStep(i, { role_id: v })} disabled={!editable}>
+              <SelectTrigger className="h-9 w-48"><SelectValue placeholder="Select role..." /></SelectTrigger>
+              <SelectContent>
+                {(roles ?? []).map((r: any) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Input className="h-9 flex-1" placeholder="Step label, e.g. Verify Results" value={step.action_name}
+              onChange={e => updateStep(i, { action_name: e.target.value })} disabled={!editable} />
+            <Button variant="ghost" size="icon" className="h-9 w-9" disabled={!editable || i === 0} onClick={() => moveStep(i, -1)} aria-label="Move step up">
+              <ArrowUp className="h-3.5 w-3.5" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9" disabled={!editable || i === steps.length - 1} onClick={() => moveStep(i, 1)} aria-label="Move step down">
+              <ArrowDown className="h-3.5 w-3.5" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-destructive"
+              disabled={!editable || steps.length <= minSteps} onClick={() => removeStep(i)} aria-label="Remove step">
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        ))}
+      </div>
+
+      <Button variant="outline" size="sm" disabled={!editable} onClick={addStep}><Plus className="h-3.5 w-3.5" /> Add step</Button>
+    </div>
+  )
+}
+
 function PublishWorkflowTab() {
   const qc = useQueryClient()
   const [steps, setSteps] = useState<WorkflowStepForm[] | null>(null)
@@ -1847,17 +2027,6 @@ function PublishWorkflowTab() {
   })
 
   const update = (next: WorkflowStepForm[]) => { setSteps(next); setDirty(true) }
-  const updateStep = (i: number, patch: Partial<WorkflowStepForm>) => update(currentSteps.map((s, j) => j === i ? { ...s, ...patch } : s))
-  const addStep = () => update([...currentSteps, { role_id: '', action_name: '' }])
-  const removeStep = (i: number) => update(currentSteps.filter((_, j) => j !== i))
-  const moveStep = (i: number, dir: -1 | 1) => {
-    const j = i + dir
-    if (j < 0 || j >= currentSteps.length) return
-    const next = [...currentSteps]
-    ;[next[i], next[j]] = [next[j], next[i]]
-    update(next)
-  }
-  const applyPreset = (key: '1' | '2' | '3') => { if (roles) update(WORKFLOW_PRESETS[key](roles)) }
 
   if (workflowLoading || rolesLoading) return <Skeleton className="h-64 w-full rounded-2xl" />
 
@@ -1877,42 +2046,7 @@ function PublishWorkflowTab() {
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">Quick setup:</span>
-          {(['1', '2', '3'] as const).map(k => (
-            <Button key={k} variant="outline" size="sm" disabled={!editable} onClick={() => applyPreset(k)}>
-              {k}-step{k === '3' ? ' (default)' : ''}
-            </Button>
-          ))}
-        </div>
-
-        <div className="space-y-3">
-          {currentSteps.map((step, i) => (
-            <div key={i} className="flex items-center gap-2 rounded-lg border border-border p-3">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">{i + 1}</span>
-              <Select value={step.role_id || undefined} onValueChange={v => updateStep(i, { role_id: v })} disabled={!editable}>
-                <SelectTrigger className="h-9 w-48"><SelectValue placeholder="Select role..." /></SelectTrigger>
-                <SelectContent>
-                  {(roles ?? []).map((r: any) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Input className="h-9 flex-1" placeholder="Step label, e.g. Verify Results" value={step.action_name}
-                onChange={e => updateStep(i, { action_name: e.target.value })} disabled={!editable} />
-              <Button variant="ghost" size="icon" className="h-9 w-9" disabled={!editable || i === 0} onClick={() => moveStep(i, -1)} aria-label="Move step up">
-                <ArrowUp className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-9 w-9" disabled={!editable || i === currentSteps.length - 1} onClick={() => moveStep(i, 1)} aria-label="Move step down">
-                <ArrowDown className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-destructive"
-                disabled={!editable || currentSteps.length <= 1} onClick={() => removeStep(i)} aria-label="Remove step">
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          ))}
-        </div>
-
-        <Button variant="outline" size="sm" disabled={!editable} onClick={addStep}><Plus className="h-3.5 w-3.5" /> Add step</Button>
+        <WorkflowStepEditor steps={currentSteps} onChange={update} roles={roles ?? []} editable={editable} minSteps={1} />
 
         <div className="flex justify-end">
           <Button size="sm" onClick={() => saveMutation.mutate()} disabled={!editable || !dirty || !canSave || saveMutation.isPending}>

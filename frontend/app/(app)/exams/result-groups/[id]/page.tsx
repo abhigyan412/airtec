@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { usePermissions } from '@/lib/usePermissions'
 import { ArrowLeft, BarChart2, Plus, Trash2, Loader2, RefreshCw, Megaphone, ChevronDown, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
@@ -24,6 +25,9 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
 
 export default function ResultGroupDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const { can } = usePermissions()
+  const canGenerate = can('exam.result_generate')
+  const canPublish = can('exam.result_publish')
   const qc = useQueryClient()
 
   const { data: group, isLoading } = useQuery({
@@ -79,16 +83,24 @@ export default function ResultGroupDetailPage() {
           actions={
             <>
               <Badge variant={STATUS_VARIANT[group.status] ?? 'secondary'} className="capitalize">{group.status.replace(/_/g, ' ')}</Badge>
-              <Button onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending || !weightsOk || !membersReady}
-                className="bg-success text-success-foreground hover:bg-success/90">
-                {generateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart2 className="h-4 w-4" />}
-                Generate Results
-              </Button>
-              {group.status === 'result_declared' && (
-                <Button onClick={() => publishMutation.mutate()} disabled={publishMutation.isPending}>
-                  {publishMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Megaphone className="h-4 w-4" />}
-                  Publish
+              {canGenerate ? (
+                <Button onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending || !weightsOk || !membersReady}
+                  className="bg-success text-success-foreground hover:bg-success/90">
+                  {generateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart2 className="h-4 w-4" />}
+                  Generate Results
                 </Button>
+              ) : group.status !== 'result_published' ? (
+                <p className="text-xs text-muted-foreground">Waiting on a School Admin or Principal to generate results</p>
+              ) : null}
+              {group.status === 'result_declared' && (
+                canPublish ? (
+                  <Button onClick={() => publishMutation.mutate()} disabled={publishMutation.isPending}>
+                    {publishMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Megaphone className="h-4 w-4" />}
+                    Publish
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Waiting on someone with publish permission</p>
+                )
               )}
             </>
           }

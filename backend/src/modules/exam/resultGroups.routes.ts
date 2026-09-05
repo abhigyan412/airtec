@@ -147,6 +147,40 @@ export async function syncGroupSubjectsFromMembers(resultGroupId: string, classI
   return { added: toInsert.length }
 }
 
+// ── Component Exam Release — a lighter release point for one MEMBER
+// exam of a Term, separate from the Term's own official publish ────
+//
+// A real school almost always reports the composite Term as the official
+// result, so a member exam (a Unit Test feeding a Half Yearly, say)
+// essentially never runs its own full Freeze->Verify->Publish chain — but
+// its own marks are real and final well before the Term's blended result
+// exists. This resolves whether a school configured a REAL multi-step
+// workflow for that exam's release (attached per Term Template, entity_
+// type='exam_component' so its workflow_instances never collide with the
+// original 'exam'-typed Freeze/Verify/Publish ones — see the migration
+// comment) or should fall back to a single Freeze action.
+//
+// An exam can in principle belong to more than one Term; the first
+// membership whose template has a configured workflow wins. Exported for
+// exam/routes.ts's generate-results / start-component-workflow /
+// component-freeze to share the same resolution logic.
+export async function resolveComponentRelease(examId: string, schoolId: string): Promise<{ isTermMember: boolean; workflowId: string | null }> {
+  const { data: memberships } = await supabase
+    .from('result_group_exams')
+    .select('result_groups(term_template_id)')
+    .eq('exam_id', examId)
+  if (!memberships?.length) return { isTermMember: false, workflowId: null }
+
+  for (const m of memberships as any[]) {
+    const templateId = m.result_groups?.term_template_id
+    if (!templateId) continue
+    const { data: template } = await supabase
+      .from('term_templates').select('component_workflow_id').eq('id', templateId).eq('school_id', schoolId).maybeSingle()
+    if (template?.component_workflow_id) return { isTermMember: true, workflowId: template.component_workflow_id }
+  }
+  return { isTermMember: true, workflowId: null }
+}
+
 router.post('/:id/subjects/sync', requirePermissionV2('exam.schedule'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const school_id = req.user!.school_id
   const { data: group } = await supabase.from('result_groups').select('class_id').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()

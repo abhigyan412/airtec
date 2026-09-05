@@ -208,8 +208,11 @@ const NAV: NavItem[] = [
             label: 'Result Settings',
             icon: SlidersHorizontal,
             children: [
+              // Each of these two now also covers what used to be a
+              // separate "Exam Type Rules" tab — a "One class" / "Multiple
+              // classes" toggle inside the page itself, not a separate deep
+              // link (see result-settings/page.tsx's ScopeToggle).
               { label: 'Class Rules', href: '/exams/result-settings?tab=Class+Rules', icon: GraduationCap, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
-              { label: 'Exam Type Rules', href: '/exams/result-settings?tab=Exam+Type+Rules', icon: Layers, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
               { label: 'Subject Overrides', href: '/exams/result-settings?tab=Subject+Overrides', icon: BookOpen, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
               { label: 'Grade Scales', href: '/exams/result-settings?tab=Grade+Scales', icon: BarChart3, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },
               { label: 'Remarks Rules', href: '/exams/result-settings?tab=Remarks+Rules', icon: FileText, permission: 'exam.view', lockUnless: 'exam.result_settings_manage' },

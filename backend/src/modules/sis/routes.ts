@@ -2100,18 +2100,54 @@ router.get('/:id/attendance', asyncHandler(async (req: AuthRequest, res: Respons
 // returns the list of exams the student actually has marks for, to
 // drive the exam-selector — no point offering an exam with nothing
 // recorded yet.
+//
+// Previously had neither check below: any authenticated user (including
+// a parent/student) could pull ANY student's marks by knowing/guessing
+// their id — same class of bug already fixed on GET /:id and /me, missed
+// in that sweep — and could see them the moment a teacher saved a mark,
+// long before Generate Results/Freeze/Verify/Publish. Every other
+// student/parent-facing results screen gates on exams.status ===
+// 'result_published' (see the comment above GET /:id/results in
+// exam/routes.ts); this now matches that rule, plus the same
+// Term-member/result_frozen exception isExamResultVisibleToNonStaff
+// documents (shared/utils/helpers.ts) — batched below rather than calling
+// that helper once per exam.
 router.get('/:id/performance', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params
   const { exam_id } = req.query
   const school_id = req.user!.school_id
+  const isNonStaff = NON_STAFF_ROLES.includes(req.user!.role)
+
+  if (isNonStaff) {
+    const ownStudentId = await resolveOwnStudentId(req.user!.id, req.user!.role, school_id)
+    if (!ownStudentId || ownStudentId !== id) {
+      return res.status(403).json({ success: false, error: 'You can only view your own performance' })
+    }
+  }
 
   const { data: student } = await supabase.from('students').select('id').eq('id', id).eq('school_id', school_id).maybeSingle()
   if (!student) return res.status(404).json({ success: false, error: 'Student not found' })
 
-  const { data: marks, error } = await supabase.from('student_marks')
-    .select('marks_obtained, is_absent, exam_id, exam_subjects(subject_name, max_marks), exams(name, start_date)')
+  const { data: rawMarks, error } = await supabase.from('student_marks')
+    .select('marks_obtained, is_absent, exam_id, exam_subjects(subject_name, max_marks), exams(name, start_date, status)')
     .eq('school_id', school_id).eq('student_id', id)
   if (error) return res.status(500).json({ success: false, error: error.message })
+
+  // Same rule as isExamResultVisibleToNonStaff (shared/utils/helpers.ts),
+  // batched across every exam this student has marks in rather than one
+  // async lookup per row: result_published always qualifies; a
+  // result_frozen exam also qualifies if it's a Term member, since a
+  // component exam inside a composite cycle almost never runs its own
+  // full publish chain — only the Term does.
+  let marks = rawMarks ?? []
+  if (isNonStaff) {
+    const frozenExamIds = [...new Set(marks.filter((m: any) => m.exams?.status === 'result_frozen').map((m: any) => m.exam_id))]
+    const termMemberExamIds = frozenExamIds.length
+      ? new Set(((await supabase.from('result_group_exams').select('exam_id').in('exam_id', frozenExamIds)).data ?? []).map((r: any) => r.exam_id))
+      : new Set<string>()
+    marks = marks.filter((m: any) =>
+      m.exams?.status === 'result_published' || (m.exams?.status === 'result_frozen' && termMemberExamIds.has(m.exam_id)))
+  }
 
   const examsSeen = new Map<string, { id: string; name: string; date: string | null }>()
   for (const m of (marks ?? []) as any[]) {

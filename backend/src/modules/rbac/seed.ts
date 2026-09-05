@@ -122,7 +122,14 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   'HR': ['staff.view', 'staff.edit', 'staff.attendance_mark', 'staff.leave_approve', 'staff.payroll_manage', 'staff.recruitment_manage', 'staff.promote', 'staff.exit_manage', 'team.view', 'team.invite'],
   'Receptionist': ['student.view', 'admission.view', 'admission.create', 'admission.follow_up', 'complaint.view', 'complaint.create'],
   'Librarian': ['student.view', 'resource.view', 'resource.upload', 'resource.delete', 'timetable.view', ...TIMETABLE_TEACHER],
-  'Exam Controller': ['student.view', 'exam.view', 'exam.create', 'exam.publish', 'exam.schedule', 'exam.marks_entry', 'exam.result_publish', 'exam.freeze', 'exam.admit_card_generate', 'exam.result_settings_manage', 'certificate.view', 'certificate.generate', 'tc.generate', 'syllabus.view'],
+  // exam.result_generate: the step between marks entry and the Freeze step
+  // this role is assigned by the default Publish Workflow (see
+  // ensureResultFreezePublishWorkflowDefinition below) — without it a
+  // controller could build, schedule and mark an exam, then had to hand off
+  // to School Admin/Principal just to generate results before they could
+  // freeze it themselves. Backfilled onto existing schools by
+  // supabase/migrations/20260904000000_exam_controller_result_generate.sql.
+  'Exam Controller': ['student.view', 'exam.view', 'exam.create', 'exam.publish', 'exam.schedule', 'exam.marks_entry', 'exam.result_generate', 'exam.result_publish', 'exam.freeze', 'exam.admit_card_generate', 'exam.result_settings_manage', 'certificate.view', 'certificate.generate', 'tc.generate', 'syllabus.view'],
   'Parent': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
   'Student': ['student.view', 'exam.view', 'attendance.view', 'timetable.view', 'resource.view', 'homework.view'],
   // The person who actually runs this module day to day. Narrow on

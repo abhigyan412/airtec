@@ -8,6 +8,7 @@ import { usePermissions } from '@/lib/usePermissions'
 import { ResultStatusBadge } from '@/components/exams/ResultStatusBadge'
 import { STATUS_VARIANT } from '@/components/exams/statusVariant'
 import { DatesheetGrid } from '@/components/exams/DatesheetGrid'
+import { AnnounceExamDialog } from '@/components/exams/AnnounceExamDialog'
 import { cn, formatDate } from '@/lib/utils'
 import { ArrowLeft, Plus, Upload, BarChart2, Loader2, CheckCircle, FileText, GitBranch, Check, X, MessageSquare, Snowflake, Eye, Megaphone, BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
@@ -37,6 +38,8 @@ const titleCase = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.to
 
 export default function ExamDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const { can } = usePermissions()
+  const canGenerateResults = can('exam.result_generate')
   const searchParams = useSearchParams()
   const initialTab = searchParams.get('tab')
   const [tab, setTab] = useState(TABS.includes(initialTab as any) ? initialTab! : 'Datesheet')
@@ -50,6 +53,7 @@ export default function ExamDetailPage() {
   }, [searchParams])
   const [showAddSubject, setShowAddSubject] = useState(false)
   const [editingSubject, setEditingSubject] = useState<any>(null)
+  const [showAnnounce, setShowAnnounce] = useState(false)
   const qc = useQueryClient()
 
   const { data: exam, isLoading } = useQuery({
@@ -66,7 +70,14 @@ export default function ExamDetailPage() {
     mutationFn: () => api.post(`/exams/${id}/generate-results`, {}),
     onSuccess: (r: any) => {
       qc.invalidateQueries({ queryKey: ['exam', id] })
-      toast.success(`Results generated for ${r.data.data.report_cards_generated} students!`)
+      // released: this exam is a Term member whose Term has no configured
+      // Component Release workflow — generate-results already froze it
+      // in the same request (see backend comment on that route), so say
+      // so rather than a generic "generated" that implies another step
+      // is still needed.
+      toast.success(r.data.data.released
+        ? `Results generated for ${r.data.data.report_cards_generated} students — released to them now.`
+        : `Results generated for ${r.data.data.report_cards_generated} students!`)
       setTab('Results')
     },
     onError: (e: any) => {
@@ -144,17 +155,21 @@ export default function ExamDetailPage() {
                 </a>
               </Button>
               {exam.status === 'completed' && (
-                <Button
-                  onClick={() => generateResults.mutate()}
-                  disabled={generateResults.isPending}
-                  className="bg-success text-success-foreground hover:bg-success/90"
-                >
-                  {generateResults.isPending
-                    ? <Loader2 className="h-4 w-4 animate-spin" />
-                    : <BarChart2 className="h-4 w-4" />
-                  }
-                  Generate Results
-                </Button>
+                canGenerateResults ? (
+                  <Button
+                    onClick={() => generateResults.mutate()}
+                    disabled={generateResults.isPending}
+                    className="bg-success text-success-foreground hover:bg-success/90"
+                  >
+                    {generateResults.isPending
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <BarChart2 className="h-4 w-4" />
+                    }
+                    Generate Results
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Waiting on a School Admin or Principal to generate results</p>
+                )
               )}
             </>
           }
@@ -172,9 +187,24 @@ export default function ExamDetailPage() {
           <Card>
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
               <h3 className="font-semibold text-foreground">Exam Schedule</h3>
-              <Button variant="ghost" size="sm" onClick={() => setShowAddSubject(true)}>
-                <Plus className="h-4 w-4" /> Add Subject
-              </Button>
+              <div className="flex items-center gap-2">
+                {/* Enabled once there's something to announce and the exam
+                    is out of draft — disabled-with-title rather than
+                    hidden, so "announce this" reads as the next step in
+                    the sequence, not something only discoverable by
+                    already knowing Examination Settings has a copy of it. */}
+                <Button
+                  variant="outline" size="sm"
+                  onClick={() => setShowAnnounce(true)}
+                  disabled={exam.status === 'draft' || !examSubjects.length}
+                  title={exam.status === 'draft' ? 'Publish this exam first' : undefined}
+                >
+                  <Megaphone className="h-4 w-4" /> Announce
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setShowAddSubject(true)}>
+                  <Plus className="h-4 w-4" /> Add Subject
+                </Button>
+              </div>
             </div>
             {!examSubjects.length ? (
               <EmptyState
@@ -205,6 +235,7 @@ export default function ExamDetailPage() {
               </Link>
             </div>
             <TermMembershipWarning memberships={exam.term_memberships ?? []} />
+            {(exam.term_memberships ?? []).length > 0 && <ComponentReleasePipeline examId={id} exam={exam} />}
             <FreezePublishPipeline examId={id} exam={exam} />
             {(exam.term_memberships ?? []).length > 0
               ? <ScoresheetView examId={id} />
@@ -226,6 +257,8 @@ export default function ExamDetailPage() {
           qc.invalidateQueries({ queryKey: ['exam', id] })
         }} />
       )}
+
+      <AnnounceExamDialog examId={id} examName={exam.name} open={showAnnounce} onOpenChange={setShowAnnounce} />
     </div>
   )
 }
@@ -534,6 +567,294 @@ function StatusBadge({ status }: { status: string }) {
   }
   const c = config[status] ?? config.in_progress
   return <Badge variant={c.variant}>{c.label}</Badge>
+}
+
+// ═══════════════════════════════════════════════════════════════
+// COMPONENT EXAM RELEASE — a lighter release point for a Term-member
+// exam, entirely separate from the FreezePublishPipeline above (that one
+// targets entity_type='exam' — the school-wide chain a component exam
+// almost never runs on its own — this one targets 'exam_component').
+// Real schools report the Term as the official result, so a component
+// exam's own marks need SOME release point well before that; either a
+// school-configured workflow (named approvers, same shape as above) or,
+// if none is configured for this exam's Term Template, a single Freeze
+// button anyone who entered the marks can click. See
+// resolveComponentRelease (backend resultGroups.routes.ts) for the full
+// reasoning.
+// ═══════════════════════════════════════════════════════════════
+
+const COMPONENT_RELEASE_STATUSES = ['result_declared', 'result_frozen']
+
+function ComponentReleasePipeline({ examId, exam }: { examId: string, exam: any }) {
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  const [notes, setNotes] = useState('')
+  const [showNotesFor, setShowNotesFor] = useState<string | null>(null)
+
+  const relevant = COMPONENT_RELEASE_STATUSES.includes(exam.status)
+
+  const { data: statusResp, isLoading } = useQuery({
+    queryKey: ['exam-component-workflow-status', examId],
+    queryFn: () => api.get(`/exams/${examId}/component-workflow-status`).then(r => r.data),
+    enabled: relevant,
+  })
+
+  const freezeMutation = useMutation({
+    mutationFn: () => api.post(`/exams/${examId}/component-freeze`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['exam', examId] })
+      qc.invalidateQueries({ queryKey: ['results', examId] })
+      toast.success('Released — visible to students now')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to release'),
+  })
+
+  const startMutation = useMutation({
+    mutationFn: () => api.post(`/exams/${examId}/start-component-workflow`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['exam-component-workflow-status', examId] })
+      qc.invalidateQueries({ queryKey: ['exam', examId] })
+      toast.success('Release workflow started')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to start workflow'),
+  })
+
+  const actionMutation = useMutation({
+    mutationFn: ({ status }: { status: 'approved' | 'rejected' | 'commented' }) =>
+      api.post(`/exams/${examId}/component-workflow-action`, { status, notes: notes.trim() || undefined }),
+    onSuccess: (r: any) => {
+      qc.invalidateQueries({ queryKey: ['exam-component-workflow-status', examId] })
+      qc.invalidateQueries({ queryKey: ['exam', examId] })
+      qc.invalidateQueries({ queryKey: ['results', examId] })
+      if (r.data.data?.completed) {
+        toast.success(r.data.data.instance.status === 'approved' ? 'Released — visible to students now' : 'Sent back for correction')
+      } else {
+        toast.success('Decision recorded')
+      }
+      setNotes('')
+      setShowNotesFor(null)
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Action failed'),
+  })
+
+  if (!relevant) return null
+
+  if (isLoading) {
+    return (
+      <Card className="p-6">
+        <Skeleton className="h-9 w-full" />
+      </Card>
+    )
+  }
+
+  const hasConfiguredWorkflow = !!statusResp?.has_configured_workflow
+  const workflow = statusResp?.data
+
+  // No workflow configured for this exam's Term — the fallback. Normally
+  // generate-results already did this in the same step; reaching here
+  // with status still 'result_declared' means results were regenerated
+  // (e.g. after a marks correction) and need releasing again.
+  if (!hasConfiguredWorkflow) {
+    if (exam.status === 'result_frozen') return null
+    const canFreeze = ['school_admin', 'principal', 'teacher'].includes(user?.role ?? '')
+    return (
+      <Card className="p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="flex items-center gap-2 font-semibold text-foreground"><Snowflake className="h-4 w-4" /> Release to students</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              No release workflow is configured for this exam's Term — release its scores once marks are final. Reachable to whoever entered them, or an Exam Controller.
+            </p>
+          </div>
+          {canFreeze && (
+            <Button size="sm" onClick={() => freezeMutation.mutate()} disabled={freezeMutation.isPending}>
+              {freezeMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Release
+            </Button>
+          )}
+        </div>
+      </Card>
+    )
+  }
+
+  // Configured but not yet started
+  if (!workflow) {
+    const canStart = ['school_admin', 'principal', 'teacher'].includes(user?.role ?? '')
+    return (
+      <Card className="p-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <GitBranch className="h-4 w-4 text-muted-foreground" />
+            <h3 className="font-semibold text-foreground">Component Release</h3>
+          </div>
+          {canStart && (
+            <Button size="sm" onClick={() => startMutation.mutate()} disabled={startMutation.isPending}>
+              {startMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Start Release Workflow
+            </Button>
+          )}
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Results have been generated. Start this Term's configured release workflow before students see this exam's scores.
+        </p>
+      </Card>
+    )
+  }
+
+  const allSteps: any[] = workflow.all_steps ?? []
+  const currentStep = workflow.current_step
+  const approvals: any[] = workflow.approvals ?? []
+  const status = workflow.status as 'in_progress' | 'approved' | 'rejected' | 'cancelled'
+  const canAct = status === 'in_progress' && !!currentStep && !!workflow.can_act
+
+  const handleAction = (actionStatus: 'approved' | 'rejected' | 'commented') => {
+    if (actionStatus === 'rejected' && !notes.trim()) {
+      setShowNotesFor('rejected')
+      return
+    }
+    actionMutation.mutate({ status: actionStatus })
+  }
+
+  return (
+    <Card className="space-y-5 p-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <GitBranch className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-semibold text-foreground">{workflow.workflow_definitions?.name ?? 'Component Release'}</h3>
+        </div>
+        <Badge variant={status === 'approved' ? 'success' : status === 'rejected' ? 'destructive' : status === 'cancelled' ? 'secondary' : 'warning'}>
+          {status === 'approved' ? 'Released' : status === 'rejected' ? 'Sent Back' : status === 'cancelled' ? 'Cancelled' : 'In Progress'}
+        </Badge>
+      </div>
+
+      <div className="flex items-center gap-1">
+        {allSteps.map((step, idx) => {
+          const approval = approvals.find((a: any) => a.workflow_steps?.step_order === step.step_order)
+          let state: 'done' | 'current' | 'pending' | 'rejected'
+          if (approval?.status === 'approved') state = 'done'
+          else if (approval?.status === 'rejected') state = 'rejected'
+          else if (currentStep && step.step_order === currentStep.step_order && status === 'in_progress') state = 'current'
+          else state = 'pending'
+
+          return (
+            <div key={step.id} className="flex min-w-0 flex-1 items-center">
+              <div className="flex shrink-0 flex-col items-center gap-1.5">
+                <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold',
+                  state === 'done' && 'bg-success/15 text-success',
+                  state === 'current' && 'bg-primary text-primary-foreground ring-4 ring-primary/20',
+                  state === 'pending' && 'bg-muted text-muted-foreground',
+                  state === 'rejected' && 'bg-destructive/10 text-destructive')}>
+                  {state === 'done' && <Check className="h-4 w-4" />}
+                  {state === 'rejected' && <X className="h-4 w-4" />}
+                  {(state === 'current' || state === 'pending') && <Snowflake className="h-4 w-4" />}
+                </div>
+                <div className="text-center">
+                  <p className={cn('whitespace-nowrap text-xs font-semibold', state === 'pending' ? 'text-muted-foreground' : 'text-foreground')}>{step.roles?.name}</p>
+                  <p className="whitespace-nowrap text-[10px] text-muted-foreground">{step.action_name}</p>
+                </div>
+              </div>
+              {idx < allSteps.length - 1 && (
+                <div className={cn('mx-2 mb-5 h-0.5 flex-1', state === 'done' ? 'bg-success/30' : 'bg-border')} />
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {status === 'in_progress' && currentStep && (
+        <div className="border-t border-border pt-4">
+          <p className="mb-3 text-sm text-muted-foreground">
+            Waiting on <span className="font-semibold text-foreground">{currentStep.roles?.name}</span> to {(currentStep.action_name ?? '').toLowerCase()}
+          </p>
+
+          {canAct ? (
+            <div className="space-y-3">
+              {showNotesFor && (
+                <Textarea
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                  placeholder={showNotesFor === 'rejected' ? 'Reason for sending back (required)...' : 'Add a note (optional)...'}
+                  rows={2}
+                  className="resize-none"
+                  autoFocus
+                />
+              )}
+              <div className="flex gap-2">
+                <Button onClick={() => handleAction('approved')} disabled={actionMutation.isPending}
+                  className="bg-success text-success-foreground hover:bg-success/90">
+                  {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  {currentStep.action_name.charAt(0).toUpperCase() + currentStep.action_name.slice(1)}
+                </Button>
+                <Button variant="destructive" onClick={() => handleAction('rejected')} disabled={actionMutation.isPending}>
+                  <X className="h-4 w-4" /> Send Back
+                </Button>
+                {showNotesFor !== 'commented' ? (
+                  <Button variant="outline" onClick={() => setShowNotesFor('commented')}>
+                    <MessageSquare className="h-4 w-4" /> Add Note
+                  </Button>
+                ) : (
+                  <Button variant="outline" onClick={() => handleAction('commented')} disabled={actionMutation.isPending || !notes.trim()}>
+                    Save Note
+                  </Button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              You don't have the {currentStep.roles?.name} role required for this step.
+            </p>
+          )}
+        </div>
+      )}
+
+      {status !== 'in_progress' && (
+        <div className="border-t border-border pt-4">
+          <p className="text-sm text-muted-foreground">
+            {status === 'approved' && 'This exam has been released and is now visible to students and parents.'}
+            {status === 'rejected' && 'This workflow was sent back for correction.'}
+            {status === 'cancelled' && 'This workflow was cancelled.'}
+          </p>
+          {status === 'rejected' && ['school_admin', 'principal', 'teacher'].includes(user?.role ?? '') && (
+            <Button size="sm" className="mt-3" onClick={() => startMutation.mutate()} disabled={startMutation.isPending}>
+              {startMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Restart Workflow
+            </Button>
+          )}
+        </div>
+      )}
+
+      {approvals.length > 0 && (
+        <div className="border-t border-border pt-4">
+          <p className="mb-3 text-xs font-semibold uppercase text-muted-foreground">History</p>
+          <div className="space-y-3">
+            {approvals.map((a: any) => (
+              <div key={a.id} className="flex items-start gap-3 text-sm">
+                <div className={cn('mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
+                  a.status === 'approved' ? 'bg-success/15 text-success' :
+                  a.status === 'rejected' ? 'bg-destructive/10 text-destructive' :
+                  'bg-muted text-muted-foreground')}>
+                  {a.status === 'approved' && <Check className="h-3.5 w-3.5" />}
+                  {a.status === 'rejected' && <X className="h-3.5 w-3.5" />}
+                  {a.status === 'commented' && <MessageSquare className="h-3 w-3" />}
+                </div>
+                <div className="flex-1">
+                  <p className="text-foreground">
+                    <span className="font-semibold">{a.users?.full_name ?? 'System'}</span>
+                    {' '}
+                    <span className="text-muted-foreground">
+                      {a.status === 'approved' && 'approved'}
+                      {a.status === 'rejected' && 'sent back'}
+                      {a.status === 'commented' && 'commented'}
+                      {' '}({a.workflow_steps?.roles?.name} · {a.workflow_steps?.action_name})
+                    </span>
+                  </p>
+                  {a.notes && <p className="mt-0.5 text-muted-foreground">"{a.notes}"</p>}
+                  <p className="mt-0.5 text-xs text-muted-foreground">{formatDate(a.acted_at)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Card>
+  )
 }
 
 function MarksEntry({ examId, exam }: any) {

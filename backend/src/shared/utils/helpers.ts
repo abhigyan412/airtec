@@ -119,6 +119,23 @@ export async function resolveOwnStudentId(userId: string, role: string, schoolId
   return parent?.student_id ?? null
 }
 
+// Whether a result-facing screen may show a student/parent this exam's
+// data. 'result_published' always qualifies — the exam's own full
+// Freeze->Verify->Publish chain completed. A Term-member exam ALSO
+// qualifies at 'result_frozen', since in practice a school almost never
+// runs that full chain on an individual component exam — only on the
+// composite Term itself — so requiring 'result_published' from a
+// component exam left it permanently invisible. A standalone (non-member)
+// exam still needs the full publish; only Term membership relaxes this.
+// Shared so exam/routes.ts's GET /:id/scoresheet and sis/routes.ts's
+// GET /students/:id/performance agree on the same rule.
+export async function isExamResultVisibleToNonStaff(examId: string, status: string | null | undefined): Promise<boolean> {
+  if (status === 'result_published') return true
+  if (status !== 'result_frozen') return false
+  const { data } = await supabase.from('result_group_exams').select('id').eq('exam_id', examId).limit(1).maybeSingle()
+  return !!data
+}
+
 // PostgREST silently caps an unranged select at 1000 rows. Pages through
 // with .range() instead. queryFn is expected to pass { count: 'exact' }
 // so the first page also reports the total, and — this is not optional —

@@ -129,7 +129,13 @@ router.post('/:id/apply', requirePermissionV2('exam.result_settings_manage'), as
     const groupName = multiClass ? `${body.name} — ${classNameById.get(class_id) ?? ''}` : body.name
     const { data: group, error: groupErr } = await supabase
       .from('result_groups')
-      .insert({ name: groupName, class_id, academic_year_id: body.academic_year_id, school_id, created_by: req.user!.id })
+      // term_template_id traces this Term back to the template it came
+      // from, so a member exam's release-workflow lookup
+      // (resolveComponentRelease, resultGroups.routes.ts) can find this
+      // template's component_workflow_id later. A Term built by hand
+      // (not via this apply endpoint) has none, and always falls back to
+      // the simple per-exam Freeze.
+      .insert({ name: groupName, class_id, academic_year_id: body.academic_year_id, school_id, created_by: req.user!.id, term_template_id: req.params.id })
       .select().single()
     if (groupErr) {
       // Same reasoning as every other apply-a-template rollback in this
@@ -158,6 +164,98 @@ router.post('/:id/apply', requirePermissionV2('exam.result_settings_manage'), as
   }
 
   res.status(201).json({ success: true, data: createdGroups })
+}))
+
+// ── Component Exam Release workflow, per template ──────────────
+//
+// Optional: a real multi-step approval chain for the release of any
+// component exam whose Term was created from THIS template (entity_type
+// 'exam_component' — kept out of 'exam' entirely so its workflow_
+// instances can never collide with the school-wide Freeze/Verify/
+// Publish workflow on the same exam, see the migration comment). No
+// steps configured (component_workflow_id null) means a member exam
+// falls back to the simple POST /:id/component-freeze instead. Same
+// retire-and-recreate save pattern as resultSettings.routes.ts's PUT
+// /workflow, for the same reason: an old exam's already-recorded
+// workflow_instances/approvals must keep pointing at the exact
+// definition/steps they ran against, not get silently rewritten under
+// them by a later edit.
+const componentWorkflowName = (templateId: string) => `Component Release — ${templateId}`
+
+router.get('/:id/workflow', requirePermissionV2('exam.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const { data: template } = await supabase
+    .from('term_templates').select('id, component_workflow_id').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+  if (!template) return res.status(404).json({ success: false, error: 'Template not found' })
+
+  if (!template.component_workflow_id) {
+    return res.json({ success: true, data: { definition_id: null, steps: [], editable: true } })
+  }
+
+  const [{ data: steps }, { count: activeCount }] = await Promise.all([
+    supabase.from('workflow_steps').select('id, step_order, role_id, action_name, roles ( name )')
+      .eq('workflow_id', template.component_workflow_id).order('step_order'),
+    supabase.from('workflow_instances').select('id', { count: 'exact', head: true })
+      .eq('workflow_id', template.component_workflow_id).eq('status', 'in_progress'),
+  ])
+  res.json({ success: true, data: { definition_id: template.component_workflow_id, steps: steps ?? [], editable: (activeCount ?? 0) === 0 } })
+}))
+
+const WorkflowStepSchema = z.object({ role_id: z.string(), action_name: z.string().min(1) })
+const SaveComponentWorkflowSchema = z.object({ steps: z.array(WorkflowStepSchema) })
+
+router.put('/:id/workflow', requirePermissionV2('exam.result_settings_manage'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const school_id = req.user!.school_id
+  const { steps } = SaveComponentWorkflowSchema.parse(req.body)
+
+  const { data: template } = await supabase
+    .from('term_templates').select('id, component_workflow_id').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+  if (!template) return res.status(404).json({ success: false, error: 'Template not found' })
+
+  if (template.component_workflow_id) {
+    const { count: activeCount } = await supabase
+      .from('workflow_instances').select('id', { count: 'exact', head: true })
+      .eq('workflow_id', template.component_workflow_id).eq('status', 'in_progress')
+    if ((activeCount ?? 0) > 0) {
+      return res.status(400).json({ success: false, error: "Can't change this workflow while a component exam is mid-release — finish or reject that first." })
+    }
+    const { error: retireErr } = await supabase.from('workflow_definitions')
+      .update({ name: `${componentWorkflowName(template.id)} (retired ${new Date().toISOString()})`, is_active: false })
+      .eq('id', template.component_workflow_id)
+    if (retireErr) return res.status(400).json({ success: false, error: retireErr.message })
+  }
+
+  // Empty steps = "no workflow, use the fallback freeze" — clear it and
+  // stop, no new definition to create.
+  if (!steps.length) {
+    const { error } = await supabase.from('term_templates').update({ component_workflow_id: null }).eq('id', template.id)
+    if (error) return res.status(400).json({ success: false, error: error.message })
+    return res.json({ success: true, data: { definition_id: null, steps: [] } })
+  }
+
+  const roleIds = [...new Set(steps.map(s => s.role_id))]
+  const { data: validRoles } = await supabase.from('roles').select('id').eq('school_id', school_id).in('id', roleIds)
+  if ((validRoles ?? []).length !== roleIds.length) {
+    return res.status(400).json({ success: false, error: 'One or more selected roles are invalid for this school.' })
+  }
+
+  const { data: newDefinition, error: defErr } = await supabase
+    .from('workflow_definitions')
+    .insert({ school_id, name: componentWorkflowName(template.id), module: 'exam', entity_type: 'exam_component', is_active: true })
+    .select('id').single()
+  if (defErr || !newDefinition) return res.status(400).json({ success: false, error: defErr?.message ?? 'Failed to save workflow' })
+
+  const stepRows = steps.map((s, i) => ({
+    workflow_id: newDefinition.id, step_order: i + 1, role_id: s.role_id, action_name: s.action_name, is_required: true,
+  }))
+  const { data: savedSteps, error: stepsErr } = await supabase.from('workflow_steps').insert(stepRows)
+    .select('id, step_order, role_id, action_name, roles ( name )')
+  if (stepsErr) return res.status(400).json({ success: false, error: stepsErr.message })
+
+  const { error: linkErr } = await supabase.from('term_templates').update({ component_workflow_id: newDefinition.id }).eq('id', template.id)
+  if (linkErr) return res.status(400).json({ success: false, error: linkErr.message })
+
+  res.json({ success: true, data: { definition_id: newDefinition.id, steps: savedSteps ?? [] } })
 }))
 
 export default router
