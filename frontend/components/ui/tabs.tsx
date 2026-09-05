@@ -13,7 +13,13 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground",
+      // max-w-full + overflow-x-auto: a page with enough tabs to overflow a
+      // narrow phone must never widen this row past its container - without
+      // this, an inline-flex row of un-shrinking TabsTriggers pushes the
+      // ENTIRE page wider than the viewport (title, form fields, everything
+      // scrolls sideways with it), not just the tab bar itself. A no-op for
+      // any tab list that already fits.
+      "inline-flex h-9 max-w-full items-center justify-center overflow-x-auto rounded-lg bg-muted p-1 text-muted-foreground",
       className,
     )}
     {...props}

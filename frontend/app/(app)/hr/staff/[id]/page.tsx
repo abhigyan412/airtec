@@ -142,7 +142,7 @@ export default function StaffDetailPage() {
 
       {/* Tabs */}
       <Tabs value={tab} onValueChange={(v) => setTab(v as typeof TABS[number])}>
-        <TabsList>
+        <TabsList className="w-full justify-start overflow-x-auto">
           {TABS.map(t => <TabsTrigger key={t} value={t}>{t}</TabsTrigger>)}
         </TabsList>
       </Tabs>
