@@ -52,6 +52,7 @@ export default function ArrangementsPage() {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [showAbsentForm, setShowAbsentForm] = useState(false)
   const [showAllCandidates, setShowAllCandidates] = useState(false)
+  const [gapsExpanded, setGapsExpanded] = useState(false)
 
   useEffect(() => {
     const fromUrl = params.get('date')
@@ -270,7 +271,7 @@ export default function ArrangementsPage() {
                 not be teaching them, so this will come back tomorrow and every day after
                 until the periods are reassigned. Cover is a stopgap.
                 <div className="mt-2 space-y-2">
-                  {staffingGaps.map((a: any) => (
+                  {(gapsExpanded ? staffingGaps : staffingGaps.slice(0, 2)).map((a: any) => (
                     <div key={a.id}
                       className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/20 bg-background px-3 py-2">
                       <div className="min-w-0">
@@ -295,6 +296,16 @@ export default function ArrangementsPage() {
                       </div>
                     </div>
                   ))}
+                  {staffingGaps.length > 2 && (
+                    <button
+                      type="button"
+                      onClick={() => setGapsExpanded(v => !v)}
+                      className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', gapsExpanded && 'rotate-180')} />
+                      {gapsExpanded ? 'Show less' : `Show ${staffingGaps.length - 2} more`}
+                    </button>
+                  )}
                 </div>
               </Banner>
             </div>
