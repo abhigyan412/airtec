@@ -53,6 +53,7 @@ export default function ArrangementsPage() {
   const [showAbsentForm, setShowAbsentForm] = useState(false)
   const [showAllCandidates, setShowAllCandidates] = useState(false)
   const [gapsExpanded, setGapsExpanded] = useState(false)
+  const [proposedExpanded, setProposedExpanded] = useState(false)
 
   useEffect(() => {
     const fromUrl = params.get('date')
@@ -327,9 +328,19 @@ export default function ArrangementsPage() {
                 Their periods are still on the timetable but they will not be taking them.
                 Confirm to send those periods to the cover queue.
                 <div className="mt-2 space-y-2">
-                  {proposed.map((a: any) => (
+                  {(proposedExpanded ? proposed : proposed.slice(0, 2)).map((a: any) => (
                     <ProposedAbsenceRow key={a.id} absence={a} date={date} onDone={invalidate} />
                   ))}
+                  {proposed.length > 2 && (
+                    <button
+                      type="button"
+                      onClick={() => setProposedExpanded(v => !v)}
+                      className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', proposedExpanded && 'rotate-180')} />
+                      {proposedExpanded ? 'Show less' : `Show ${proposed.length - 2} more`}
+                    </button>
+                  )}
                 </div>
               </Banner>
             </div>
