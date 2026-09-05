@@ -86,6 +86,7 @@ const NAV: NavItem[] = [
       { label: 'Add Student', href: '/students/new', icon: UserPlus, permission: 'student.create' },
       { label: 'Promotions', href: '/students/promote', icon: ArrowUpNarrowWide, permission: 'student.promote' },
       { label: 'Bulk Edit', href: '/students/bulk-edit', icon: ClipboardList, permission: 'student.edit' },
+      { label: 'Settings', href: '/students/settings', icon: SettingsIcon, permission: 'tc.view' },
     ],
   },
   {
@@ -280,6 +281,7 @@ const NAV: NavItem[] = [
       { label: 'Org Chart', href: '/hr/org-chart', icon: Network, permission: 'staff.view', module: 'staff' },
       { label: 'Reports', href: '/hr/reports', icon: BarChart3, permission: 'staff.view', module: 'staff' },
       { label: 'Permissions', href: '/hr/permissions', icon: ShieldCheck, requireAny: ['role.manage', 'role.assign'], module: 'staff' },
+      { label: 'Settings', href: '/hr/settings', icon: SettingsIcon, roles: ['school_admin'], module: 'staff' },
 
       { label: 'Attendance & Leave', heading: true, icon: UserCheck },
       // Feeds the timetable's absence detection, so it belongs to the

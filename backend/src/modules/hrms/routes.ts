@@ -2,11 +2,12 @@ import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
-import { authenticate, AuthRequest, invalidateUserProfile } from '../../shared/middleware/auth'
+import { authenticate, requireRole, AuthRequest, invalidateUserProfile } from '../../shared/middleware/auth'
 import { requirePermissionV2, getPermissionsForUser, getUserIdsWithPermission } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, getPagination, NON_STAFF_ROLES } from '../../shared/utils/helpers'
 import { getPermissionsForRole } from '../../shared/middleware/permissions'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
+import { getEditableWorkflowStatus, saveEditableWorkflowSteps } from '../../shared/middleware/workflowSettings'
 import { assignDefaultUserRole, ensureExitWorkflowDefinition, ensureRegularizationWorkflowDefinition, ensureCompOffWorkflowDefinition, ensureLeaveApprovalWorkflowDefinition } from '../rbac/seed'
 import { getNonWorkingDaySets, countWorkingDays, isWorkingDate, dateRangeStrings, toLocalDateStr, NonWorkingDaySets } from '../../shared/utils/academicCalendar'
 import { createNotification, createNotifications } from '../../shared/utils/notifications'
@@ -5092,5 +5093,52 @@ router.get('/permissions/me', asyncHandler(async (req: AuthRequest, res: Respons
   const perms = await getPermissionsForRole(req.user!.school_id, req.user!.role)
   res.json({ success: true, data: { role: req.user!.role, permissions: perms } })
 }))
+
+// ═══════════════════════════════════════════════════════════════
+// WORKFLOW SETTINGS — Leave / Exit / Regularization / Comp-Off
+// Lets a school reconfigure any of the four HRMS approval chains (any
+// number of steps, each assigned to any of its own roles) instead of the
+// fixed single step ensureSingleStepWorkflow-based seed functions create
+// (HR, falling back to Principal). All four are single-step today, so
+// this is the first time a school could turn any of them into a real
+// multi-step chain, not just reassign the one step's role. The
+// leave-delegate fallback in workflow-engine.ts's canActOnStep already
+// works per-step regardless of step count, so a multi-step chain gets
+// that benefit at every step for free.
+// ═══════════════════════════════════════════════════════════════
+const HrWorkflowStepSchema = z.object({ role_id: z.string(), action_name: z.string().min(1) })
+const SaveHrWorkflowSchema = z.object({ steps: z.array(HrWorkflowStepSchema).min(1) })
+
+const HR_WORKFLOWS: Record<string, { name: string; entityType: string; ensureSeedFn: (schoolId: string) => Promise<void> }> = {
+  leave: { name: 'Leave Approval Workflow', entityType: 'leave_request', ensureSeedFn: ensureLeaveApprovalWorkflowDefinition },
+  exit: { name: 'Staff Exit Settlement Workflow', entityType: 'staff_exit', ensureSeedFn: ensureExitWorkflowDefinition },
+  regularization: { name: 'Attendance Regularization Workflow', entityType: 'staff_attendance_regularization', ensureSeedFn: ensureRegularizationWorkflowDefinition },
+  'comp-off': { name: 'Comp-Off Approval Workflow', entityType: 'staff_comp_off_request', ensureSeedFn: ensureCompOffWorkflowDefinition },
+}
+
+router.get('/settings/workflow/:key', requirePermissionV2('staff.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const workflow = HR_WORKFLOWS[req.params.key]
+    if (!workflow) return res.status(404).json({ success: false, error: 'Unknown workflow' })
+    const status = await getEditableWorkflowStatus(req.user!.school_id, workflow.name, workflow.ensureSeedFn)
+    if (!status) return res.status(500).json({ success: false, error: `Could not load the "${workflow.name}"` })
+    res.json({ success: true, data: status })
+  })
+)
+
+router.put('/settings/workflow/:key', requireRole('school_admin'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const workflow = HR_WORKFLOWS[req.params.key]
+    if (!workflow) return res.status(404).json({ success: false, error: 'Unknown workflow' })
+    const { steps } = SaveHrWorkflowSchema.parse(req.body)
+    const result = await saveEditableWorkflowSteps(
+      req.user!.school_id,
+      { workflowName: workflow.name, module: 'hrms', entityType: workflow.entityType, ensureSeedFn: workflow.ensureSeedFn },
+      steps,
+    )
+    if (!result.success) return res.status(400).json({ success: false, error: result.error })
+    res.json({ success: true, data: { definition_id: result.definition_id, steps: result.steps } })
+  })
+)
 
 export default router

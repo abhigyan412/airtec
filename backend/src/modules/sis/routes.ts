@@ -2,10 +2,11 @@ import { Router, Response } from 'express'
 import { z } from 'zod'
 import { supabase } from '../../shared/db/client'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
-import { authenticate, AuthRequest } from '../../shared/middleware/auth'
+import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2, getPermissionsForUser } from '../../shared/middleware/permissions-v2'
 import { asyncHandler, getPagination, NON_STAFF_ROLES, resolveOwnStudentId, fetchAllRows } from '../../shared/utils/helpers'
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
+import { getEditableWorkflowStatus, saveEditableWorkflowSteps } from '../../shared/middleware/workflowSettings'
 import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr, countWorkingDays } from '../../shared/utils/academicCalendar'
 import { createNotification, createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 import { buildStudentSearchFilter } from '../../shared/utils/studentSearch'
@@ -1573,6 +1574,37 @@ router.get('/tc-requests/pending', asyncHandler(async (req: AuthRequest, res: Re
   res.json({ success: true, data })
 }))
 
+// ── WORKFLOW SETTINGS — Transfer Certificate ──────────────────────
+// Lets a school reconfigure the TC approval chain (any number of steps,
+// each assigned to any of its own roles) instead of the fixed 2-step
+// Accountant -> Principal default ensureTransferCertificateWorkflowDefinition
+// creates. Safe to expose as freely editable now that the fee-due gate on
+// POST /:id/tc/:tcId/workflow-action is keyed off step position (the
+// first step), not the literal 'dues_clearance' action_name string.
+const WorkflowStepSchema = z.object({ role_id: z.string(), action_name: z.string().min(1) })
+const SaveWorkflowSchema = z.object({ steps: z.array(WorkflowStepSchema).min(1) })
+
+router.get('/settings/workflow/transfer-certificate', requirePermissionV2('tc.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const status = await getEditableWorkflowStatus(req.user!.school_id, 'Transfer Certificate Workflow', ensureTransferCertificateWorkflowDefinition)
+    if (!status) return res.status(500).json({ success: false, error: 'Could not load the transfer certificate workflow' })
+    res.json({ success: true, data: status })
+  })
+)
+
+router.put('/settings/workflow/transfer-certificate', requireRole('school_admin'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { steps } = SaveWorkflowSchema.parse(req.body)
+    const result = await saveEditableWorkflowSteps(
+      req.user!.school_id,
+      { workflowName: 'Transfer Certificate Workflow', module: 'sis', entityType: 'transfer_certificate', ensureSeedFn: ensureTransferCertificateWorkflowDefinition },
+      steps,
+    )
+    if (!result.success) return res.status(400).json({ success: false, error: result.error })
+    res.json({ success: true, data: { definition_id: result.definition_id, steps: result.steps } })
+  })
+)
+
 async function fetchStudentWithFeeSummary(id: string, school_id: string) {
   const { data, error } = await supabase.from('students')
     .select(`*, classes(id, name, stream), sections(id, name), houses(id, name, color), academic_years(id, name), parents(*, portal_user:user_id(is_active)), portal_user:user_id(is_active)`)
@@ -1846,14 +1878,22 @@ router.post('/:id/tc/:tcId/workflow-action', asyncHandler(async (req: AuthReques
  
 
   const beforeStatus = await getWorkflowStatus('transfer_certificate', tcId, school_id)
-  const currentStepActionName = beforeStatus?.current_step?.action_name
+  const currentStepOrder = beforeStatus?.current_step?.step_order
 
   // Same gate the frontend already shows (disabled button + fee-due
   // banner) — enforced here too so it can't be bypassed by calling this
   // route directly. Reuses the exact fee_invoices/fee_payments math the
   // Fee Summary card on the student page already shows, not a separate
   // number that could drift from it.
-  if (status === 'approved' && currentStepActionName === 'dues_clearance') {
+  //
+  // Keyed off step POSITION (the first step), not the literal
+  // 'dues_clearance' action_name string — a school that reconfigures this
+  // workflow's steps (any count, any role, any label — see
+  // students/settings' Workflow tab) still gets the fee-due check on
+  // whichever step is first, matching the exact same position-based fix
+  // the exam module's own workflow-action route already uses for its
+  // freeze/verify/publish sync.
+  if (status === 'approved' && currentStepOrder === 1) {
     const studentWithFees = await fetchStudentWithFeeSummary(id, school_id)
     const feeDue = studentWithFees?.fee_summary?.total_due ?? 0
     if (feeDue > 0) {
@@ -1873,7 +1913,7 @@ router.post('/:id/tc/:tcId/workflow-action', asyncHandler(async (req: AuthReques
     return res.status(400).json({ success: false, error: result.error })
   }
  
-  if (status === 'approved' && currentStepActionName === 'dues_clearance') {
+  if (status === 'approved' && currentStepOrder === 1) {
     // Step 1 approved — record that dues are cleared
     await supabase.from('transfer_certificates').update({ dues_cleared: true }).eq('id', tcId).eq('school_id', school_id)
   }

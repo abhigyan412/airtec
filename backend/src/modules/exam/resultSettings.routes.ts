@@ -6,6 +6,7 @@ import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { RESULT_PRESETS } from './services/presets'
 import { ensureResultFreezePublishWorkflowDefinition } from '../rbac/seed'
+import { getEditableWorkflowStatus, saveEditableWorkflowSteps } from '../../shared/middleware/workflowSettings'
 
 const RESULT_WORKFLOW_NAME = 'Result Freeze & Publish Workflow'
 
@@ -569,31 +570,11 @@ router.post('/presets/:key/apply', requirePermissionV2('exam.result_settings_man
 // the new one automatically, with no change needed there.
 // ═══════════════════════════════════════════════════════════════
 
-async function getActiveResultWorkflowDefinition(school_id: string) {
-    await ensureResultFreezePublishWorkflowDefinition(school_id)
-    const { data } = await supabase
-        .from('workflow_definitions')
-        .select('id, name')
-        .eq('school_id', school_id)
-        .eq('name', RESULT_WORKFLOW_NAME)
-        .eq('is_active', true)
-        .maybeSingle()
-    return data
-}
-
 router.get('/workflow', requirePermissionV2('exam.view'), asyncHandler(async (req: AuthRequest, res: Response) => {
     const school_id = req.user!.school_id
-    const definition = await getActiveResultWorkflowDefinition(school_id)
-    if (!definition) return res.status(500).json({ success: false, error: 'Could not load the result publish workflow' })
-
-    const [{ data: steps }, { count: activeCount }] = await Promise.all([
-        supabase.from('workflow_steps').select('id, step_order, role_id, action_name, roles ( name )')
-            .eq('workflow_id', definition.id).order('step_order'),
-        supabase.from('workflow_instances').select('id', { count: 'exact', head: true })
-            .eq('workflow_id', definition.id).eq('status', 'in_progress'),
-    ])
-
-    res.json({ success: true, data: { definition_id: definition.id, steps: steps ?? [], editable: (activeCount ?? 0) === 0 } })
+    const status = await getEditableWorkflowStatus(school_id, RESULT_WORKFLOW_NAME, ensureResultFreezePublishWorkflowDefinition)
+    if (!status) return res.status(500).json({ success: false, error: 'Could not load the result publish workflow' })
+    res.json({ success: true, data: status })
 }))
 
 const WorkflowStepSchema = z.object({ role_id: z.string(), action_name: z.string().min(1) })
@@ -603,41 +584,13 @@ router.put('/workflow', requirePermissionV2('exam.result_settings_manage'), asyn
     const school_id = req.user!.school_id
     const { steps } = SaveWorkflowSchema.parse(req.body)
 
-    const definition = await getActiveResultWorkflowDefinition(school_id)
-    if (!definition) return res.status(500).json({ success: false, error: 'Could not load the result publish workflow' })
-
-    const { count: activeCount } = await supabase
-        .from('workflow_instances').select('id', { count: 'exact', head: true })
-        .eq('workflow_id', definition.id).eq('status', 'in_progress')
-    if ((activeCount ?? 0) > 0) {
-        return res.status(400).json({ success: false, error: "Can't change the workflow while an exam's results are mid-approval — finish or reject that first." })
-    }
-
-    const roleIds = [...new Set(steps.map(s => s.role_id))]
-    const { data: validRoles } = await supabase.from('roles').select('id').eq('school_id', school_id).in('id', roleIds)
-    if ((validRoles ?? []).length !== roleIds.length) {
-        return res.status(400).json({ success: false, error: 'One or more selected roles are invalid for this school.' })
-    }
-
-    const retiredName = `${definition.name} (retired ${new Date().toISOString()})`
-    const { error: retireErr } = await supabase.from('workflow_definitions')
-        .update({ name: retiredName, is_active: false }).eq('id', definition.id)
-    if (retireErr) return res.status(400).json({ success: false, error: retireErr.message })
-
-    const { data: newDefinition, error: defErr } = await supabase
-        .from('workflow_definitions')
-        .insert({ school_id, name: RESULT_WORKFLOW_NAME, module: 'exam', entity_type: 'exam', is_active: true })
-        .select('id').single()
-    if (defErr || !newDefinition) return res.status(400).json({ success: false, error: defErr?.message ?? 'Failed to save workflow' })
-
-    const stepRows = steps.map((s, i) => ({
-        workflow_id: newDefinition.id, step_order: i + 1, role_id: s.role_id, action_name: s.action_name, is_required: true,
-    }))
-    const { data: savedSteps, error: stepsErr } = await supabase.from('workflow_steps').insert(stepRows)
-        .select('id, step_order, role_id, action_name, roles ( name )')
-    if (stepsErr) return res.status(400).json({ success: false, error: stepsErr.message })
-
-    res.json({ success: true, data: { definition_id: newDefinition.id, steps: savedSteps ?? [] } })
+    const result = await saveEditableWorkflowSteps(
+        school_id,
+        { workflowName: RESULT_WORKFLOW_NAME, module: 'exam', entityType: 'exam', ensureSeedFn: ensureResultFreezePublishWorkflowDefinition },
+        steps,
+    )
+    if (!result.success) return res.status(400).json({ success: false, error: result.error })
+    res.json({ success: true, data: { definition_id: result.definition_id, steps: result.steps } })
 }))
 
 export default router

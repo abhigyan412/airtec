@@ -8,6 +8,7 @@ import { asyncHandler, getPagination, NON_STAFF_ROLES } from '../../shared/utils
 import { startWorkflow, actOnWorkflow, getWorkflowStatus } from '../../shared/middleware/workflow-engine'
 import { getNonWorkingDaySets, isWorkingDate, toLocalDateStr } from '../../shared/utils/academicCalendar'
 import { ensureAdmissionApprovalWorkflowDefinition, ensureEntranceResultWorkflowDefinition } from '../rbac/seed'
+import { getEditableWorkflowStatus, saveEditableWorkflowSteps } from '../../shared/middleware/workflowSettings'
 import {
   getClassSeatAvailability, applyLedgerTransition, checkClassLockOpen,
   releaseExpiredSeatHolds, processExpiredWaitlistOffers,
@@ -1902,6 +1903,59 @@ router.patch('/admission-settings', requireRole('school_admin'),
     const { error } = await supabase.from('schools').update(update).eq('id', req.user!.school_id)
     if (error) return res.status(400).json({ success: false, error: error.message })
     res.json({ success: true, data: update })
+  })
+)
+
+// ── WORKFLOW SETTINGS — Admission Approval & Entrance Result Publishing
+// Lets a school reconfigure either approval chain (any number of steps,
+// each assigned to any of its own roles) instead of the fixed defaults
+// rbac/seed.ts's ensure*WorkflowDefinition functions create the first
+// time each is needed. Both workflows' completion side-effects
+// (completeAdmissionWorkflow / the admission-slot-bookings handler) are
+// already keyed off step position/completion, not a literal action_name
+// string, so this is safe to expose as freely editable.
+const WorkflowStepSchema = z.object({ role_id: z.string(), action_name: z.string().min(1) })
+const SaveWorkflowSchema = z.object({ steps: z.array(WorkflowStepSchema).min(1) })
+
+router.get('/settings/workflow/application', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const status = await getEditableWorkflowStatus(req.user!.school_id, 'Admission Approval Workflow', ensureAdmissionApprovalWorkflowDefinition)
+    if (!status) return res.status(500).json({ success: false, error: 'Could not load the admission approval workflow' })
+    res.json({ success: true, data: status })
+  })
+)
+
+router.put('/settings/workflow/application', requireRole('school_admin'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { steps } = SaveWorkflowSchema.parse(req.body)
+    const result = await saveEditableWorkflowSteps(
+      req.user!.school_id,
+      { workflowName: 'Admission Approval Workflow', module: 'admission', entityType: 'admission_application', ensureSeedFn: ensureAdmissionApprovalWorkflowDefinition },
+      steps,
+    )
+    if (!result.success) return res.status(400).json({ success: false, error: result.error })
+    res.json({ success: true, data: { definition_id: result.definition_id, steps: result.steps } })
+  })
+)
+
+router.get('/settings/workflow/entrance-result', requirePermissionV2('admission.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const status = await getEditableWorkflowStatus(req.user!.school_id, 'Entrance Result Publishing', ensureEntranceResultWorkflowDefinition)
+    if (!status) return res.status(500).json({ success: false, error: 'Could not load the entrance result publishing workflow' })
+    res.json({ success: true, data: status })
+  })
+)
+
+router.put('/settings/workflow/entrance-result', requireRole('school_admin'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { steps } = SaveWorkflowSchema.parse(req.body)
+    const result = await saveEditableWorkflowSteps(
+      req.user!.school_id,
+      { workflowName: 'Entrance Result Publishing', module: 'admission', entityType: 'admission_slot_booking', ensureSeedFn: ensureEntranceResultWorkflowDefinition },
+      steps,
+    )
+    if (!result.success) return res.status(400).json({ success: false, error: result.error })
+    res.json({ success: true, data: { definition_id: result.definition_id, steps: result.steps } })
   })
 )
 

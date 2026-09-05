@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { CheckboxField } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { WorkflowSettingsCard } from '@/components/shared/WorkflowSettingsCard'
 
 // remaining-work-plan.md Section A4: these six school-level tuning knobs
 // (fee-hold window, waitlist response window, dashboard alert thresholds)
@@ -132,6 +133,20 @@ export default function AdmissionSettingsPage() {
       <ConversionPrerequisitesCard />
       <EntranceModeCard />
       <DocumentRequirementsCard />
+      <WorkflowSettingsCard
+        title="Admission Approval Workflow"
+        description="Choose how many approval steps a new application goes through before it's admitted or rejected, and which of your school's roles each step belongs to."
+        queryKey="admission-workflow-application"
+        apiPath="/admission/settings/workflow/application"
+        canManage={canManage}
+      />
+      <WorkflowSettingsCard
+        title="Entrance Result Publishing"
+        description="Choose how many approval steps an entrance test/interview result goes through before it becomes visible to the candidate."
+        queryKey="admission-workflow-entrance-result"
+        apiPath="/admission/settings/workflow/entrance-result"
+        canManage={canManage}
+      />
     </div>
   )
 }

@@ -10,6 +10,7 @@ import { SlidersHorizontal, ShieldOff, Plus, Trash2, Loader2, RotateCcw, Graduat
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { WorkflowStepEditor, WorkflowStepForm, WorkflowStepPreset } from '@/components/shared/WorkflowStepEditor'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -1707,7 +1708,7 @@ function ComponentWorkflowModal({ template, onClose }: { template: any; onClose:
                 No steps configured — the simple fallback freeze applies. Add a step below to require named approval instead.
               </p>
             )}
-            <WorkflowStepEditor steps={currentSteps} onChange={update} roles={roles ?? []} editable={editable} minSteps={0} />
+            <WorkflowStepEditor steps={currentSteps} onChange={update} roles={roles ?? []} editable={editable} minSteps={0} presets={RESULT_WORKFLOW_PRESETS} />
           </div>
         )}
         <DialogFooter>
@@ -2010,90 +2011,27 @@ function ApplyPresetTab({ classes, displayStyle }: { classes: any[]; displayStyl
 // published) under the old configuration keep their real history intact.
 // ═══════════════════════════════════════════════════════════════
 
-type WorkflowStepForm = { role_id: string; action_name: string }
-
 function findRoleId(roles: any[], name: string): string {
   return roles.find((r: any) => r.name === name)?.id ?? ''
 }
 
-const WORKFLOW_PRESETS: Record<'1' | '2' | '3', (roles: any[]) => WorkflowStepForm[]> = {
-  '1': roles => [{ role_id: findRoleId(roles, 'Principal'), action_name: 'Publish' }],
-  '2': roles => [
+// WorkflowStepEditor itself moved to components/shared — reused now by
+// every other module's own editable approval chain (Admission, Transfer
+// Certificate, HRMS), not just this one and the per-Term-Template
+// Component Release workflow below. These presets stay here since
+// they're specific to this school-wide workflow's usual roles.
+const RESULT_WORKFLOW_PRESETS: WorkflowStepPreset[] = [
+  { key: '1', label: '1-step', build: roles => [{ role_id: findRoleId(roles, 'Principal'), action_name: 'Publish' }] },
+  { key: '2', label: '2-step', build: roles => [
     { role_id: findRoleId(roles, 'Exam Controller'), action_name: 'Freeze' },
     { role_id: findRoleId(roles, 'Principal'), action_name: 'Publish' },
-  ],
-  '3': roles => [
+  ] },
+  { key: '3', label: '3-step (default)', build: roles => [
     { role_id: findRoleId(roles, 'Exam Controller'), action_name: 'Freeze' },
     { role_id: findRoleId(roles, 'Principal'), action_name: 'Verify' },
     { role_id: findRoleId(roles, 'Principal'), action_name: 'Publish' },
-  ],
-}
-
-// Shared add/remove/reorder/preset editor over a {role_id, action_name}[]
-// step list — used here by the school-wide Publish Workflow tab, and by
-// the per-Term-Template Component Release workflow config (TermTemplates
-// Tab below), so the same editing UI only exists in one place. minSteps
-// controls the floor the remove button won't go below — 1 for the
-// school-wide workflow (it must always have at least one step), 0 for
-// the per-template one (0 steps is itself a valid, meaningful choice:
-// "no workflow, use the fallback freeze").
-function WorkflowStepEditor({ steps, onChange, roles, editable, minSteps = 1 }: {
-  steps: WorkflowStepForm[]; onChange: (next: WorkflowStepForm[]) => void
-  roles: any[]; editable: boolean; minSteps?: number
-}) {
-  const updateStep = (i: number, patch: Partial<WorkflowStepForm>) => onChange(steps.map((s, j) => j === i ? { ...s, ...patch } : s))
-  const addStep = () => onChange([...steps, { role_id: '', action_name: '' }])
-  const removeStep = (i: number) => onChange(steps.filter((_, j) => j !== i))
-  const moveStep = (i: number, dir: -1 | 1) => {
-    const j = i + dir
-    if (j < 0 || j >= steps.length) return
-    const next = [...steps]
-    ;[next[i], next[j]] = [next[j], next[i]]
-    onChange(next)
-  }
-  const applyPreset = (key: '1' | '2' | '3') => { if (roles) onChange(WORKFLOW_PRESETS[key](roles)) }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">Quick setup:</span>
-        {(['1', '2', '3'] as const).map(k => (
-          <Button key={k} variant="outline" size="sm" disabled={!editable} onClick={() => applyPreset(k)}>
-            {k}-step{k === '3' ? ' (default)' : ''}
-          </Button>
-        ))}
-      </div>
-
-      <div className="space-y-3">
-        {steps.map((step, i) => (
-          <div key={i} className="flex items-center gap-2 rounded-lg border border-border p-3">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">{i + 1}</span>
-            <Select value={step.role_id || undefined} onValueChange={v => updateStep(i, { role_id: v })} disabled={!editable}>
-              <SelectTrigger className="h-9 w-48"><SelectValue placeholder="Select role..." /></SelectTrigger>
-              <SelectContent>
-                {(roles ?? []).map((r: any) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Input className="h-9 flex-1" placeholder="Step label, e.g. Verify Results" value={step.action_name}
-              onChange={e => updateStep(i, { action_name: e.target.value })} disabled={!editable} />
-            <Button variant="ghost" size="icon" className="h-9 w-9" disabled={!editable || i === 0} onClick={() => moveStep(i, -1)} aria-label="Move step up">
-              <ArrowUp className="h-3.5 w-3.5" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-9 w-9" disabled={!editable || i === steps.length - 1} onClick={() => moveStep(i, 1)} aria-label="Move step down">
-              <ArrowDown className="h-3.5 w-3.5" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-destructive"
-              disabled={!editable || steps.length <= minSteps} onClick={() => removeStep(i)} aria-label="Remove step">
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        ))}
-      </div>
-
-      <Button variant="outline" size="sm" disabled={!editable} onClick={addStep}><Plus className="h-3.5 w-3.5" /> Add step</Button>
-    </div>
-  )
-}
+  ] },
+]
 
 function PublishWorkflowTab() {
   const qc = useQueryClient()
@@ -2143,7 +2081,7 @@ function PublishWorkflowTab() {
           </div>
         )}
 
-        <WorkflowStepEditor steps={currentSteps} onChange={update} roles={roles ?? []} editable={editable} minSteps={1} />
+        <WorkflowStepEditor steps={currentSteps} onChange={update} roles={roles ?? []} editable={editable} minSteps={1} presets={RESULT_WORKFLOW_PRESETS} />
 
         <div className="flex justify-end">
           <Button size="sm" onClick={() => saveMutation.mutate()} disabled={!editable || !dirty || !canSave || saveMutation.isPending}>
