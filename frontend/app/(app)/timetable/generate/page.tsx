@@ -158,56 +158,52 @@ export default function GeneratePage() {
             ) : feasibility.data && (
               <Card className={cn(feasible ? 'border-success/40' : 'border-destructive/40')}>
                 <CardContent className="p-4">
-                  <div className="flex items-start gap-3">
+                  <div className="flex flex-col items-center text-center">
                     {feasible
-                      ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
-                      : <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />}
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-foreground">
-                        {feasible
-                          ? 'The plan can be scheduled'
-                          : 'The plan cannot be scheduled as it stands'}
-                      </p>
-                      <p className="mt-0.5 text-sm text-muted-foreground">
-                        {feasible
-                          ? 'Enough teacher time, enough room time, and every section adds up.'
-                          : 'Fix these first — generating now would only fail slowly.'}
-                      </p>
+                      ? <CheckCircle2 className="h-5 w-5 text-success" />
+                      : <AlertTriangle className="h-5 w-5 text-destructive" />}
+                    <p className="mt-1.5 text-sm font-semibold text-foreground">
+                      {feasible ? 'The plan can be scheduled' : 'Needs attention'}
+                    </p>
+                    <p className="mt-0.5 text-sm text-muted-foreground">
+                      {feasible
+                        ? 'Enough teacher time, enough room time, and every section adds up.'
+                        : 'Fix these first — generating now would only fail slowly.'}
+                    </p>
 
-                      <button
-                        type="button"
-                        onClick={() => setFeasibilityDetailsOpen(v => !v)}
-                        className="mt-2 flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-                      >
-                        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', feasibilityDetailsOpen && 'rotate-180')} />
-                        {feasibilityDetailsOpen ? 'Hide details' : 'Show details'}
-                      </button>
-
-                      {feasibilityDetailsOpen && (
-                        <div className="mt-3 space-y-3">
-                          {feasibility.data.groups.map((group: any) => (
-                            <div key={group.templateName}>
-                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                {group.templateName} · {group.sections} sections · {group.periodsPerDay} periods a day
-                              </p>
-                              {group.readable.length ? (
-                                <ul className="mt-1 space-y-1">
-                                  {group.readable.map((message: string, i: number) => (
-                                    <li key={i} className="flex items-start gap-2 text-sm">
-                                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />
-                                      <span className="text-muted-foreground">{message}</span>
-                                    </li>
-                                  ))}
-                                </ul>
-                              ) : (
-                                <p className="mt-0.5 text-sm text-success">No problems found</p>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setFeasibilityDetailsOpen(v => !v)}
+                      className="mt-2 flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', feasibilityDetailsOpen && 'rotate-180')} />
+                      {feasibilityDetailsOpen ? 'Hide details' : 'Show details'}
+                    </button>
                   </div>
+
+                  {feasibilityDetailsOpen && (
+                    <div className="mt-3 space-y-3 text-left">
+                      {feasibility.data.groups.map((group: any) => (
+                        <div key={group.templateName}>
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            {group.templateName} · {group.sections} sections · {group.periodsPerDay} periods a day
+                          </p>
+                          {group.readable.length ? (
+                            <ul className="mt-1 space-y-1">
+                              {group.readable.map((message: string, i: number) => (
+                                <li key={i} className="flex items-start gap-2 text-sm">
+                                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />
+                                  <span className="text-muted-foreground">{message}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="mt-0.5 text-sm text-success">No problems found</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
