@@ -503,7 +503,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             </div>
             <div className="min-w-0">
               <span className="block text-sm font-bold tracking-tight text-sidebar-foreground">AIRTEC</span>
-              <span className="block truncate text-xs font-bold leading-tight text-sidebar-foreground">{schoolName}</span>
+              <span className="block truncate text-[11px] leading-none text-muted-foreground">{schoolName}</span>
             </div>
           </Link>
           {/* The notification bell lives in the header, not here: its
