@@ -131,6 +131,7 @@ export default function GeneratePage() {
         title="Generate a timetable"
         description="Build a draft from the weekly plan, then publish it when you're happy."
         icon={Wand2}
+        centered
       />
 
       <Tabs defaultValue="build">
@@ -368,7 +369,7 @@ function RunResult({ run, canPublish, onPreview, onPublish }: { run: any; canPub
 
   return (
     <Card className="border-primary/40">
-      <CardContent className="p-4">
+      <CardContent className="p-4 text-center">
         <h3 className="text-sm font-semibold text-foreground">Draft ready</h3>
         <p className="mt-0.5 text-sm text-muted-foreground">
           {run.rowsWritten} periods placed. Lower scores mean fewer compromises on the soft rules

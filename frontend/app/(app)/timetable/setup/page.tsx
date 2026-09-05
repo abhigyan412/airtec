@@ -59,6 +59,7 @@ export default function SetupPage() {
         title="Timetable setup"
         description="The shape of the day, who teaches what, and how much."
         icon={SlidersHorizontal}
+        centered
       />
 
       <Tabs defaultValue="checklist">

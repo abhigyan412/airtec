@@ -168,7 +168,7 @@ export function DayEditor({ data, versionId, editable, onChanged }: {
       </div>
 
       <Card className="h-fit">
-        <CardContent className="p-4">
+        <CardContent className="p-4 text-center">
           <h3 className="text-sm font-semibold text-foreground">This week, against the plan</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">{section.label}</p>
 

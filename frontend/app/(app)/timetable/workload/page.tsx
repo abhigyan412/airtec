@@ -63,6 +63,7 @@ export default function WorkloadPage() {
         title="Teacher workload"
         description="Who is carrying how much, and where it needs rebalancing."
         icon={Gauge}
+        centered
         actions={
           <div>
             <Label htmlFor="wl-month" className="sr-only">Month</Label>

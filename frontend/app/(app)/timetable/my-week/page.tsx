@@ -65,6 +65,7 @@ export default function MyWeekPage() {
         title="My week"
         description="Your timetable, the classes you are covering, and your reserved periods."
         icon={CalendarClock}
+        centered
         actions={
           <Button variant="outline" size="sm" onClick={() => setShowEarlyLeave(true)}>
             <LogOut className="mr-1.5 h-3.5 w-3.5" />

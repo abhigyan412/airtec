@@ -81,6 +81,7 @@ export function TeacherTimetableView() {
         title="My Timetable"
         description={showingHomeroom ? `Full weekly timetable for ${homeroom?.class_name} ${homeroom?.section_name}` : 'Your own teaching periods this week'}
         icon={Clock}
+        centered
         actions={
           isClassTeacher ? (
             <div className="flex items-center gap-1 rounded-lg bg-muted p-1">

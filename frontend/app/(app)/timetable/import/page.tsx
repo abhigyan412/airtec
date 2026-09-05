@@ -138,6 +138,7 @@ export default function ImportPage() {
         title="Import a timetable"
         description="Read an existing Excel timetable into the system."
         icon={FileSpreadsheet}
+        centered
       />
 
       <Steps current={step} />
@@ -303,7 +304,7 @@ function ReviewStep({
 
       {/* Day shapes. */}
       <Card>
-        <CardContent className="p-4">
+        <CardContent className="p-4 text-center">
           <h3 className="text-sm font-semibold text-foreground">The school day</h3>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Read from the times row. Sections are grouped by how long their day is.
@@ -341,8 +342,8 @@ function ReviewStep({
       {/* Problems already in the file. */}
       {warnings.length > 0 && (
         <Card>
-          <CardContent className="p-4">
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <CardContent className="p-4 text-center">
+            <h3 className="flex items-center justify-center gap-2 text-sm font-semibold text-foreground">
               <AlertTriangle className="h-4 w-4 text-warning" />
               {warnings.length} thing{warnings.length === 1 ? '' : 's'} to look at in the file itself
             </h3>
@@ -367,7 +368,7 @@ function ReviewStep({
 
       {/* Subjects. */}
       <Card>
-        <CardContent className="p-4">
+        <CardContent className="p-4 text-center">
           <h3 className="text-sm font-semibold text-foreground">Subjects</h3>
           <p className="mt-0.5 text-sm text-muted-foreground">
             {stats.distinctSubjectStrings} different spellings resolved to {preview.subjectGroups.length} subjects.
@@ -390,8 +391,8 @@ function ReviewStep({
 
       {/* Teachers. */}
       <Card>
-        <CardContent className="p-4">
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <CardContent className="p-4 text-center">
+          <h3 className="flex items-center justify-center gap-2 text-sm font-semibold text-foreground">
             <Users className="h-4 w-4" /> Teachers
           </h3>
           <p className="mt-0.5 text-sm text-muted-foreground">
@@ -443,7 +444,7 @@ function ReviewStep({
 
       {/* What else to bring across. */}
       <Card>
-        <CardContent className="p-4">
+        <CardContent className="p-4 text-center">
           <h3 className="text-sm font-semibold text-foreground">Also set up from this file</h3>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Everything below is worked out from the timetable itself, so the setup screens arrive
@@ -649,7 +650,7 @@ function DoneStep({ result, onGoToTimetable }: { result: any; onGoToTimetable: (
 
       {result.createdLogins?.length > 0 && (
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-4 text-center">
             <h3 className="text-sm font-semibold text-foreground">
               {result.createdLogins.length} new staff record{result.createdLogins.length === 1 ? '' : 's'}
             </h3>
@@ -675,7 +676,7 @@ function DoneStep({ result, onGoToTimetable }: { result: any; onGoToTimetable: (
 
       <Card>
         <CardContent className="p-4">
-          <h3 className="text-sm font-semibold text-foreground">What to do next</h3>
+          <h3 className="text-center text-sm font-semibold text-foreground">What to do next</h3>
           <ol className="mt-2 space-y-2 text-sm text-muted-foreground">
             <li className="flex gap-2">
               <span className="font-semibold text-foreground">1.</span>

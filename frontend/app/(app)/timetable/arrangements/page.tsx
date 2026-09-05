@@ -215,6 +215,7 @@ export default function ArrangementsPage() {
         title="Arrangements"
         description="Cover for absent teachers, period by period."
         icon={Users}
+        centered
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <DateNav value={date} onChange={setDate} relativeLabel={relativeDate(date)} />

@@ -141,6 +141,7 @@ export default function BlockViewPage() {
           title="Block view"
           description="Every class's week at once — check it over, then print the lot."
           icon={Grid3x3}
+          centered
         />
 
         <div className="mb-4 flex flex-wrap items-center gap-2">

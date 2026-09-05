@@ -264,6 +264,7 @@ export default function TimetablePage() {
         title="Timetable"
         description="Manage class schedules and period assignments"
         icon={Clock}
+        centered
         actions={
           <>
             {/* View mode */}
