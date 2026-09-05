@@ -5,7 +5,7 @@ import { api } from './api'
 import { useAuth } from './auth'
 import {
   enableForegroundNotifications, grantPrivacyConsent, medianReady,
-  oneSignalInfo, oneSignalLogin, oneSignalLogout, oneSignalRegister,
+  oneSignalInfo, oneSignalLogin, oneSignalLogout, oneSignalRegister, waitForPushOptIn,
 } from './median'
 
 // ── Web push subscription (design.md §6.2) ──────────────────────────
@@ -325,22 +325,24 @@ export function usePushSubscription(app: 'staff' | 'family') {
         // Prompts the OS. Already-granted is a no-op, so this is also the
         // repair path for a device that was opted out and has since been
         // re-allowed in phone settings.
-        // Consent first: while OneSignal is waiting on it there is no
-        // device id to read, and the app looks identical to one the user
-        // has denied. No-op unless the build requires it.
-        const before = await oneSignalInfo()
-        if (before?.requiresPrivacyConsent) await grantPrivacyConsent()
+        // Consent first, unconditionally. It was gated on reading
+        // requiresPrivacyConsent, but a build waiting on consent is
+        // exactly the one that reports nothing at all — so the gate shut
+        // off the call in the only case it was written for. Granting is a
+        // no-op everywhere else.
+        await grantPrivacyConsent()
 
         await oneSignalRegister()
         if (userId) await oneSignalLogin(userId)
 
-        const info = await oneSignalInfo()
+        // register() returns when the OS prompt is answered; OneSignal
+        // registers the subscription over the network after that. Wait
+        // for it rather than reading once and calling the gap a refusal.
+        const info = await waitForPushOptIn()
         const deviceId = info?.deviceId
         const optedIn = !!info?.optedIn
 
         if (!deviceId || !optedIn) {
-          // The OS said no, or OneSignal has not finished registering the
-          // device. Both are "not on", and neither is our error to retry.
           setState(s => ({
             ...s, busy: false, subscribed: false, canEnable: true, shouldOffer: false,
             blocker: 'median-push-off',

@@ -208,6 +208,33 @@ export async function oneSignalInfo(timeoutMs = 5000): Promise<OneSignalDevice |
 }
 
 /**
+ * Poll until the device is actually subscribed, or give up.
+ *
+ * register() resolves when the OS prompt is answered, not when OneSignal
+ * has finished registering the subscription with its own servers — that
+ * is a network round trip afterwards. Reading the device once, straight
+ * after register(), catches the pre-registration state on a perfectly
+ * healthy phone and reports it as a refusal. Answering "notifications
+ * are switched off" to someone who has just granted them is the worst
+ * available answer, so wait for the state to settle before concluding
+ * anything.
+ *
+ * Returns the last reading either way, so the caller can tell a genuine
+ * refusal (a device id, still not opted in) from a build that never got
+ * far enough to have one.
+ */
+export async function waitForPushOptIn(timeoutMs = 8000): Promise<OneSignalDevice | null> {
+  const deadline = Date.now() + timeoutMs
+  let last: OneSignalDevice | null = null
+  for (;;) {
+    last = await oneSignalInfo()
+    if (last?.optedIn && last.deviceId) return last
+    if (Date.now() >= deadline) return last
+    await new Promise(r => setTimeout(r, 400))
+  }
+}
+
+/**
  * OneSignal will not initialise — no device id, no token, nothing — while
  * it is waiting on consent, and an app configured that way looks
  * identical from here to one the user has denied. Granting is only ever
