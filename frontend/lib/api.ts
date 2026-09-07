@@ -1019,6 +1019,26 @@ export const transportApi = {
     addDocument: (id: string, data: any) => api.post(`/transport/fleet/drivers/${id}/documents`, data).then(r => r.data),
     deleteDocument: (id: string, docId: string) => api.delete(`/transport/fleet/drivers/${id}/documents/${docId}`).then(r => r.data),
   },
+  stops: {
+    list: () => api.get('/transport/network/stops').then(r => r.data),
+    create: (data: any) => api.post('/transport/network/stops', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/transport/network/stops/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/transport/network/stops/${id}`).then(r => r.data),
+  },
+  routes: {
+    list: () => api.get('/transport/network/routes').then(r => r.data),
+    create: (data: any) => api.post('/transport/network/routes', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/transport/network/routes/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/transport/network/routes/${id}`).then(r => r.data),
+    addStop: (id: string, data: any) => api.post(`/transport/network/routes/${id}/stops`, data).then(r => r.data),
+    updateStop: (id: string, routeStopId: string, data: any) => api.patch(`/transport/network/routes/${id}/stops/${routeStopId}`, data).then(r => r.data),
+    removeStop: (id: string, routeStopId: string) => api.delete(`/transport/network/routes/${id}/stops/${routeStopId}`).then(r => r.data),
+  },
+  studentAssignment: {
+    get: (studentId: string) => api.get(`/transport/network/students/${studentId}/assignment`).then(r => r.data),
+    set: (studentId: string, data: any) => api.post(`/transport/network/students/${studentId}/assignment`, data).then(r => r.data),
+    clear: (studentId: string) => api.delete(`/transport/network/students/${studentId}/assignment`).then(r => r.data),
+  },
 }
 
 export const homeworkApi = {

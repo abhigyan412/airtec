@@ -105,7 +105,7 @@ router.get('/fee-slabs', requirePermissionV2('transport.view'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { data, error } = await supabase
       .from('transport_fee_slabs')
-      .select('*, routes(name)')
+      .select('*, routes(name), fee_heads(name)')
       .eq('school_id', req.user!.school_id)
       .order('sort_order')
     if (error) return res.status(500).json({ success: false, error: error.message })
@@ -115,6 +115,7 @@ router.get('/fee-slabs', requirePermissionV2('transport.view'),
 
 const FeeSlabSchema = z.object({
   label: z.string().trim().min(1).max(100),
+  fee_head_id: z.string().uuid(),
   route_id: z.string().uuid().nullable().optional(),
   min_distance_km: z.number().nonnegative().nullable().optional(),
   max_distance_km: z.number().positive().nullable().optional(),
@@ -126,6 +127,9 @@ router.post('/fee-slabs', requirePermissionV2('transport.settings_manage'),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const parsed = FeeSlabSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid input' })
+
+    const { data: head } = await supabase.from('fee_heads').select('id').eq('id', parsed.data.fee_head_id).eq('school_id', req.user!.school_id).maybeSingle()
+    if (!head) return res.status(400).json({ success: false, error: 'Unknown fee head' })
 
     const { data, error } = await supabase
       .from('transport_fee_slabs')

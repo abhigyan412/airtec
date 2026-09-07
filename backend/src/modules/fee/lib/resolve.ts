@@ -148,6 +148,65 @@ export async function resolveBilling(input: ResolveInput): Promise<ResolveResult
   )
   const byStudent = new Map(assignments.map(a => [a.student_id, a]))
 
+  // Transport fee slabs: a school-defined distance/zone/route pricing
+  // table (Transport Settings -> Fee Slabs) that a line's flat amount
+  // defers to when the line's fee_head_id has any slabs configured AND
+  // the student has an active stop assignment. Skipped entirely (no
+  // extra queries) for the overwhelming common case of a school that
+  // hasn't set up Transport Fee Slabs at all.
+  const { data: transportSlabsRaw } = await supabase.from('transport_fee_slabs').select('*').eq('school_id', schoolId)
+  const transportSlabs = (transportSlabsRaw ?? []) as any[]
+  const slabsByFeeHead = new Map<string, any[]>()
+  for (const s of transportSlabs) {
+    const list = slabsByFeeHead.get(s.fee_head_id) ?? []
+    list.push(s)
+    slabsByFeeHead.set(s.fee_head_id, list)
+  }
+
+  const transportAssignmentByStudent = new Map<string, { route_id: string; stop_id: string }>()
+  const distanceByRouteStop = new Map<string, number | null>()
+  if (transportSlabs.length) {
+    const assignmentRows = await selectIn<any>(
+      'student_transport_assignments', 'student_id, route_id, stop_id', 'student_id',
+      students.map(s => s.id), q => q.eq('school_id', schoolId).eq('is_active', true),
+    )
+    for (const a of assignmentRows) transportAssignmentByStudent.set(a.student_id, { route_id: a.route_id, stop_id: a.stop_id })
+
+    const routeIds = [...new Set(assignmentRows.map(a => a.route_id))]
+    if (routeIds.length) {
+      const routeStopRows = await selectIn<any>(
+        'route_stops', 'route_id, stop_id, distance_from_school_km', 'route_id', routeIds,
+      )
+      for (const rs of routeStopRows) distanceByRouteStop.set(`${rs.route_id}::${rs.stop_id}`, rs.distance_from_school_km)
+    }
+  }
+
+  /**
+   * A line's real amount, deferring to a matching transport fee slab
+   * when one is configured for this fee head. Route-specific slabs win
+   * over distance-range slabs; falls back to the line's own flat amount
+   * when nothing is configured or the student has no stop assignment —
+   * so a school that never touches Fee Slabs sees no change at all.
+   */
+  const resolveLineAmount = (studentId: string, feeHeadId: string, flatAmount: number): number => {
+    const slabs = slabsByFeeHead.get(feeHeadId)
+    if (!slabs?.length) return flatAmount
+    const assignment = transportAssignmentByStudent.get(studentId)
+    if (!assignment) return flatAmount
+
+    const routeMatch = slabs.find(s => s.route_id && s.route_id === assignment.route_id)
+    if (routeMatch) return Number(routeMatch.amount)
+
+    const distance = distanceByRouteStop.get(`${assignment.route_id}::${assignment.stop_id}`)
+    if (distance != null) {
+      const distanceMatch = slabs
+        .filter(s => !s.route_id)
+        .find(s => (s.min_distance_km == null || distance >= s.min_distance_km) && (s.max_distance_km == null || distance <= s.max_distance_km))
+      if (distanceMatch) return Number(distanceMatch.amount)
+    }
+    return flatAmount
+  }
+
   // Which optional lines each student actually took.
   const optIns = assignments.length
     ? await selectIn<any>(
@@ -316,7 +375,7 @@ export async function resolveBilling(input: ResolveInput): Promise<ResolveResult
     const totals = buildLineItems(
       billable.map(l => ({
         fee_head_id: l.fee_head_id,
-        amount: Number(l.amount),
+        amount: resolveLineAmount(student.id, l.fee_head_id, Number(l.amount)),
         fee_head_name: (l.fee_heads as any)?.name ?? 'Fee',
       })),
       applicable,

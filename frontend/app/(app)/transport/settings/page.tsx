@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Bus, Loader2, Plus, Trash2, Save } from 'lucide-react'
-import { transportApi } from '@/lib/api'
+import { transportApi, feeApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { WorkflowSettingsCard } from '@/components/shared/WorkflowSettingsCard'
@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -167,16 +168,21 @@ function FeeSlabsTab({ canManage }: { canManage: boolean }) {
   const qc = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
-  const [form, setForm] = useState({ label: '', min_distance_km: '', max_distance_km: '', amount: '' })
+  const [form, setForm] = useState({ label: '', fee_head_id: '', min_distance_km: '', max_distance_km: '', amount: '' })
 
   const { data: slabs, isLoading } = useQuery({
     queryKey: ['transport-fee-slabs'],
     queryFn: () => transportApi.feeSlabs.list().then(r => r.data),
   })
+  const { data: feeHeads } = useQuery({
+    queryKey: ['fee-heads'],
+    queryFn: () => feeApi.heads.list().then(r => r.data),
+  })
 
   const createMutation = useMutation({
     mutationFn: () => transportApi.feeSlabs.create({
       label: form.label.trim(),
+      fee_head_id: form.fee_head_id,
       min_distance_km: form.min_distance_km ? Number(form.min_distance_km) : null,
       max_distance_km: form.max_distance_km ? Number(form.max_distance_km) : null,
       amount: Number(form.amount),
@@ -184,7 +190,7 @@ function FeeSlabsTab({ canManage }: { canManage: boolean }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['transport-fee-slabs'] })
       setAddOpen(false)
-      setForm({ label: '', min_distance_km: '', max_distance_km: '', amount: '' })
+      setForm({ label: '', fee_head_id: '', min_distance_km: '', max_distance_km: '', amount: '' })
       toast.success('Fee slab added')
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to add fee slab'),
@@ -218,6 +224,7 @@ function FeeSlabsTab({ canManage }: { canManage: boolean }) {
           <TableHeader>
             <TableRow>
               <TableHead>Label</TableHead>
+              <TableHead>Fee Head</TableHead>
               <TableHead>Distance range (km)</TableHead>
               <TableHead>Amount</TableHead>
               {canManage && <TableHead className="w-10" />}
@@ -225,11 +232,12 @@ function FeeSlabsTab({ canManage }: { canManage: boolean }) {
           </TableHeader>
           <TableBody>
             {(slabs ?? []).length === 0 && (
-              <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground py-8">No fee slabs configured yet.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-8">No fee slabs configured yet.</TableCell></TableRow>
             )}
             {(slabs ?? []).map((s: any) => (
               <TableRow key={s.id}>
                 <TableCell className="font-medium">{s.label}</TableCell>
+                <TableCell>{s.fee_heads?.name ?? '—'}</TableCell>
                 <TableCell>{s.min_distance_km != null || s.max_distance_km != null ? `${s.min_distance_km ?? 0} – ${s.max_distance_km ?? '∞'}` : '—'}</TableCell>
                 <TableCell>₹{Number(s.amount).toLocaleString()}</TableCell>
                 {canManage && (
@@ -256,6 +264,15 @@ function FeeSlabsTab({ canManage }: { canManage: boolean }) {
               <Label htmlFor="slab-label">Label</Label>
               <Input id="slab-label" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} placeholder="e.g. Zone A / 0-5 km" />
             </div>
+            <div className="space-y-1.5">
+              <Label>Fee head this slab prices</Label>
+              <Select value={form.fee_head_id || undefined} onValueChange={v => setForm(f => ({ ...f, fee_head_id: v }))}>
+                <SelectTrigger><SelectValue placeholder="Choose a fee head" /></SelectTrigger>
+                <SelectContent>
+                  {(feeHeads ?? []).map((h: any) => <SelectItem key={h.id} value={h.id}>{h.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="slab-min">Min distance (km, optional)</Label>
@@ -273,7 +290,7 @@ function FeeSlabsTab({ canManage }: { canManage: boolean }) {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setAddOpen(false)} disabled={createMutation.isPending}>Cancel</Button>
-            <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending || !form.label.trim() || !form.amount}>
+            <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending || !form.label.trim() || !form.fee_head_id || !form.amount}>
               {createMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Add
             </Button>
           </DialogFooter>

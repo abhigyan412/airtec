@@ -10,7 +10,7 @@ import {
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
   Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
   SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2, BookMarked, LayoutTemplate,
-  CalendarRange, Megaphone, Bus, Truck,
+  CalendarRange, Megaphone, Bus, Truck, Route as RouteIcon,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -126,8 +126,9 @@ const NAV: NavItem[] = [
     module: 'transport',
     icon: Bus,
     children: [
-      // Routes & Stops/Trips & Boarding/Live Map land here as each ships.
+      // Trips & Boarding/Live Map land here as each ships.
       { label: 'Fleet', href: '/transport/fleet', icon: Truck, permission: 'transport.view' },
+      { label: 'Routes & Stops', href: '/transport/routes', icon: RouteIcon, permission: 'transport.view' },
       { label: 'Settings', href: '/transport/settings', icon: SettingsIcon, permission: 'transport.view' },
     ],
   },
