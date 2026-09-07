@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CalendarClock, Loader2, Plus, Play, CheckCircle2, XCircle, Users, Trash2 } from 'lucide-react'
+import { CalendarClock, Loader2, Plus, Play, CheckCircle2, XCircle, Users, Trash2, AlertTriangle } from 'lucide-react'
 import { transportApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import {
@@ -83,6 +84,13 @@ export default function TransportTripsPage() {
         }
       />
 
+      <Tabs defaultValue="Trips">
+        <TabsList>
+          <TabsTrigger value="Trips">Trips</TabsTrigger>
+          <TabsTrigger value="Substitutes">Substitutes</TabsTrigger>
+          <TabsTrigger value="Incidents">Incidents</TabsTrigger>
+        </TabsList>
+        <TabsContent value="Trips" className="mt-6">
       <Card className="overflow-hidden">
         {isLoading ? (
           <div className="p-5"><Skeleton className="h-32 w-full rounded-xl" /></div>
@@ -139,6 +147,16 @@ export default function TransportTripsPage() {
           </Table>
         )}
       </Card>
+        </TabsContent>
+
+        <TabsContent value="Substitutes" className="mt-6">
+          <SubstitutesTab date={date} canManage={canManage} />
+        </TabsContent>
+
+        <TabsContent value="Incidents" className="mt-6">
+          <IncidentsTab canManage={canManage} canReport={canMark} />
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
         <DialogContent className="max-w-md">
@@ -224,5 +242,173 @@ function RosterDialog({ open, onOpenChange, trip }: { open: boolean; onOpenChang
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+function SubstitutesTab({ date, canManage }: { date: string; canManage: boolean }) {
+  const qc = useQueryClient()
+  const [assigning, setAssigning] = useState<any | null>(null)
+  const [substituteId, setSubstituteId] = useState('')
+
+  const { data: subs, isLoading } = useQuery({
+    queryKey: ['transport-substitute-assignments', date],
+    queryFn: () => transportApi.substituteAssignments.list(date).then(r => r.data),
+  })
+  const { data: drivers } = useQuery({ queryKey: ['transport-drivers'], queryFn: () => transportApi.drivers.list().then(r => r.data) })
+
+  const assignMutation = useMutation({
+    mutationFn: () => transportApi.substituteAssignments.assign(assigning.id, substituteId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transport-substitute-assignments', date] })
+      qc.invalidateQueries({ queryKey: ['transport-trips', date] })
+      setAssigning(null); setSubstituteId('')
+      toast.success('Substitute driver assigned')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to assign substitute'),
+  })
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-5 py-4">
+        <p className="text-sm text-muted-foreground">Trips whose driver is marked absent on {date} and still need a substitute.</p>
+      </div>
+      {isLoading ? <div className="px-5 pb-5"><Skeleton className="h-32 w-full rounded-xl" /></div> : (
+        <Table>
+          <TableHeader><TableRow><TableHead>Route</TableHead><TableHead>Shift</TableHead><TableHead>Absent Driver</TableHead><TableHead>Status</TableHead>{canManage && <TableHead className="w-32" />}</TableRow></TableHeader>
+          <TableBody>
+            {(subs ?? []).length === 0 && <TableRow><TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-8">Nothing needs a substitute on this date.</TableCell></TableRow>}
+            {(subs ?? []).map((s: any) => (
+              <TableRow key={s.id}>
+                <TableCell className="font-medium">{s.vehicle_trips?.routes?.name}</TableCell>
+                <TableCell className="capitalize">{s.vehicle_trips?.shift}</TableCell>
+                <TableCell>{s.drivers?.full_name}</TableCell>
+                <TableCell><Badge variant={s.status === 'assigned' ? 'success' : 'warning'}>{s.status === 'assigned' ? 'Assigned' : 'Needs driver'}</Badge></TableCell>
+                {canManage && (
+                  <TableCell>
+                    {s.status !== 'assigned' && (
+                      <Button size="sm" variant="outline" onClick={() => setAssigning(s)}>Assign</Button>
+                    )}
+                  </TableCell>
+                )}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      {assigning && (
+        <Dialog open={!!assigning} onOpenChange={o => !o && setAssigning(null)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>Assign Substitute Driver</DialogTitle></DialogHeader>
+            <div className="space-y-1.5">
+              <Label>Driver</Label>
+              <Select value={substituteId || undefined} onValueChange={setSubstituteId}>
+                <SelectTrigger><SelectValue placeholder="Choose a driver" /></SelectTrigger>
+                <SelectContent>
+                  {(drivers ?? []).filter((d: any) => d.id !== assigning.absent_driver_id).map((d: any) => <SelectItem key={d.id} value={d.id}>{d.full_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setAssigning(null)} disabled={assignMutation.isPending}>Cancel</Button>
+              <Button onClick={() => assignMutation.mutate()} disabled={!substituteId || assignMutation.isPending}>
+                {assignMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Assign
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </Card>
+  )
+}
+
+const INCIDENT_TYPE_LABEL: Record<string, string> = { breakdown: 'Breakdown', accident: 'Accident', delay: 'Delay', sos: 'SOS', other: 'Other' }
+
+function IncidentsTab({ canManage, canReport }: { canManage: boolean; canReport: boolean }) {
+  const qc = useQueryClient()
+  const [reportOpen, setReportOpen] = useState(false)
+  const [form, setForm] = useState({ incident_type: 'delay', notes: '' })
+
+  const { data: incidents, isLoading } = useQuery({
+    queryKey: ['transport-incidents'],
+    queryFn: () => transportApi.incidents.list().then(r => r.data),
+  })
+
+  const reportMutation = useMutation({
+    mutationFn: () => transportApi.incidents.create(form),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transport-incidents'] })
+      setReportOpen(false); setForm({ incident_type: 'delay', notes: '' })
+      toast.success('Incident reported')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to report incident'),
+  })
+
+  const resolveMutation = useMutation({
+    mutationFn: (id: string) => transportApi.incidents.resolve(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['transport-incidents'] }); toast.success('Incident resolved') },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to resolve incident'),
+  })
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-4">
+        <p className="text-sm text-muted-foreground">Breakdown, accident, delay and SOS reports.</p>
+        {canReport && <Button size="sm" onClick={() => setReportOpen(true)}><AlertTriangle className="h-4 w-4" /> Report Incident</Button>}
+      </div>
+
+      {isLoading ? <div className="px-5 pb-5"><Skeleton className="h-32 w-full rounded-xl" /></div> : (
+        <Table>
+          <TableHeader><TableRow><TableHead>Type</TableHead><TableHead>Route</TableHead><TableHead>Notes</TableHead><TableHead>Status</TableHead>{canManage && <TableHead className="w-24" />}</TableRow></TableHeader>
+          <TableBody>
+            {(incidents ?? []).length === 0 && <TableRow><TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-8">No incidents reported.</TableCell></TableRow>}
+            {(incidents ?? []).map((i: any) => (
+              <TableRow key={i.id}>
+                <TableCell>
+                  <span className={cn('font-medium', i.incident_type === 'sos' && 'text-destructive')}>{INCIDENT_TYPE_LABEL[i.incident_type]}</span>
+                </TableCell>
+                <TableCell>{i.vehicle_trips?.routes?.name ?? '—'}</TableCell>
+                <TableCell className="max-w-xs truncate text-muted-foreground">{i.notes ?? '—'}</TableCell>
+                <TableCell><Badge variant={i.status === 'resolved' ? 'success' : 'warning'}>{i.status === 'resolved' ? 'Resolved' : 'Open'}</Badge></TableCell>
+                {canManage && (
+                  <TableCell>
+                    {i.status !== 'resolved' && (
+                      <Button size="sm" variant="outline" disabled={resolveMutation.isPending} onClick={() => resolveMutation.mutate(i.id)}>Resolve</Button>
+                    )}
+                  </TableCell>
+                )}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <Dialog open={reportOpen} onOpenChange={setReportOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Report Incident</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Type</Label>
+              <Select value={form.incident_type} onValueChange={v => setForm(f => ({ ...f, incident_type: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(INCIDENT_TYPE_LABEL).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Notes</Label>
+              <Input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="What happened?" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setReportOpen(false)} disabled={reportMutation.isPending}>Cancel</Button>
+            <Button variant={form.incident_type === 'sos' ? 'destructive' : 'default'} onClick={() => reportMutation.mutate()} disabled={reportMutation.isPending}>
+              {reportMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Report
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
   )
 }

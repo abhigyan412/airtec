@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Truck, Loader2, Plus, Trash2, FileText, AlertTriangle } from 'lucide-react'
+import { Truck, Loader2, Plus, Trash2, FileText, AlertTriangle, CalendarOff } from 'lucide-react'
 import { transportApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
@@ -43,6 +43,7 @@ function complianceBadge(docs: { expiry_date: string | null }[]) {
 export default function TransportFleetPage() {
   const { can } = usePermissions()
   const canManage = can('transport.manage_fleet')
+  const canManageTrips = can('transport.manage_trips')
 
   return (
     <div className="space-y-6">
@@ -62,7 +63,7 @@ export default function TransportFleetPage() {
           <VehiclesTab canManage={canManage} />
         </TabsContent>
         <TabsContent value="Drivers" className="mt-6">
-          <DriversTab canManage={canManage} />
+          <DriversTab canManage={canManage} canManageTrips={canManageTrips} />
         </TabsContent>
       </Tabs>
     </div>
@@ -212,10 +213,11 @@ function VehiclesTab({ canManage }: { canManage: boolean }) {
   )
 }
 
-function DriversTab({ canManage }: { canManage: boolean }) {
+function DriversTab({ canManage, canManageTrips }: { canManage: boolean; canManageTrips: boolean }) {
   const qc = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
   const [docsFor, setDocsFor] = useState<any | null>(null)
+  const [absentFor, setAbsentFor] = useState<any | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [form, setForm] = useState({ full_name: '', phone: '', license_no: '', license_expiry: '' })
 
@@ -282,6 +284,11 @@ function DriversTab({ canManage }: { canManage: boolean }) {
                     <Button variant="ghost" size="icon" onClick={() => setDocsFor(d)} aria-label="Documents">
                       <FileText className="h-4 w-4" />
                     </Button>
+                    {canManageTrips && (
+                      <Button variant="ghost" size="icon" onClick={() => setAbsentFor(d)} aria-label="Mark absent">
+                        <CalendarOff className="h-4 w-4" />
+                      </Button>
+                    )}
                     {canManage && (
                       <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => setDeleteId(d.id)}>
                         <Trash2 className="h-4 w-4" />
@@ -350,7 +357,47 @@ function DriversTab({ canManage }: { canManage: boolean }) {
         loading={deleteMutation.isPending}
         onConfirm={() => deleteMutation.mutate()}
       />
+
+      {absentFor && <MarkAbsentDialog open={!!absentFor} onOpenChange={o => !o && setAbsentFor(null)} driver={absentFor} />}
     </Card>
+  )
+}
+
+function MarkAbsentDialog({ open, onOpenChange, driver }: { open: boolean; onOpenChange: (o: boolean) => void; driver: any }) {
+  const qc = useQueryClient()
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [reason, setReason] = useState('')
+
+  const mutation = useMutation({
+    mutationFn: () => transportApi.driverAbsences.create(driver.id, { absence_date: date, reason: reason.trim() || undefined }),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['transport-substitute-assignments'] })
+      const n = res?.data?.materialized ?? 0
+      toast.success(n > 0 ? `Marked absent — ${n} trip${n === 1 ? '' : 's'} now need a substitute driver.` : 'Marked absent')
+      onOpenChange(false)
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to record absence'),
+  })
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Mark {driver.full_name} Absent</DialogTitle>
+          <DialogDescription>Any trip this driver is scheduled for on this date will need a substitute.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5"><Label>Date</Label><Input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Reason (optional)</Label><Input value={reason} onChange={e => setReason(e.target.value)} /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={mutation.isPending}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+            {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Mark Absent
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

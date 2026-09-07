@@ -215,6 +215,114 @@ router.delete('/drivers/:id/documents/:docId', requirePermissionV2('transport.ma
   })
 )
 
+// ═══════════════════════════════════════════════════════════════
+// DRIVER ABSENCE -> SUBSTITUTE OVERLAY
+// Mirrors the timetable module's teacher_absences -> arrangements
+// shape: recording an absence materializes one trip_substitute_
+// assignments row per affected trip, rather than editing the trip
+// itself. No ranking-candidate scoring engine (that's specific to
+// teaching-load fairness) — just eligibility (not already driving
+// elsewhere that date+shift), checked at assign time.
+//
+// Deliberately NOT gated behind the Driver Reassignment Approval
+// Workflow from Settings: that workflow is configurable for a
+// PERMANENT route/driver staffing change, but blocking an urgent
+// same-day substitute assignment on a multi-step approval chain would
+// leave a bus without a driver while waiting for sign-off. This is an
+// immediate dispatch decision, recorded for the day, not routed through
+// approval.
+// ═══════════════════════════════════════════════════════════════
+const DriverAbsenceSchema = z.object({
+  absence_date: z.string(),
+  reason: z.string().trim().max(500).optional(),
+})
+
+router.get('/drivers/:id/absences', requirePermissionV2('transport.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { data: driver } = await supabase.from('drivers').select('id').eq('id', req.params.id).eq('school_id', req.user!.school_id).maybeSingle()
+    if (!driver) return res.status(404).json({ success: false, error: 'Driver not found' })
+    const { data, error } = await supabase.from('driver_absences').select('*').eq('driver_id', driver.id).order('absence_date', { ascending: false })
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.post('/drivers/:id/absences', requirePermissionV2('transport.manage_trips'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const parsed = DriverAbsenceSchema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid input' })
+    const school_id = req.user!.school_id
+
+    const { data: driver } = await supabase.from('drivers').select('id, full_name').eq('id', req.params.id).eq('school_id', school_id).maybeSingle()
+    if (!driver) return res.status(404).json({ success: false, error: 'Driver not found' })
+
+    const { data: absence, error: absErr } = await supabase.from('driver_absences')
+      .insert({ school_id, driver_id: driver.id, absence_date: parsed.data.absence_date, reason: parsed.data.reason, created_by: req.user!.id })
+      .select('*').single()
+    if (absErr) {
+      if (absErr.code === '23505') return res.status(409).json({ success: false, error: `${driver.full_name} is already marked absent on this date.` })
+      return res.status(500).json({ success: false, error: absErr.message })
+    }
+
+    // Materialize: one substitute-assignment row per trip this driver
+    // was on for that date, still needing a driver (not yet cancelled).
+    const { data: affectedTrips } = await supabase.from('vehicle_trips')
+      .select('id').eq('driver_id', driver.id).eq('trip_date', parsed.data.absence_date).in('status', ['scheduled', 'in_progress'])
+
+    let materialized = 0
+    if (affectedTrips?.length) {
+      const rows = affectedTrips.map(t => ({ trip_id: t.id, absence_id: absence.id, absent_driver_id: driver.id }))
+      const { error: matErr } = await supabase.from('trip_substitute_assignments').insert(rows)
+      if (!matErr) materialized = rows.length
+    }
+
+    res.json({ success: true, data: { absence, materialized } })
+  })
+)
+
+// GET /transport/fleet/substitute-assignments?date=... — dispatch's
+// worklist of trips still needing a substitute driver.
+router.get('/substitute-assignments', requirePermissionV2('transport.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const date = req.query.date as string | undefined
+    let q = supabase.from('trip_substitute_assignments')
+      .select('*, vehicle_trips!inner(id, trip_date, shift, route_id, school_id, routes(name)), drivers!trip_substitute_assignments_absent_driver_id_fkey(full_name)')
+      .eq('vehicle_trips.school_id', req.user!.school_id)
+    if (date) q = q.eq('vehicle_trips.trip_date', date)
+    const { data, error } = await q.order('id')
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.patch('/substitute-assignments/:id', requirePermissionV2('transport.manage_trips'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const substitute_driver_id = z.string().uuid().parse(req.body.substitute_driver_id)
+
+    const { data: sub } = await supabase.from('trip_substitute_assignments')
+      .select('id, trip_id, vehicle_trips!inner(trip_date, shift, school_id)')
+      .eq('id', req.params.id).eq('vehicle_trips.school_id', req.user!.school_id).maybeSingle()
+    if (!sub) return res.status(404).json({ success: false, error: 'Substitute assignment not found' })
+
+    const trip = (sub as any).vehicle_trips
+    const { count: clashCount } = await supabase.from('vehicle_trips').select('id', { count: 'exact', head: true })
+      .eq('driver_id', substitute_driver_id).eq('trip_date', trip.trip_date).eq('shift', trip.shift)
+    if (clashCount) {
+      return res.status(400).json({ success: false, error: 'This driver is already assigned to another trip at the same date and shift.' })
+    }
+
+    const { data, error } = await supabase.from('trip_substitute_assignments')
+      .update({ substitute_driver_id, status: 'assigned', assigned_at: new Date().toISOString() })
+      .eq('id', req.params.id).select('*').single()
+    if (error) return res.status(500).json({ success: false, error: error.message })
+
+    // The substitute now drives this trip for real.
+    await supabase.from('vehicle_trips').update({ driver_id: substitute_driver_id }).eq('id', sub.trip_id)
+
+    res.json({ success: true, data })
+  })
+)
+
 // POST /transport/fleet/compliance-alerts/run — manual trigger for the
 // daily vehicle/driver document expiry sweep (index.ts runs it
 // unattended every morning). Same reasoning as HR's own manual-trigger

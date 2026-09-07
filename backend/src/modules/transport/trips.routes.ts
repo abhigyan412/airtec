@@ -5,6 +5,7 @@ import { AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
+import { getUserIdsWithPermission } from '../../shared/middleware/permissions-v2'
 
 const router = Router()
 
@@ -200,6 +201,113 @@ router.post('/:id/boarding', requirePermissionV2('transport.mark_boarding'),
     }
 
     res.json({ success: true, data: event })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// LIVE LOCATION — driver-app-posted pings, polled by staff/parents.
+// No hardware GPS vendor or push channel yet (Phase 5) — the driver
+// side is a plain authenticated POST every 15-30s while the trip is
+// in_progress, and reads are plain REST polling. See my.routes.ts for
+// the parent-scoped equivalent read.
+// ═══════════════════════════════════════════════════════════════
+const LocationSchema = z.object({ lat: z.number(), lng: z.number() })
+
+router.post('/:id/location', requirePermissionV2('transport.mark_boarding'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const parsed = LocationSchema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid input' })
+
+    const { data: trip } = await supabase.from('vehicle_trips').select('id, vehicle_id, status').eq('id', req.params.id).eq('school_id', req.user!.school_id).maybeSingle()
+    if (!trip) return res.status(404).json({ success: false, error: 'Trip not found' })
+    if (trip.status !== 'in_progress') return res.status(400).json({ success: false, error: 'This trip is not in progress.' })
+
+    const { data, error } = await supabase.from('vehicle_location_pings')
+      .insert({ vehicle_id: trip.vehicle_id, trip_id: trip.id, lat: parsed.data.lat, lng: parsed.data.lng })
+      .select('*').single()
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.get('/:id/location', requirePermissionV2('transport.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { data: trip } = await supabase.from('vehicle_trips').select('id').eq('id', req.params.id).eq('school_id', req.user!.school_id).maybeSingle()
+    if (!trip) return res.status(404).json({ success: false, error: 'Trip not found' })
+
+    const { data, error } = await supabase.from('vehicle_location_pings').select('*')
+      .eq('trip_id', trip.id).order('recorded_at', { ascending: false }).limit(1).maybeSingle()
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+// ═══════════════════════════════════════════════════════════════
+// INCIDENTS — breakdown/accident/delay reports, and the SOS button.
+// ═══════════════════════════════════════════════════════════════
+router.get('/incidents', requirePermissionV2('transport.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    let q = supabase.from('transport_incidents').select('*, vehicle_trips(route_id, routes(name)), vehicles(registration_no)')
+      .eq('school_id', req.user!.school_id).order('created_at', { ascending: false })
+    if (req.query.status) q = q.eq('status', req.query.status as string)
+    const { data, error } = await q
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+const IncidentSchema = z.object({
+  trip_id: z.string().uuid().optional(),
+  vehicle_id: z.string().uuid().optional(),
+  incident_type: z.enum(['breakdown', 'accident', 'delay', 'sos', 'other']),
+  notes: z.string().trim().max(2000).optional(),
+})
+
+router.post('/incidents', requirePermissionV2('transport.mark_boarding'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const parsed = IncidentSchema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid input' })
+    const school_id = req.user!.school_id
+
+    const { data: incident, error } = await supabase.from('transport_incidents')
+      .insert({ school_id, reported_by: req.user!.id, ...parsed.data })
+      .select('*').single()
+    if (error) return res.status(500).json({ success: false, error: error.message })
+
+    // Every incident pages dispatch (transport.manage_trips holders) —
+    // an SOS is exactly as urgent as a breakdown/accident report from
+    // whoever is actually on the vehicle, just self-reported instead of
+    // radioed in. No separate escalation tier yet (Phase 5 territory
+    // once there's a real dispatch/on-call concept).
+    const recipients = await getUserIdsWithPermission(school_id, 'transport.manage_trips')
+    if (recipients.length) {
+      const urgent = parsed.data.incident_type === 'sos'
+      await createNotifications(recipients, {
+        schoolId: school_id,
+        type: 'transport_incident_reported',
+        title: urgent ? 'SOS raised on a transport trip' : `Transport incident: ${parsed.data.incident_type}`,
+        message: parsed.data.notes ?? 'No further details provided.',
+        link: '/transport/trips', relatedEntityType: 'transport_incident', relatedEntityId: incident.id,
+      })
+    }
+
+    res.json({ success: true, data: incident })
+  })
+)
+
+const ResolveIncidentSchema = z.object({ notes: z.string().trim().max(2000).optional() })
+
+router.patch('/incidents/:id/resolve', requirePermissionV2('transport.manage_trips'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const parsed = ResolveIncidentSchema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid input' })
+    const { data, error } = await supabase.from('transport_incidents')
+      .update({ status: 'resolved', resolved_at: new Date().toISOString(), notes: parsed.data.notes })
+      .eq('id', req.params.id).eq('school_id', req.user!.school_id)
+      .select('*').maybeSingle()
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    if (!data) return res.status(404).json({ success: false, error: 'Incident not found' })
+    res.json({ success: true, data })
   })
 )
 

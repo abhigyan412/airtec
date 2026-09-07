@@ -1047,6 +1047,19 @@ export const transportApi = {
     roster: (id: string) => api.get(`/transport/trips/${id}/roster`).then(r => r.data),
     markBoarding: (id: string, data: any) => api.post(`/transport/trips/${id}/boarding`, data).then(r => r.data),
   },
+  incidents: {
+    list: (status?: string) => api.get('/transport/trips/incidents', { params: { status } }).then(r => r.data),
+    create: (data: any) => api.post('/transport/trips/incidents', data).then(r => r.data),
+    resolve: (id: string, notes?: string) => api.patch(`/transport/trips/incidents/${id}/resolve`, { notes }).then(r => r.data),
+  },
+  driverAbsences: {
+    list: (driverId: string) => api.get(`/transport/fleet/drivers/${driverId}/absences`).then(r => r.data),
+    create: (driverId: string, data: any) => api.post(`/transport/fleet/drivers/${driverId}/absences`, data).then(r => r.data),
+  },
+  substituteAssignments: {
+    list: (date?: string) => api.get('/transport/fleet/substitute-assignments', { params: { date } }).then(r => r.data),
+    assign: (id: string, substitute_driver_id: string) => api.patch(`/transport/fleet/substitute-assignments/${id}`, { substitute_driver_id }).then(r => r.data),
+  },
 }
 
 export const homeworkApi = {
