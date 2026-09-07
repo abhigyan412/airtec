@@ -2,11 +2,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Truck, Loader2, Plus, Trash2, FileText, AlertTriangle, CalendarOff } from 'lucide-react'
+import { Truck, Loader2, Plus, Trash2, FileText, AlertTriangle, CalendarOff, Upload } from 'lucide-react'
 import { transportApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { ImportCsvDialog } from '@/components/shared/ImportCsvDialog'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -73,6 +74,7 @@ export default function TransportFleetPage() {
 function VehiclesTab({ canManage }: { canManage: boolean }) {
   const qc = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [docsFor, setDocsFor] = useState<any | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [form, setForm] = useState({ registration_no: '', vehicle_type: 'bus', capacity: '' })
@@ -107,7 +109,12 @@ function VehiclesTab({ canManage }: { canManage: boolean }) {
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4">
         <p className="text-sm text-muted-foreground">Your fleet's vehicles and their compliance status.</p>
-        {canManage && <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> Add Vehicle</Button>}
+        {canManage && (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> Import</Button>
+            <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> Add Vehicle</Button>
+          </div>
+        )}
       </div>
 
       {isLoading ? (
@@ -184,6 +191,16 @@ function VehiclesTab({ canManage }: { canManage: boolean }) {
         </DialogContent>
       </Dialog>
 
+      <ImportCsvDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        title="Import Vehicles"
+        columns={['registration_no', 'vehicle_type', 'capacity', 'status']}
+        sampleRow={['DL 1P 1234', 'bus', '40', 'active']}
+        invalidateQueryKey={['transport-vehicles']}
+        onImport={rows => transportApi.vehicles.import(rows).then((r: any) => r.data)}
+      />
+
       {docsFor && (
         <DocumentsDialog
           open={!!docsFor}
@@ -216,6 +233,7 @@ function VehiclesTab({ canManage }: { canManage: boolean }) {
 function DriversTab({ canManage, canManageTrips }: { canManage: boolean; canManageTrips: boolean }) {
   const qc = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [docsFor, setDocsFor] = useState<any | null>(null)
   const [absentFor, setAbsentFor] = useState<any | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -251,7 +269,12 @@ function DriversTab({ canManage, canManageTrips }: { canManage: boolean; canMana
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4">
         <p className="text-sm text-muted-foreground">Your school's drivers and their compliance status.</p>
-        {canManage && <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> Add Driver</Button>}
+        {canManage && (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> Import</Button>
+            <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> Add Driver</Button>
+          </div>
+        )}
       </div>
 
       {isLoading ? (
@@ -331,6 +354,16 @@ function DriversTab({ canManage, canManageTrips }: { canManage: boolean; canMana
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ImportCsvDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        title="Import Drivers"
+        columns={['full_name', 'phone', 'license_no', 'license_class', 'license_expiry', 'status']}
+        sampleRow={['Ramesh Kumar', '9876543210', 'DL-0420110012345', 'HMV', '2028-06-30', 'active']}
+        invalidateQueryKey={['transport-drivers']}
+        onImport={rows => transportApi.drivers.import(rows).then((r: any) => r.data)}
+      />
 
       {docsFor && (
         <DocumentsDialog

@@ -4,6 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { asyncHandler } from '../../shared/utils/helpers'
+import { bulkImport } from '../../shared/utils/bulkImport'
 import { getEditableWorkflowStatus, saveEditableWorkflowSteps } from '../../shared/middleware/workflowSettings'
 import {
   ensureRouteChangeApprovalWorkflowDefinition,
@@ -138,6 +139,41 @@ router.post('/fee-slabs', requirePermissionV2('transport.settings_manage'),
       .single()
     if (error) return res.status(500).json({ success: false, error: error.message })
     res.json({ success: true, data })
+  })
+)
+
+const FeeSlabImportRowSchema = z.object({
+  label: z.string().trim().min(1, 'label is required').max(100),
+  fee_head_name: z.string().trim().min(1, 'fee_head_name is required'),
+  min_distance_km: z.preprocess(v => (v === '' || v == null ? undefined : v), z.coerce.number().nonnegative().optional()),
+  max_distance_km: z.preprocess(v => (v === '' || v == null ? undefined : v), z.coerce.number().positive().optional()),
+  amount: z.coerce.number().nonnegative('amount must be a non-negative number'),
+})
+
+router.post('/fee-slabs/import', requirePermissionV2('transport.settings_manage'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const rows = z.array(z.record(z.string())).parse(req.body.rows ?? [])
+    const school_id = req.user!.school_id
+
+    // Resolved once, not per row — a CSV of 100 slabs referencing the
+    // same 5 fee heads shouldn't cost 100 round trips.
+    const { data: heads } = await supabase.from('fee_heads').select('id, name').eq('school_id', school_id)
+    const headIdByLowerName = new Map((heads ?? []).map(h => [h.name.toLowerCase(), h.id]))
+
+    const result = await bulkImport(
+      rows, FeeSlabImportRowSchema,
+      async row => {
+        const fee_head_id = headIdByLowerName.get(row.fee_head_name.toLowerCase())
+        if (!fee_head_id) return { error: `Unknown fee head "${row.fee_head_name}"` }
+        const { fee_head_name, ...rest } = row
+        return { school_id, fee_head_id, ...rest }
+      },
+      async row => {
+        const { error } = await supabase.from('transport_fee_slabs').insert(row)
+        return { error: error?.message }
+      },
+    )
+    res.json({ success: true, data: result })
   })
 )
 

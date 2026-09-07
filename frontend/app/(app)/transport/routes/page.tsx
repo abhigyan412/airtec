@@ -2,10 +2,11 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Route as RouteIcon, Loader2, Plus, Trash2, MapPin, ArrowUp, ArrowDown, UserPlus } from 'lucide-react'
+import { Route as RouteIcon, Loader2, Plus, Trash2, MapPin, ArrowUp, ArrowDown, UserPlus, Upload } from 'lucide-react'
 import { transportApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { ImportCsvDialog } from '@/components/shared/ImportCsvDialog'
 import { StudentSearch, StudentLite, studentLabel } from '@/components/shared/StudentSearch'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -51,6 +52,7 @@ export default function TransportRoutesPage() {
 function StopsTab({ canManage }: { canManage: boolean }) {
   const qc = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [form, setForm] = useState({ name: '', lat: '', lng: '' })
 
@@ -76,7 +78,12 @@ function StopsTab({ canManage }: { canManage: boolean }) {
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4">
         <p className="text-sm text-muted-foreground">Your school's master list of pickup/drop points.</p>
-        {canManage && <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> Add Stop</Button>}
+        {canManage && (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> Import</Button>
+            <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> Add Stop</Button>
+          </div>
+        )}
       </div>
       {isLoading ? <div className="px-5 pb-5"><Skeleton className="h-32 w-full rounded-xl" /></div> : (
         <Table>
@@ -116,6 +123,16 @@ function StopsTab({ canManage }: { canManage: boolean }) {
       <ConfirmDialog open={!!deleteId} onOpenChange={o => !o && setDeleteId(null)} title="Remove this stop?"
         description="Stops still used by a route or assigned to a student can't be deleted until reassigned."
         destructive confirmLabel="Remove" loading={deleteMutation.isPending} onConfirm={() => deleteMutation.mutate()} />
+
+      <ImportCsvDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        title="Import Stops"
+        columns={['name', 'lat', 'lng']}
+        sampleRow={['Green Park Market', '28.5588', '77.2064']}
+        invalidateQueryKey={['transport-stops']}
+        onImport={rows => transportApi.stops.import(rows).then((r: any) => r.data)}
+      />
     </Card>
   )
 }

@@ -3,11 +3,12 @@ import { useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Bus, Loader2, Plus, Trash2, Save } from 'lucide-react'
+import { Bus, Loader2, Plus, Trash2, Save, Upload } from 'lucide-react'
 import { transportApi, feeApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { WorkflowSettingsCard } from '@/components/shared/WorkflowSettingsCard'
+import { ImportCsvDialog } from '@/components/shared/ImportCsvDialog'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -167,6 +168,7 @@ function GeneralSettingsTab({ canManage }: { canManage: boolean }) {
 function FeeSlabsTab({ canManage }: { canManage: boolean }) {
   const qc = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [form, setForm] = useState({ label: '', fee_head_id: '', min_distance_km: '', max_distance_km: '', amount: '' })
 
@@ -213,7 +215,10 @@ function FeeSlabsTab({ canManage }: { canManage: boolean }) {
           Define your own distance bands or named zones — students are billed off whichever slab their assigned stop falls into.
         </p>
         {canManage && (
-          <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> Add Slab</Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> Import</Button>
+            <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> Add Slab</Button>
+          </div>
         )}
       </div>
 
@@ -306,6 +311,16 @@ function FeeSlabsTab({ canManage }: { canManage: boolean }) {
         confirmLabel="Remove"
         loading={deleteMutation.isPending}
         onConfirm={() => deleteMutation.mutate()}
+      />
+
+      <ImportCsvDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        title="Import Fee Slabs"
+        columns={['label', 'fee_head_name', 'min_distance_km', 'max_distance_km', 'amount']}
+        sampleRow={['Zone A (0-5km)', 'Transport Fee', '0', '5', '800']}
+        invalidateQueryKey={['transport-fee-slabs']}
+        onImport={rows => transportApi.feeSlabs.import(rows).then((r: any) => r.data)}
       />
     </Card>
   )

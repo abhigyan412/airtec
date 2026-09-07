@@ -5,8 +5,15 @@ import { AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { runTransportComplianceAlerts } from '../../shared/utils/transportComplianceAlerts'
+import { bulkImport } from '../../shared/utils/bulkImport'
 
 const router = Router()
+
+// CSV cells arrive as strings — z.coerce.number() turns "40" into 40,
+// and this trims + lowercases before matching an enum so "Bus"/" bus "
+// from a hand-edited spreadsheet still resolves instead of failing
+// every row over casing.
+const lowerTrim = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase() : v)
 
 // ═══════════════════════════════════════════════════════════════
 // VEHICLES
@@ -40,6 +47,29 @@ router.post('/vehicles', requirePermissionV2('transport.manage_fleet'),
       .select('*').single()
     if (error) return res.status(500).json({ success: false, error: error.message })
     res.json({ success: true, data })
+  })
+)
+
+const VehicleImportRowSchema = z.object({
+  registration_no: z.string().trim().min(1, 'registration_no is required').max(50),
+  vehicle_type: z.preprocess(lowerTrim, z.enum(['bus', 'van', 'minibus', 'car', 'other'])).default('bus'),
+  capacity: z.coerce.number().int().positive('capacity must be a positive number'),
+  status: z.preprocess(v => v || undefined, z.preprocess(lowerTrim, z.enum(['active', 'in_service', 'maintenance', 'retired'])).optional()),
+})
+
+router.post('/vehicles/import', requirePermissionV2('transport.manage_fleet'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const rows = z.array(z.record(z.string())).parse(req.body.rows ?? [])
+    const school_id = req.user!.school_id
+    const result = await bulkImport(
+      rows, VehicleImportRowSchema,
+      async row => ({ school_id, ...row }),
+      async row => {
+        const { error } = await supabase.from('vehicles').insert(row)
+        return { error: error?.code === '23505' ? `Registration "${row.registration_no}" already exists` : error?.message }
+      },
+    )
+    res.json({ success: true, data: result })
   })
 )
 
@@ -146,6 +176,31 @@ router.post('/drivers', requirePermissionV2('transport.manage_fleet'),
       .select('*').single()
     if (error) return res.status(500).json({ success: false, error: error.message })
     res.json({ success: true, data })
+  })
+)
+
+const DriverImportRowSchema = z.object({
+  full_name: z.string().trim().min(1, 'full_name is required').max(150),
+  phone: z.preprocess(v => v || undefined, z.string().trim().max(20).optional()),
+  license_no: z.string().trim().min(1, 'license_no is required').max(50),
+  license_class: z.preprocess(v => v || undefined, z.string().trim().max(50).optional()),
+  license_expiry: z.preprocess(v => v || undefined, z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'license_expiry must be YYYY-MM-DD').optional()),
+  status: z.preprocess(v => v || undefined, z.preprocess(lowerTrim, z.enum(['active', 'on_leave', 'inactive'])).optional()),
+})
+
+router.post('/drivers/import', requirePermissionV2('transport.manage_fleet'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const rows = z.array(z.record(z.string())).parse(req.body.rows ?? [])
+    const school_id = req.user!.school_id
+    const result = await bulkImport(
+      rows, DriverImportRowSchema,
+      async row => ({ school_id, ...row }),
+      async row => {
+        const { error } = await supabase.from('drivers').insert(row)
+        return { error: error?.message }
+      },
+    )
+    res.json({ success: true, data: result })
   })
 )
 

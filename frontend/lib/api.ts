@@ -1002,6 +1002,7 @@ export const transportApi = {
     create: (data: any) => api.post('/transport/settings/fee-slabs', data).then(r => r.data),
     update: (id: string, data: any) => api.patch(`/transport/settings/fee-slabs/${id}`, data).then(r => r.data),
     delete: (id: string) => api.delete(`/transport/settings/fee-slabs/${id}`).then(r => r.data),
+    import: (rows: Record<string, string>[]) => api.post('/transport/settings/fee-slabs/import', { rows }).then(r => r.data),
   },
   vehicles: {
     list: () => api.get('/transport/fleet/vehicles').then(r => r.data),
@@ -1010,6 +1011,7 @@ export const transportApi = {
     delete: (id: string) => api.delete(`/transport/fleet/vehicles/${id}`).then(r => r.data),
     addDocument: (id: string, data: any) => api.post(`/transport/fleet/vehicles/${id}/documents`, data).then(r => r.data),
     deleteDocument: (id: string, docId: string) => api.delete(`/transport/fleet/vehicles/${id}/documents/${docId}`).then(r => r.data),
+    import: (rows: Record<string, string>[]) => api.post('/transport/fleet/vehicles/import', { rows }).then(r => r.data),
   },
   drivers: {
     list: () => api.get('/transport/fleet/drivers').then(r => r.data),
@@ -1018,12 +1020,14 @@ export const transportApi = {
     delete: (id: string) => api.delete(`/transport/fleet/drivers/${id}`).then(r => r.data),
     addDocument: (id: string, data: any) => api.post(`/transport/fleet/drivers/${id}/documents`, data).then(r => r.data),
     deleteDocument: (id: string, docId: string) => api.delete(`/transport/fleet/drivers/${id}/documents/${docId}`).then(r => r.data),
+    import: (rows: Record<string, string>[]) => api.post('/transport/fleet/drivers/import', { rows }).then(r => r.data),
   },
   stops: {
     list: () => api.get('/transport/network/stops').then(r => r.data),
     create: (data: any) => api.post('/transport/network/stops', data).then(r => r.data),
     update: (id: string, data: any) => api.patch(`/transport/network/stops/${id}`, data).then(r => r.data),
     delete: (id: string) => api.delete(`/transport/network/stops/${id}`).then(r => r.data),
+    import: (rows: Record<string, string>[]) => api.post('/transport/network/stops/import', { rows }).then(r => r.data),
   },
   routes: {
     list: () => api.get('/transport/network/routes').then(r => r.data),

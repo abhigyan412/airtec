@@ -4,6 +4,7 @@ import { supabase } from '../../shared/db/client'
 import { AuthRequest } from '../../shared/middleware/auth'
 import { requirePermissionV2 } from '../../shared/middleware/permissions-v2'
 import { asyncHandler } from '../../shared/utils/helpers'
+import { bulkImport } from '../../shared/utils/bulkImport'
 
 const router = Router()
 
@@ -31,6 +32,28 @@ router.post('/stops', requirePermissionV2('transport.manage_routes'),
     const { data, error } = await supabase.from('stops').insert({ school_id: req.user!.school_id, ...parsed.data }).select('*').single()
     if (error) return res.status(500).json({ success: false, error: error.message })
     res.json({ success: true, data })
+  })
+)
+
+const StopImportRowSchema = z.object({
+  name: z.string().trim().min(1, 'name is required').max(150),
+  lat: z.preprocess(v => (v === '' || v == null ? undefined : v), z.coerce.number().min(-90).max(90).optional()),
+  lng: z.preprocess(v => (v === '' || v == null ? undefined : v), z.coerce.number().min(-180).max(180).optional()),
+})
+
+router.post('/stops/import', requirePermissionV2('transport.manage_routes'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const rows = z.array(z.record(z.string())).parse(req.body.rows ?? [])
+    const school_id = req.user!.school_id
+    const result = await bulkImport(
+      rows, StopImportRowSchema,
+      async row => ({ school_id, ...row }),
+      async row => {
+        const { error } = await supabase.from('stops').insert(row)
+        return { error: error?.message }
+      },
+    )
+    res.json({ success: true, data: result })
   })
 )
 
