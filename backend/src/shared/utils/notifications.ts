@@ -42,14 +42,15 @@ interface CreateNotificationParams {
   relatedEntityType?: string
   relatedEntityId?: string
   /**
-   * Opt out of the once-per-entity-per-day dedupe below.
+   * Re-notify even when this user was already told about this entity
+   * today, by superseding the earlier notification.
    *
    * Set this for anything a person triggers by acting on the entity, as
    * opposed to a cron tick reporting on it. Assigning cover, cancelling
-   * it and assigning it again is three real events about one arrangement
-   * on one day, and the teacher has to hear all three — the dedupe
-   * swallowed the third, so somebody re-assigned to a period they had
-   * just been stood down from was never told they were back on it.
+   * it and assigning it again is three real events about one arrangement,
+   * and the teacher has to hear all three — the dedupe swallowed the
+   * third, so somebody re-assigned to a period they had just been stood
+   * down from was never told they were back on it.
    *
    * Cron-driven notifications leave this alone: their whole safety
    * property is that re-running a tick does not spam the same alert.
@@ -100,12 +101,36 @@ async function writeNotifications(
   // dedupe against the same user/type/entity/day so re-running a cron
   // tick or an accidental double-submit doesn't spam the same alert.
   //
-  // `repeatable` turns that off for state transitions a person drives,
-  // where a second notification about the same entity on the same day is
-  // a second real event rather than a repeat of the first. The cost is
-  // that a genuine double-submit now notifies twice; being told twice
-  // that you are covering period 8 is a far smaller failure than not
-  // being told at all.
+  // `repeatable` needs the opposite, and cannot get it by simply
+  // switching to a plain insert: idx_notifications_dedupe is a UNIQUE
+  // index on exactly this key, so a second row is rejected by Postgres
+  // rather than merely skipped by the upsert. Dropping the upsert only
+  // turns a silent dedupe into a swallowed unique_violation — the
+  // teacher is just as uninformed either way.
+  //
+  // So a repeatable write SUPERSEDES instead: the earlier notification
+  // about this entity is removed and a fresh one takes its place, with a
+  // new id, a new timestamp, unread, and its own delivery rows (the old
+  // row's cascade away with it). The user is told again, which is the
+  // whole point, and the panel shows the current instruction rather than
+  // two near-identical lines.
+  //
+  // Nothing is lost that matters: what happened to an arrangement is
+  // recorded in timetable_audit_log, which is the actual history. A
+  // notification is a message, and a superseded message has been
+  // replaced by this one.
+  if (params.relatedEntityId && params.repeatable) {
+    const { error: clearError } = await supabase.from('notifications')
+      .delete()
+      .in('user_id', unique)
+      .eq('type', params.type)
+      .eq('related_entity_id', params.relatedEntityId)
+    // Non-fatal: if the clear fails the insert below hits the unique
+    // index and is reported, which is strictly better than aborting a
+    // notification nobody has yet received.
+    if (clearError) console.error('[notifications] supersede failed:', clearError.message)
+  }
+
   const dedupe = !!params.relatedEntityId && !params.repeatable
   const { data, error } = dedupe
     ? await supabase.from('notifications')
