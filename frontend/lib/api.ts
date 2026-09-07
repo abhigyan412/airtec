@@ -992,6 +992,19 @@ export const rbacApi = {
   userRoles: (userId: string) => api.get(`/rbac/users/${userId}/roles`).then(r => r.data),
 }
 
+export const transportApi = {
+  settings: {
+    get: () => api.get('/transport/settings/general').then(r => r.data),
+    save: (data: any) => api.put('/transport/settings/general', data).then(r => r.data),
+  },
+  feeSlabs: {
+    list: () => api.get('/transport/settings/fee-slabs').then(r => r.data),
+    create: (data: any) => api.post('/transport/settings/fee-slabs', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/transport/settings/fee-slabs/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/transport/settings/fee-slabs/${id}`).then(r => r.data),
+  },
+}
+
 export const homeworkApi = {
   list: (params?: { class_id?: string; section_id?: string; subject_name?: string }) =>
     api.get('/academics/homework', { params }).then(r => r.data),

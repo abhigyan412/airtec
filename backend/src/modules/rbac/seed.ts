@@ -48,6 +48,15 @@ const PHASE2_MANAGEMENT = [
   'exam.result_settings_manage',
 ]
 
+// Transportation module. Kept as its own list (not folded into CORE) for
+// the same reason TIMETABLE_SENIOR is separate — a school rolling out only
+// the transport feature, or handing the whole module to one Transport
+// Manager, shouldn't need to touch any other role's grants to do it.
+const TRANSPORT = [
+  'transport.view', 'transport.manage_fleet', 'transport.manage_routes',
+  'transport.manage_trips', 'transport.mark_boarding', 'transport.settings_manage',
+]
+
 // Timetable module (20260829010000). Deliberately fine-grained: a school
 // rolling out ONLY the timetable feature needs "runs the daily arrangement
 // queue" to be a different grant from "republishes the master timetable",
@@ -88,13 +97,13 @@ const TIMETABLE_SENIOR = [
 const TIMETABLE_TEACHER = ['arrangement.acknowledge', 'booking.manage_own']
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
-  'School Admin': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
+  'School Admin': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, ...TRANSPORT, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
   // role.manage: Principal could already edit role_permissions_v2 (i.e.
   // use the Permissions page itself) under the old requireRole(
   // 'school_admin','principal') gate on PUT /rbac/roles/:id/permissions
   // — kept so converting that route doesn't lock Principal out of the
   // very page that grants permissions.
-  'Principal': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, 'role.manage', 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
+  'Principal': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, ...TRANSPORT, 'role.manage', 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
   'Vice Principal': CORE.filter(c => c !== 'staff.payroll_manage').concat(PHASE2_MANAGEMENT.filter(c => c !== 'staff.payroll_view')).concat(TIMETABLE_SENIOR.filter(c => c !== 'timetable.publish' && c !== 'arrangement.override_booking')).concat(TIMETABLE_TEACHER).concat(['role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage']),
   // Two different jobs that both live under "Homework": day-to-day
   // homework/classwork is a teacher's direct communication to their own
@@ -146,7 +155,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     'booking.manage_own',
     'staff.view', 'student.view',
   ],
-  'Transport Manager': ['student.view'],
+  // Owns the module day to day, same narrow-but-complete shape as
+  // Timetable Manager — nothing outside transport + the read access
+  // needed to see who the students are.
+  'Transport Manager': ['student.view', ...TRANSPORT],
   'Hostel Warden': ['student.view'],
   'Coordinator': ['student.view', 'timetable.view', ...TIMETABLE_TEACHER],
 
@@ -634,5 +646,38 @@ export async function ensureResultFreezePublishWorkflowDefinition(schoolId: stri
       { roleName: 'Principal', actionName: 'verify' },
       { roleName: 'Principal', actionName: 'publish' },
     ],
+  })
+}
+
+// Transportation module's three approval chains — seeded lazily the
+// first time a school's Transport settings page (or a route/vehicle/
+// driver-reassignment action, once those land) actually asks for one,
+// not by this migration itself. Uses ensureMultiStepWorkflow (not
+// ensureSingleStepWorkflow, which hardcodes an HR/Principal target) since
+// the natural default approver here is Transport Manager, a role that
+// didn't exist as a real grant until this same change seeded it.
+export async function ensureRouteChangeApprovalWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Route & Stop Change Approval Workflow', module: 'transport', entityType: 'transport_route_change',
+    steps: [{ roleName: 'Transport Manager', actionName: 'route_change_approval' }],
+  })
+}
+
+// Two steps, not one — onboarding a vehicle is a capex-ish decision, same
+// tier as Admission's escalation to Principal for the final confirmation.
+export async function ensureVehicleOnboardingWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'New Vehicle Onboarding Workflow', module: 'transport', entityType: 'vehicle_onboarding',
+    steps: [
+      { roleName: 'Transport Manager', actionName: 'coordinator_review' },
+      { roleName: 'Principal', actionName: 'onboarding_approval' },
+    ],
+  })
+}
+
+export async function ensureDriverReassignmentWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Driver Reassignment Approval Workflow', module: 'transport', entityType: 'driver_reassignment',
+    steps: [{ roleName: 'Transport Manager', actionName: 'reassignment_approval' }],
   })
 }

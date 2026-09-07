@@ -10,7 +10,7 @@ import {
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
   Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
   SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2, BookMarked, LayoutTemplate,
-  CalendarRange, Megaphone,
+  CalendarRange, Megaphone, Bus,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -119,6 +119,16 @@ const NAV: NavItem[] = [
       { label: 'Receipts', href: '/fees/receipts', icon: Receipt, requireAny: ['fee.view', 'fee.collect'] },
       { label: 'Approvals', href: '/fees/approvals', icon: UserCheck, requireAny: ['fee.structure_manage', 'fee.discount'] },
       { label: 'Discounts', href: '/fees/discounts', icon: Tag, requireAny: ['fee.discount', 'fee.view'] },
+    ],
+  },
+  {
+    label: 'Transport',
+    module: 'transport',
+    icon: Bus,
+    children: [
+      // Fleet/Routes & Stops/Trips & Boarding/Live Map land here as each
+      // ships — Settings goes first, same order HR and SIS were built in.
+      { label: 'Settings', href: '/transport/settings', icon: SettingsIcon, permission: 'transport.view' },
     ],
   },
   {

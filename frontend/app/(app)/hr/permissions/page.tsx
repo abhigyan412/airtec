@@ -57,6 +57,7 @@ const MODULE_LABELS: Record<string, string> = {
   syllabus: 'Syllabus',
   role: 'Roles & Permissions',
   team: 'Team Management',
+  transport: 'Transportation',
   settings: 'School Settings',
   website: 'Website',
   gallery: 'Gallery',
@@ -79,6 +80,8 @@ const ACTION_LABELS: Record<string, string> = {
   admit_card_generate: 'Generate Admit Cards', credentials_manage: 'Reset Login',
   homeroom_manage: 'Manage Homeroom Assignments',
   exit_manage: 'Manage Exit',
+  manage_fleet: 'Manage Fleet', manage_routes: 'Manage Routes & Stops', manage_trips: 'Manage Trips',
+  mark_boarding: 'Mark Boarding', settings_manage: 'Manage Settings',
 }
 
 export default function RolePermissionsPage() {

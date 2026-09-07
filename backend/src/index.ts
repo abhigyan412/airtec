@@ -56,6 +56,7 @@ import notificationsRoutes from './modules/notifications/routes'
 import teacherRoutes from './modules/teacher/routes'
 import principalRoutes from './modules/principal/routes'
 import timetableRoutes from './modules/timetable/routes'
+import transportRoutes from './modules/transport'
 import publicRoutes from './modules/public/routes'
 import {
   runAbsenceDetectionSweep, runAcknowledgementSweep, runMorningSweep, runUnfilledSweep, runWorkloadSweep,
@@ -172,6 +173,7 @@ app.use('/api/notifications', notificationsRoutes)
 app.use('/api/teacher', teacherRoutes)
 app.use('/api/principal', principalRoutes)
 app.use('/api/timetable', timetableRoutes)
+app.use('/api/transport', transportRoutes)
 
 app.use(notFoundHandler)
 app.use(errorHandler)
