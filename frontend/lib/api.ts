@@ -1006,11 +1006,14 @@ export const transportApi = {
   },
   vehicles: {
     list: () => api.get('/transport/fleet/vehicles').then(r => r.data),
+    get: (id: string) => api.get(`/transport/fleet/vehicles/${id}`).then(r => r.data),
     create: (data: any) => api.post('/transport/fleet/vehicles', data).then(r => r.data),
     update: (id: string, data: any) => api.patch(`/transport/fleet/vehicles/${id}`, data).then(r => r.data),
     delete: (id: string) => api.delete(`/transport/fleet/vehicles/${id}`).then(r => r.data),
     addDocument: (id: string, data: any) => api.post(`/transport/fleet/vehicles/${id}/documents`, data).then(r => r.data),
     deleteDocument: (id: string, docId: string) => api.delete(`/transport/fleet/vehicles/${id}/documents/${docId}`).then(r => r.data),
+    addServiceRecord: (id: string, data: any) => api.post(`/transport/fleet/vehicles/${id}/service-records`, data).then(r => r.data),
+    deleteServiceRecord: (id: string, recordId: string) => api.delete(`/transport/fleet/vehicles/${id}/service-records/${recordId}`).then(r => r.data),
     import: (rows: Record<string, string>[]) => api.post('/transport/fleet/vehicles/import', { rows }).then(r => r.data),
   },
   drivers: {

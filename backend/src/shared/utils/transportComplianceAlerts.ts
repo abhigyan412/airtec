@@ -66,6 +66,35 @@ export async function runTransportComplianceAlerts(schoolId?: string) {
       })
       driverDocsNotified++
     }
+
+    // Service-due: only the MOST RECENT service record per vehicle is
+    // the live outstanding due date — an earlier record's
+    // next_service_due_date is superseded the moment a later service
+    // happens, even one that hasn't set its own next-due date yet.
+    // Fetched ordered by service_date desc and reduced to one row per
+    // vehicle in JS since Supabase's client has no DISTINCT ON.
+    const { data: serviceRecords } = await supabase
+      .from('vehicle_service_records')
+      .select('id, vehicle_id, service_date, next_service_due_date, vehicles!inner(school_id, registration_no)')
+      .eq('vehicles.school_id', school.id)
+      .order('service_date', { ascending: false })
+
+    const latestByVehicle = new Map<string, any>()
+    for (const rec of (serviceRecords ?? []) as any[]) {
+      if (!latestByVehicle.has(rec.vehicle_id)) latestByVehicle.set(rec.vehicle_id, rec)
+    }
+
+    for (const rec of latestByVehicle.values()) {
+      if (!rec.next_service_due_date || rec.next_service_due_date > windowEnd) continue
+      const overdue = rec.next_service_due_date < today
+      await createNotifications(recipients, {
+        schoolId: school.id, type: 'transport_service_due',
+        title: overdue ? 'Vehicle service overdue' : 'Vehicle service due soon',
+        message: `${rec.vehicles.registration_no}'s next service ${overdue ? 'was due' : 'is due'} on ${rec.next_service_due_date}.`,
+        link: '/transport/fleet', relatedEntityType: 'vehicle_service_record', relatedEntityId: rec.id,
+      })
+      vehicleDocsNotified++
+    }
   }
 
   return { vehicleDocsNotified, driverDocsNotified }

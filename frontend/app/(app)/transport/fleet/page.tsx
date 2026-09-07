@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import Link from 'next/link'
 import { Truck, Loader2, Plus, Trash2, FileText, AlertTriangle, CalendarOff, Upload } from 'lucide-react'
 import { transportApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
@@ -75,7 +76,6 @@ function VehiclesTab({ canManage }: { canManage: boolean }) {
   const qc = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
-  const [docsFor, setDocsFor] = useState<any | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [form, setForm] = useState({ registration_no: '', vehicle_type: 'bus', capacity: '' })
 
@@ -137,15 +137,17 @@ function VehiclesTab({ canManage }: { canManage: boolean }) {
             )}
             {(vehicles ?? []).map((v: any) => (
               <TableRow key={v.id}>
-                <TableCell className="font-medium">{v.registration_no}</TableCell>
+                <TableCell className="font-medium">
+                  <Link href={`/transport/fleet/vehicles/${v.id}`} className="hover:underline">{v.registration_no}</Link>
+                </TableCell>
                 <TableCell className="capitalize">{v.vehicle_type}</TableCell>
                 <TableCell>{v.capacity}</TableCell>
                 <TableCell className="capitalize">{v.status.replace('_', ' ')}</TableCell>
                 <TableCell>{complianceBadge(v.vehicle_documents ?? [])}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1">
-                    <Button variant="ghost" size="icon" onClick={() => setDocsFor(v)} aria-label="Documents">
-                      <FileText className="h-4 w-4" />
+                    <Button variant="ghost" size="icon" asChild aria-label="View profile">
+                      <Link href={`/transport/fleet/vehicles/${v.id}`}><FileText className="h-4 w-4" /></Link>
                     </Button>
                     {canManage && (
                       <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => setDeleteId(v.id)}>
@@ -200,21 +202,6 @@ function VehiclesTab({ canManage }: { canManage: boolean }) {
         invalidateQueryKey={['transport-vehicles']}
         onImport={rows => transportApi.vehicles.import(rows).then((r: any) => r.data)}
       />
-
-      {docsFor && (
-        <DocumentsDialog
-          open={!!docsFor}
-          onOpenChange={open => !open && setDocsFor(null)}
-          title={`${docsFor.registration_no} — Documents`}
-          docTypes={['rc', 'insurance', 'permit', 'fitness', 'pollution', 'other']}
-          canManage={canManage}
-          queryKey={['transport-vehicles']}
-          list={() => transportApi.vehicles.list().then((r: any) => (r.data.find((v: any) => v.id === docsFor.id)?.vehicle_documents ?? []))}
-          docsListQueryKey={['transport-vehicles']}
-          onAdd={data => transportApi.vehicles.addDocument(docsFor.id, data)}
-          onDelete={docId => transportApi.vehicles.deleteDocument(docsFor.id, docId)}
-        />
-      )}
 
       <ConfirmDialog
         open={!!deleteId}

@@ -30,6 +30,32 @@ router.get('/vehicles', requirePermissionV2('transport.view'),
   })
 )
 
+// GET /transport/fleet/vehicles/:id — the full Vehicle Profile: basic
+// info, compliance documents, service history, the route it's
+// currently assigned to (if any), and its most recent trips. One real
+// record instead of a table row + a documents popup.
+router.get('/vehicles/:id', requirePermissionV2('transport.view'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params
+    const school_id = req.user!.school_id
+
+    const { data: vehicle } = await supabase.from('vehicles').select('*').eq('id', id).eq('school_id', school_id).maybeSingle()
+    if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' })
+
+    const [{ data: documents }, { data: serviceRecords }, { data: route }, { data: trips }] = await Promise.all([
+      supabase.from('vehicle_documents').select('*').eq('vehicle_id', id).order('expiry_date'),
+      supabase.from('vehicle_service_records').select('*').eq('vehicle_id', id).order('service_date', { ascending: false }),
+      supabase.from('routes').select('id, name, driver_id, drivers(full_name)').eq('vehicle_id', id).maybeSingle(),
+      supabase.from('vehicle_trips').select('id, trip_date, shift, status, routes(name)').eq('vehicle_id', id).order('trip_date', { ascending: false }).limit(10),
+    ])
+
+    res.json({
+      success: true,
+      data: { ...vehicle, documents: documents ?? [], service_records: serviceRecords ?? [], route: route ?? null, recent_trips: trips ?? [] },
+    })
+  })
+)
+
 const VehicleSchema = z.object({
   registration_no: z.string().trim().min(1).max(50),
   vehicle_type: z.enum(['bus', 'van', 'minibus', 'car', 'other']),
@@ -137,6 +163,43 @@ router.delete('/vehicles/:id/documents/:docId', requirePermissionV2('transport.m
     if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' })
 
     const { error } = await supabase.from('vehicle_documents').delete().eq('id', req.params.docId).eq('vehicle_id', vehicle.id)
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true })
+  })
+)
+
+// ─── Service / maintenance history ──────────────────────────────
+const ServiceRecordSchema = z.object({
+  service_date: z.string(),
+  service_type: z.enum(['routine', 'repair', 'inspection', 'other']).optional(),
+  odometer_km: z.number().nonnegative().nullable().optional(),
+  cost: z.number().nonnegative().nullable().optional(),
+  next_service_due_date: z.string().nullable().optional(),
+  notes: z.string().trim().max(2000).optional(),
+})
+
+router.post('/vehicles/:id/service-records', requirePermissionV2('transport.manage_fleet'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const parsed = ServiceRecordSchema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid input' })
+
+    const { data: vehicle } = await supabase.from('vehicles').select('id').eq('id', req.params.id).eq('school_id', req.user!.school_id).maybeSingle()
+    if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' })
+
+    const { data, error } = await supabase.from('vehicle_service_records')
+      .insert({ vehicle_id: vehicle.id, created_by: req.user!.id, ...parsed.data })
+      .select('*').single()
+    if (error) return res.status(500).json({ success: false, error: error.message })
+    res.json({ success: true, data })
+  })
+)
+
+router.delete('/vehicles/:id/service-records/:recordId', requirePermissionV2('transport.manage_fleet'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { data: vehicle } = await supabase.from('vehicles').select('id').eq('id', req.params.id).eq('school_id', req.user!.school_id).maybeSingle()
+    if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' })
+
+    const { error } = await supabase.from('vehicle_service_records').delete().eq('id', req.params.recordId).eq('vehicle_id', vehicle.id)
     if (error) return res.status(500).json({ success: false, error: error.message })
     res.json({ success: true })
   })
