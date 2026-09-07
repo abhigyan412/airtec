@@ -22,3 +22,6 @@ schoolknot_attendance_*.csv
 
 # Login exports — contain passwords, never commit.
 credentials-*.csv
+
+# Restore dumps for deleted accounts — password hashes and staff PII.
+credentials-*.sql
