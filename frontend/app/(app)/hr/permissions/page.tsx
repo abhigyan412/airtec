@@ -58,6 +58,7 @@ const MODULE_LABELS: Record<string, string> = {
   role: 'Roles & Permissions',
   team: 'Team Management',
   transport: 'Transportation',
+  library: 'Library',
   settings: 'School Settings',
   website: 'Website',
   gallery: 'Gallery',
@@ -82,6 +83,8 @@ const ACTION_LABELS: Record<string, string> = {
   exit_manage: 'Manage Exit',
   manage_fleet: 'Manage Fleet', manage_routes: 'Manage Routes & Stops', manage_trips: 'Manage Trips',
   mark_boarding: 'Mark Boarding', settings_manage: 'Manage Settings',
+  manage_catalog: 'Manage Catalog', circulation: 'Circulation', manage_fines: 'Manage Fines',
+  manage_acquisition: 'Manage Acquisition',
 }
 
 export default function RolePermissionsPage() {

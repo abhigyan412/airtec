@@ -1069,6 +1069,19 @@ export const transportApi = {
   },
 }
 
+export const libraryApi = {
+  settings: {
+    get: () => api.get('/library/settings/general').then(r => r.data),
+    save: (data: any) => api.put('/library/settings/general', data).then(r => r.data),
+  },
+  borrowingPolicies: {
+    list: () => api.get('/library/settings/borrowing-policies').then(r => r.data),
+    create: (data: any) => api.post('/library/settings/borrowing-policies', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/library/settings/borrowing-policies/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/library/settings/borrowing-policies/${id}`).then(r => r.data),
+  },
+}
+
 export const homeworkApi = {
   list: (params?: { class_id?: string; section_id?: string; subject_name?: string }) =>
     api.get('/academics/homework', { params }).then(r => r.data),

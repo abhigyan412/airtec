@@ -57,6 +57,14 @@ const TRANSPORT = [
   'transport.manage_trips', 'transport.mark_boarding', 'transport.settings_manage',
 ]
 
+// Library module. Same reasoning as TRANSPORT — a school handing the
+// whole module to one Librarian shouldn't need to touch any other
+// role's grants to do it.
+const LIBRARY = [
+  'library.view', 'library.manage_catalog', 'library.circulation',
+  'library.manage_fines', 'library.settings_manage', 'library.manage_acquisition',
+]
+
 // Timetable module (20260829010000). Deliberately fine-grained: a school
 // rolling out ONLY the timetable feature needs "runs the daily arrangement
 // queue" to be a different grant from "republishes the master timetable",
@@ -97,13 +105,13 @@ const TIMETABLE_SENIOR = [
 const TIMETABLE_TEACHER = ['arrangement.acknowledge', 'booking.manage_own']
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
-  'School Admin': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, ...TRANSPORT, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
+  'School Admin': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, ...TRANSPORT, ...LIBRARY, 'role.manage', 'role.assign', 'team.view', 'team.invite', 'team.deactivate', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
   // role.manage: Principal could already edit role_permissions_v2 (i.e.
   // use the Permissions page itself) under the old requireRole(
   // 'school_admin','principal') gate on PUT /rbac/roles/:id/permissions
   // — kept so converting that route doesn't lock Principal out of the
   // very page that grants permissions.
-  'Principal': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, ...TRANSPORT, 'role.manage', 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
+  'Principal': [...CORE, ...PHASE2_MANAGEMENT, ...TIMETABLE_SENIOR, ...TIMETABLE_TEACHER, ...TRANSPORT, ...LIBRARY, 'role.manage', 'role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage'],
   'Vice Principal': CORE.filter(c => c !== 'staff.payroll_manage').concat(PHASE2_MANAGEMENT.filter(c => c !== 'staff.payroll_view')).concat(TIMETABLE_SENIOR.filter(c => c !== 'timetable.publish' && c !== 'arrangement.override_booking')).concat(TIMETABLE_TEACHER).concat(['role.assign', 'team.view', 'website.edit', 'website.publish', 'gallery.manage', 'popup.manage']),
   // Two different jobs that both live under "Homework": day-to-day
   // homework/classwork is a teacher's direct communication to their own
@@ -130,7 +138,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   'Counselor': ['student.view', 'student.create', 'admission.view', 'admission.create', 'admission.edit', 'admission.follow_up', 'complaint.view', 'complaint.create', 'fee.discount', 'staff.recruitment_manage'],
   'HR': ['staff.view', 'staff.edit', 'staff.attendance_mark', 'staff.leave_approve', 'staff.payroll_manage', 'staff.recruitment_manage', 'staff.promote', 'staff.exit_manage', 'team.view', 'team.invite'],
   'Receptionist': ['student.view', 'admission.view', 'admission.create', 'admission.follow_up', 'complaint.view', 'complaint.create'],
-  'Librarian': ['student.view', 'resource.view', 'resource.upload', 'resource.delete', 'timetable.view', ...TIMETABLE_TEACHER],
+  // Owns the module day to day, same narrow-but-complete shape as
+  // Transport Manager — the Resource Centre grant stays too, since a
+  // librarian plausibly manages both.
+  'Librarian': ['student.view', 'resource.view', 'resource.upload', 'resource.delete', 'timetable.view', ...TIMETABLE_TEACHER, ...LIBRARY],
   // exam.result_generate: the step between marks entry and the Freeze step
   // this role is assigned by the default Publish Workflow (see
   // ensureResultFreezePublishWorkflowDefinition below) — without it a
@@ -679,5 +690,45 @@ export async function ensureDriverReassignmentWorkflowDefinition(schoolId: strin
   return ensureMultiStepWorkflow(schoolId, {
     name: 'Driver Reassignment Approval Workflow', module: 'transport', entityType: 'driver_reassignment',
     steps: [{ roleName: 'Transport Manager', actionName: 'reassignment_approval' }],
+  })
+}
+
+// Library module's four approval chains — same lazy-seed-on-first-ask
+// idiom as Transport's three. Fine Waiver and Withdrawal are routine,
+// single-step Librarian calls; Lost-Book Charge Waiver and Acquisition
+// Requests escalate to Principal — a lost-book charge can be a real
+// amount, and a purchase decision is a budget call, same tier as
+// Transport's Vehicle Onboarding.
+export async function ensureFineWaiverWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Library Fine Waiver Approval Workflow', module: 'library', entityType: 'library_fine_waiver',
+    steps: [{ roleName: 'Librarian', actionName: 'fine_waiver_approval' }],
+  })
+}
+
+export async function ensureLostBookChargeWaiverWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Lost Book Charge Waiver Approval Workflow', module: 'library', entityType: 'library_lost_book_waiver',
+    steps: [
+      { roleName: 'Librarian', actionName: 'librarian_review' },
+      { roleName: 'Principal', actionName: 'waiver_approval' },
+    ],
+  })
+}
+
+export async function ensureAcquisitionRequestWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Book Acquisition Request Approval Workflow', module: 'library', entityType: 'book_acquisition_request',
+    steps: [
+      { roleName: 'Librarian', actionName: 'librarian_review' },
+      { roleName: 'Principal', actionName: 'acquisition_approval' },
+    ],
+  })
+}
+
+export async function ensureBookWithdrawalWorkflowDefinition(schoolId: string): Promise<void> {
+  return ensureMultiStepWorkflow(schoolId, {
+    name: 'Book Withdrawal Approval Workflow', module: 'library', entityType: 'book_withdrawal',
+    steps: [{ roleName: 'Librarian', actionName: 'withdrawal_approval' }],
   })
 }

@@ -134,6 +134,17 @@ const NAV: NavItem[] = [
     ],
   },
   {
+    label: 'Library',
+    module: 'library',
+    icon: BookOpen,
+    children: [
+      // Catalog/Circulation/Reservations/Fines/Acquisition land here as
+      // each phase ships — Settings goes first, same order Transport was
+      // built in.
+      { label: 'Settings', href: '/library/settings', icon: SettingsIcon, permission: 'library.view' },
+    ],
+  },
+  {
     // 2026-08-28: Timetable, Examinations, Student Attendance, Homework
     // and Syllabus used to be five unrelated top-level siblings — every
     // one of this session's own restructures (Homework split, Syllabus
