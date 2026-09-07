@@ -54,6 +54,55 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      # OneSignal reaches the Median-wrapped app, which has no Web Push
+      # API and so can never be served by the VAPID pair above. Both come
+      # from the OneSignal dashboard and must match the credentials in
+      # Median App Studio's OneSignal plugin.
+      #
+      # These have to be listed here, not just set in Dokploy: compose
+      # only passes through what this block names, so a key present in the
+      # Environment tab and absent from this list reaches the container as
+      # undefined. That is not a loud failure — a user with a second
+      # web-push device still gets a delivery marked `sent`, so the app
+      # reports push working while every phone in the Median wrapper is
+      # silently skipped.
+      ONESIGNAL_APP_ID: ${ONESIGNAL_APP_ID:-}
+      ONESIGNAL_REST_API_KEY: ${ONESIGNAL_REST_API_KEY:-}
+      # Where a push tap lands. Notification links are app-relative, and a
+      # relative target is not something a native notification can act on,
+      # so without this every OneSignal tap opens the app's default page.
+      APP_BASE_URL: ${APP_BASE_URL:-}
+      # Every date this product computes is a school's date: which day a
+      # receipt belongs to, which month a collection lands in, and above
+      # all which financial year a payment on 31 March falls into. A
+      # container defaults to UTC, and UTC is 5.5 hours behind the school
+      # — so an evening collection on 31 March files itself into April.
+      # `shared/utils/timezone.ts` pins the same value at process start;
+      # this makes it true for the whole container, not just Node.
+      TZ: ${TZ:-Asia/Kolkata}
+      # Said out loud on purpose. `activeProvider()` THROWS when this is
+      # unset and NODE_ENV is production, because the old silent
+      # `?? 'mock'` meant a live deploy ran the simulator — and what the
+      # simulator does is mark orders paid. Change to 'razorpay' only
+      # together with the two RAZORPAY_* keys below.
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-mock}
+      # Signs and verifies the provider callback. The backend refuses to
+      # serve the gateway routes without it rather than falling back to a
+      # key that lives in the repository. Any long random string (>= 16
+      # chars) while the provider is 'mock'; with Razorpay it must match
+      # the secret set in their dashboard.
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      # CORS allow-list. Both apps proxy /api over the internal network,
+      # so same-origin traffic needs none of these — they matter only if
+      # a browser is ever pointed straight at the backend's domain.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      FRONTEND_URL: ${FRONTEND_URL:-}
+      FAMILY_FRONTEND_URL: ${FAMILY_FRONTEND_URL:-}
+      # HRMS attendance source. Defaults in code to the live analytics
+      # host; override only to point at a staging instance.
+      SCHOOLKNOT_BASE_URL: ${SCHOOLKNOT_BASE_URL:-}
     expose:
       - "4000"
     ports:

@@ -229,8 +229,8 @@ export function providerByName(name: string): PaymentProvider | null {
  *
  * It used to be `(process.env.PAYMENT_PROVIDER ?? 'mock') === 'razorpay'`, and
  * the `?? 'mock'` was the whole problem: PAYMENT_PROVIDER was declared in
- * neither render.yaml nor .env.example, so a production deploy from this repo
- * silently ran the simulator. Everything downstream then behaved as designed —
+ * neither docker-compose.yml nor .env.example, so a production deploy from this
+ * repo silently ran the simulator. Everything downstream then behaved as designed —
  * and what it was designed to do, when simulated, is mark orders paid.
  *
  * Development still defaults to mock, because a local checkout that 500s helps

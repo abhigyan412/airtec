@@ -71,9 +71,9 @@ Same defect, same silence, in roughly fifteen more places — the ones that matt
 
 ### C1 — Any parent can mark their own fees paid, in production
 
-`gateway.ts:284` · `lib/providers.ts:189` · `render.yaml`
+`gateway.ts:284` · `lib/providers.ts:189` · `docker-compose.yml`
 
-`POST /fees/gateway/orders/:id/simulate` is guarded only by `if (!provider.isSimulated)`. `activeProvider()` returns the **mock** driver whenever `PAYMENT_PROVIDER !== 'razorpay'` — and **neither `render.yaml` nor `.env.example` declares `PAYMENT_PROVIDER` at all** (verified). A deploy from this repo therefore runs simulated, and the route is wide open. There is no `NODE_ENV` check anywhere in the file (verified).
+`POST /fees/gateway/orders/:id/simulate` is guarded only by `if (!provider.isSimulated)`. `activeProvider()` returns the **mock** driver whenever `PAYMENT_PROVIDER !== 'razorpay'` — and **neither `docker-compose.yml` nor `.env.example` declares `PAYMENT_PROVIDER` at all** (verified). A deploy from this repo therefore runs simulated, and the route is wide open. There is no `NODE_ENV` check anywhere in the file (verified).
 
 The route requires only `attachFeeScope` — **not** `fee.collect` — so a parent passes it for their own child. The portal already calls it (`PayDialog.tsx:67`).
 
@@ -84,7 +84,7 @@ POST /api/fees/gateway/orders/<id>/simulate {"outcome":"paid"}
 ```
 `capture()` then runs the *identical* path as a real webhook: a real `fee_payments` row with a sequential receipt number, real allocations, real ledger entries (Dr cash, Cr fee_income), invoices flipped to `paid`, and a `PAYMENT_ONLINE_CAPTURED` audit row. **Nothing downstream can distinguish it from money.** A class teacher (section scope) can do it for every child in their homeroom.
 
-**Fix.** Require `NODE_ENV !== 'production'` *and* `fee.collect`. Make `activeProvider()` **throw at boot** in production when `PAYMENT_PROVIDER` is unset rather than silently defaulting to mock. Declare both vars in `render.yaml` and `.env.example`.
+**Fix.** Require `NODE_ENV !== 'production'` *and* `fee.collect`. Make `activeProvider()` **throw at boot** in production when `PAYMENT_PROVIDER` is unset rather than silently defaulting to mock. Declare both vars in `docker-compose.yml` and `.env.example`.
 
 > This is my code and I got it wrong. I previously reported this route as "verified safe — it refuses when a real provider is configured." That statement was true and useless: no provider is configured, so it never refuses.
 
@@ -270,7 +270,7 @@ Listed because it should not be rebuilt, and because it is why the estimate is w
 
 ```bash
 # C1/C2: is a provider configured for production? (expect: nothing)
-grep -n "PAYMENT_PROVIDER\|PAYMENT_WEBHOOK_SECRET" render.yaml backend/.env.example
+grep -n "PAYMENT_PROVIDER\|PAYMENT_WEBHOOK_SECRET" docker-compose.yml .env.example
 grep -n "dev-mock-secret" backend/src/modules/fee/lib/providers.ts
 grep -n "req.query.provider" backend/src/modules/fee/gateway.ts
 

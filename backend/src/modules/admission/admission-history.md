@@ -14,7 +14,7 @@ Status tags used below: `[new]` no code exists yet · `[wire]` schema/column alr
 
 ## Phase 0 — Cleanup & foundation
 
-- [x] Remove or archive the stale duplicate router at `src/modules/admission/routes.ts` (root, 696 lines, pre-dates the live 1218-line `backend/src/modules/admission/routes.ts`). Confirmed untracked by git and never built/deployed (`render.yaml` rootDir: `backend`) — deleted along with its now-empty parent folder. The other 8 orphaned module folders under root `src/` were left untouched (out of scope for admission-only work).
+- [x] Remove or archive the stale duplicate router at `src/modules/admission/routes.ts` (root, 696 lines, pre-dates the live 1218-line `backend/src/modules/admission/routes.ts`). Confirmed untracked by git and never built/deployed (Compose builds the backend image from `backend/` only) — deleted along with its now-empty parent folder. The other 8 orphaned module folders under root `src/` were left untouched (out of scope for admission-only work).
 - [x] `[new]` Admission cycle gating — new `admission_cycles` table (school_id, academic_year_id, opens_at, closes_at, unique per year). `POST/GET/DELETE /admission-cycles` manage it; `POST /inquiries` and `POST /applications` reject writes outside an active window via `checkAdmissionCycleOpen()`. No row for a year = always open (permissive default).
 - [ ] Retire the four dead legacy statuses (`counselor_approved`, `documents_verified`, `fee_paid`, `principal_approved` on `admission_applications.status`) — deferred. Confirmed dead (frontend comment: nothing writes them; real status lives in `workflow_instances`), but altering a `CHECK` constraint on a populated `NOT NULL` column wasn't required for Phase 1 and carries its own risk. Revisit in a later pass.
 

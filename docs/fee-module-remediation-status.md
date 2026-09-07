@@ -19,7 +19,7 @@
 | Ledger reconciliation | did not exist | **3 invariants, all passing** |
 | Fee tables with RLS | 0 of 19 | **19 of 19** |
 
-**`PAYMENT_PROVIDER` stays `mock`**, declared explicitly in `render.yaml` and `.env.example`. The simulator still runs end to end; what changed is who may drive it and what signs its callbacks.
+**`PAYMENT_PROVIDER` stays `mock`**, declared explicitly in `docker-compose.yml` and `.env.example`. The simulator still runs end to end; what changed is who may drive it and what signs its callbacks.
 
 ---
 
@@ -53,7 +53,7 @@
 | H10 | Arrears could be waived but never collected | ✅ Fixed | "Record payment" action + dialog on the arrears tab, gated on `fee.collect`. The endpoint existed and had zero callers. |
 | H11 | Double-click on approve posted twice | ✅ Fixed | The request is claimed atomically **before** `apply()` runs, and released if the action fails. Write-off amounts are re-derived rather than taken from a stale snapshot. Concessions got the same treatment. |
 | H12 | Four indexes destroyed by migration ordering | ✅ Fixed | Live check found **11** lost, not 4. All recreated plus new ones on `fee_assignments`, `fee_discounts`, `fee_adhoc_charges`, `fee_scholarships`, `fee_arrears`, `fee_payment_allocations`. Fee-table index count: 20 → **67**. |
-| H13 | No timezone configured anywhere | ✅ Fixed | `TZ=Asia/Kolkata` pinned at process start (`shared/utils/timezone.ts`, imported before anything reads a date) and declared in `render.yaml`. **Critically, the offsets were fixed in the same change**: `dayStartISO`/`dayEndISO` carry an explicit offset, because naive `${date}T00:00:00` bounds were resolved in the *database's* timezone regardless of the process. Day-book and trend buckets now cut on the school's day. |
+| H13 | No timezone configured anywhere | ✅ Fixed | `TZ=Asia/Kolkata` pinned at process start (`shared/utils/timezone.ts`, imported before anything reads a date) and declared in `docker-compose.yml`. **Critically, the offsets were fixed in the same change**: `dayStartISO`/`dayEndISO` carry an explicit offset, because naive `${date}T00:00:00` bounds were resolved in the *database's* timezone regardless of the process. Day-book and trend buckets now cut on the school's day. |
 | H14 | Webhook signature failures never logged | ✅ Fixed | Rejections logged with provider, signature presence, body size and IP. Plus an hourly reaper for orders stuck at `created`/`capturing` — the silent half of "a parent says they paid and it isn't showing" — which flags mid-capture orders separately as needing a human. |
 | H15 | `resolve.ts` ignored the error on `fee_concession_rules` | ✅ Fixed | Now throws. Billing without concession rules charges every RTE, sibling, staff-ward and scholarship student the full amount, on paper, silently — there is no version of "carry on" that beats stopping. |
 
