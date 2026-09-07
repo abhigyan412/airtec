@@ -43,13 +43,23 @@ export default function VehicleProfilePage() {
   })
 
   const [docForm, setDocForm] = useState({ doc_type: 'rc', document_no: '', expiry_date: '' })
+  const [docFile, setDocFile] = useState<File | null>(null)
   const [serviceForm, setServiceForm] = useState({ service_date: '', service_type: 'routine', odometer_km: '', cost: '', next_service_due_date: '', notes: '' })
 
   const invalidate = () => { qc.invalidateQueries({ queryKey: ['transport-vehicle', id] }); qc.invalidateQueries({ queryKey: ['transport-vehicles'] }) }
 
   const addDocMutation = useMutation({
-    mutationFn: () => transportApi.vehicles.addDocument(id, docForm),
-    onSuccess: () => { invalidate(); setDocForm({ doc_type: 'rc', document_no: '', expiry_date: '' }); toast.success('Document added') },
+    mutationFn: () => new Promise<void>((resolve, reject) => {
+      if (!docFile) return transportApi.vehicles.addDocument(id, docForm).then(() => resolve()).catch(reject)
+      const reader = new FileReader()
+      reader.onload = () => {
+        transportApi.vehicles.addDocument(id, { ...docForm, file_base64: reader.result, file_name: docFile.name, mime_type: docFile.type })
+          .then(() => resolve()).catch(reject)
+      }
+      reader.onerror = () => reject(new Error('Could not read that file'))
+      reader.readAsDataURL(docFile)
+    }),
+    onSuccess: () => { invalidate(); setDocForm({ doc_type: 'rc', document_no: '', expiry_date: '' }); setDocFile(null); toast.success('Document added') },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to add document'),
   })
   const deleteDocMutation = useMutation({
@@ -145,6 +155,11 @@ export default function VehicleProfilePage() {
                   {expired && <AlertTriangle className="h-3.5 w-3.5 text-destructive" />}
                   <span className="font-medium capitalize">{d.doc_type.replace('_', ' ')}</span>
                   {d.document_no && <span className="text-muted-foreground">{d.document_no}</span>}
+                  {d.file_url ? (
+                    <a href={d.file_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">View file{d.file_size ? ` (${d.file_size})` : ''}</a>
+                  ) : (
+                    <span className="text-xs text-muted-foreground italic">No file attached</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {expiryBadge(d.expiry_date)}
@@ -159,19 +174,28 @@ export default function VehicleProfilePage() {
           })}
 
           {canManage && (
-            <div className="grid grid-cols-[1fr_1fr_auto_auto] items-end gap-2 border-t border-border pt-4">
-              <div className="space-y-1.5">
-                <Label>Type</Label>
-                <Select value={docForm.doc_type} onValueChange={v => setDocForm(f => ({ ...f, doc_type: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{DOC_TYPES.map(t => <SelectItem key={t} value={t} className="capitalize">{t.replace('_', ' ')}</SelectItem>)}</SelectContent>
-                </Select>
+            <div className="space-y-3 border-t border-border pt-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Type</Label>
+                  <Select value={docForm.doc_type} onValueChange={v => setDocForm(f => ({ ...f, doc_type: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{DOC_TYPES.map(t => <SelectItem key={t} value={t} className="capitalize">{t.replace('_', ' ')}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5"><Label>Document No.</Label><Input value={docForm.document_no} onChange={e => setDocForm(f => ({ ...f, document_no: e.target.value }))} /></div>
+                <div className="space-y-1.5"><Label>Expiry</Label><Input type="date" value={docForm.expiry_date} onChange={e => setDocForm(f => ({ ...f, expiry_date: e.target.value }))} /></div>
               </div>
-              <div className="space-y-1.5"><Label>Document No.</Label><Input value={docForm.document_no} onChange={e => setDocForm(f => ({ ...f, document_no: e.target.value }))} /></div>
-              <div className="space-y-1.5"><Label>Expiry</Label><Input type="date" value={docForm.expiry_date} onChange={e => setDocForm(f => ({ ...f, expiry_date: e.target.value }))} /></div>
-              <Button size="sm" onClick={() => addDocMutation.mutate()} disabled={addDocMutation.isPending}>
-                {addDocMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Add
-              </Button>
+              <div className="flex items-end gap-2">
+                <div className="flex-1 space-y-1.5">
+                  <Label>File (optional)</Label>
+                  <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={e => setDocFile(e.target.files?.[0] ?? null)}
+                    className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-primary/10 file:px-3 file:py-1.5 file:text-primary" />
+                </div>
+                <Button size="sm" onClick={() => addDocMutation.mutate()} disabled={addDocMutation.isPending}>
+                  {addDocMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Add
+                </Button>
+              </div>
             </div>
           )}
         </div>

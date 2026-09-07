@@ -440,6 +440,7 @@ function DocumentsDialog({ open, onOpenChange, title, docTypes, canManage, list,
 }) {
   const qc = useQueryClient()
   const [form, setForm] = useState({ doc_type: docTypes[0], document_no: '', expiry_date: '' })
+  const [file, setFile] = useState<File | null>(null)
 
   const { data: docs, isLoading } = useQuery({
     queryKey: [...docsListQueryKey, 'documents', title],
@@ -448,11 +449,20 @@ function DocumentsDialog({ open, onOpenChange, title, docTypes, canManage, list,
   })
 
   const addMutation = useMutation({
-    mutationFn: () => onAdd(form),
+    mutationFn: () => new Promise<void>((resolve, reject) => {
+      if (!file) return onAdd(form).then(() => resolve()).catch(reject)
+      const reader = new FileReader()
+      reader.onload = () => {
+        onAdd({ ...form, file_base64: reader.result, file_name: file.name, mime_type: file.type }).then(() => resolve()).catch(reject)
+      }
+      reader.onerror = () => reject(new Error('Could not read that file'))
+      reader.readAsDataURL(file)
+    }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: docsListQueryKey })
       qc.invalidateQueries({ queryKey: [...docsListQueryKey, 'documents', title] })
       setForm({ doc_type: docTypes[0], document_no: '', expiry_date: '' })
+      setFile(null)
       toast.success('Document added')
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to add document'),
@@ -488,6 +498,7 @@ function DocumentsDialog({ open, onOpenChange, title, docTypes, canManage, list,
                     {(expired || soon) && <AlertTriangle className={cn('h-3.5 w-3.5', expired ? 'text-destructive' : 'text-warning')} />}
                     <span className="font-medium capitalize">{d.doc_type.replace('_', ' ')}</span>
                     {d.expiry_date && <span className="text-muted-foreground">expires {d.expiry_date}</span>}
+                    {d.file_url && <a href={d.file_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">View file</a>}
                   </div>
                   {canManage && (
                     <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteMutation.mutate(d.id)}>
@@ -520,6 +531,11 @@ function DocumentsDialog({ open, onOpenChange, title, docTypes, canManage, list,
             <div className="space-y-1.5">
               <Label>Document number (optional)</Label>
               <Input value={form.document_no} onChange={e => setForm(f => ({ ...f, document_no: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>File (optional)</Label>
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={e => setFile(e.target.files?.[0] ?? null)}
+                className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-primary/10 file:px-3 file:py-1.5 file:text-primary" />
             </div>
             <div className="flex justify-end">
               <Button size="sm" onClick={() => addMutation.mutate()} disabled={addMutation.isPending}>

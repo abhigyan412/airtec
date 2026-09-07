@@ -15,6 +15,20 @@ const router = Router()
 // every row over casing.
 const lowerTrim = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase() : v)
 
+// Same base64 -> storage bucket -> getPublicUrl() shape every other
+// document feature in this app uses (student_documents, staff_documents,
+// application_documents) — see uploadAdmissionDocumentFile in
+// admission/routes.ts for the twin this was copied from.
+function uploadTransportDocumentFile(schoolId: string, ownerId: string, file_base64: string, file_name: string) {
+  const base64Data = file_base64.replace(/^data:[\w/+.-]+;base64,/, '')
+  const buffer = Buffer.from(base64Data, 'base64')
+  const filePath = `${schoolId}/${ownerId}/${Date.now()}_${file_name}`
+  const fileSize = buffer.length > 1024 * 1024
+    ? `${(buffer.length / (1024 * 1024)).toFixed(1)} MB`
+    : `${(buffer.length / 1024).toFixed(0)} KB`
+  return { buffer, filePath, fileSize }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // VEHICLES
 // ═══════════════════════════════════════════════════════════════
@@ -141,6 +155,11 @@ const VehicleDocSchema = z.object({
   document_no: z.string().trim().max(100).optional(),
   issued_date: z.string().optional(),
   expiry_date: z.string().optional(),
+  // The scanned copy itself — optional, since a school may log dates
+  // before they have it on hand and attach it later.
+  file_base64: z.string().optional(),
+  file_name: z.string().optional(),
+  mime_type: z.string().optional(),
 })
 
 router.post('/vehicles/:id/documents', requirePermissionV2('transport.manage_fleet'),
@@ -151,7 +170,17 @@ router.post('/vehicles/:id/documents', requirePermissionV2('transport.manage_fle
     const { data: vehicle } = await supabase.from('vehicles').select('id').eq('id', req.params.id).eq('school_id', req.user!.school_id).maybeSingle()
     if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' })
 
-    const { data, error } = await supabase.from('vehicle_documents').insert({ vehicle_id: vehicle.id, ...parsed.data }).select('*').single()
+    const { file_base64, file_name, mime_type, ...fields } = parsed.data
+    let fileFields: Record<string, string> = {}
+    if (file_base64 && file_name) {
+      const { buffer, filePath, fileSize } = uploadTransportDocumentFile(req.user!.school_id, vehicle.id, file_base64, file_name)
+      const { error: uploadErr } = await supabase.storage.from('transport-documents').upload(filePath, buffer, { contentType: mime_type ?? 'application/pdf', upsert: false })
+      if (uploadErr) return res.status(400).json({ success: false, error: uploadErr.message })
+      const { data: urlData } = supabase.storage.from('transport-documents').getPublicUrl(filePath)
+      fileFields = { file_url: urlData.publicUrl, file_size: fileSize, mime_type: mime_type ?? '' }
+    }
+
+    const { data, error } = await supabase.from('vehicle_documents').insert({ vehicle_id: vehicle.id, ...fields, ...fileFields }).select('*').single()
     if (error) return res.status(500).json({ success: false, error: error.message })
     res.json({ success: true, data })
   })
@@ -306,6 +335,9 @@ const DriverDocSchema = z.object({
   document_no: z.string().trim().max(100).optional(),
   issued_date: z.string().optional(),
   expiry_date: z.string().optional(),
+  file_base64: z.string().optional(),
+  file_name: z.string().optional(),
+  mime_type: z.string().optional(),
 })
 
 router.post('/drivers/:id/documents', requirePermissionV2('transport.manage_fleet'),
@@ -316,7 +348,17 @@ router.post('/drivers/:id/documents', requirePermissionV2('transport.manage_flee
     const { data: driver } = await supabase.from('drivers').select('id').eq('id', req.params.id).eq('school_id', req.user!.school_id).maybeSingle()
     if (!driver) return res.status(404).json({ success: false, error: 'Driver not found' })
 
-    const { data, error } = await supabase.from('driver_documents').insert({ driver_id: driver.id, ...parsed.data }).select('*').single()
+    const { file_base64, file_name, mime_type, ...fields } = parsed.data
+    let fileFields: Record<string, string> = {}
+    if (file_base64 && file_name) {
+      const { buffer, filePath, fileSize } = uploadTransportDocumentFile(req.user!.school_id, driver.id, file_base64, file_name)
+      const { error: uploadErr } = await supabase.storage.from('transport-documents').upload(filePath, buffer, { contentType: mime_type ?? 'application/pdf', upsert: false })
+      if (uploadErr) return res.status(400).json({ success: false, error: uploadErr.message })
+      const { data: urlData } = supabase.storage.from('transport-documents').getPublicUrl(filePath)
+      fileFields = { file_url: urlData.publicUrl, file_size: fileSize, mime_type: mime_type ?? '' }
+    }
+
+    const { data, error } = await supabase.from('driver_documents').insert({ driver_id: driver.id, ...fields, ...fileFields }).select('*').single()
     if (error) return res.status(500).json({ success: false, error: error.message })
     res.json({ success: true, data })
   })
