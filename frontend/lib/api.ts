@@ -1003,6 +1003,22 @@ export const transportApi = {
     update: (id: string, data: any) => api.patch(`/transport/settings/fee-slabs/${id}`, data).then(r => r.data),
     delete: (id: string) => api.delete(`/transport/settings/fee-slabs/${id}`).then(r => r.data),
   },
+  vehicles: {
+    list: () => api.get('/transport/fleet/vehicles').then(r => r.data),
+    create: (data: any) => api.post('/transport/fleet/vehicles', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/transport/fleet/vehicles/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/transport/fleet/vehicles/${id}`).then(r => r.data),
+    addDocument: (id: string, data: any) => api.post(`/transport/fleet/vehicles/${id}/documents`, data).then(r => r.data),
+    deleteDocument: (id: string, docId: string) => api.delete(`/transport/fleet/vehicles/${id}/documents/${docId}`).then(r => r.data),
+  },
+  drivers: {
+    list: () => api.get('/transport/fleet/drivers').then(r => r.data),
+    create: (data: any) => api.post('/transport/fleet/drivers', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/transport/fleet/drivers/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/transport/fleet/drivers/${id}`).then(r => r.data),
+    addDocument: (id: string, data: any) => api.post(`/transport/fleet/drivers/${id}/documents`, data).then(r => r.data),
+    deleteDocument: (id: string, docId: string) => api.delete(`/transport/fleet/drivers/${id}/documents/${docId}`).then(r => r.data),
+  },
 }
 
 export const homeworkApi = {

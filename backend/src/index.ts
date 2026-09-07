@@ -36,6 +36,7 @@ import { runFeeReminders } from './shared/utils/feeReminders'
 import { runDeliveries } from './shared/utils/delivery'
 import { runLeaveAccrual, runLeaveYearEnd } from './shared/utils/leavePolicy'
 import { runHrAlerts } from './shared/utils/hrAlerts'
+import { runTransportComplianceAlerts } from './shared/utils/transportComplianceAlerts'
 import { runAbscondedSweep } from './shared/utils/absconded'
 import { releaseExpiredSeatHolds, processExpiredWaitlistOffers } from './shared/utils/admissionSeatLedger'
 import { runExamAutoStart } from './shared/utils/examAutoStart'
@@ -277,6 +278,17 @@ cron.schedule('15 8 * * *', () => {
   runAbscondedSweep()
     .then(result => console.log(`[absconded] flagged:${result.flagged} auto-set:${result.autoSet}`))
     .catch(err => console.error('[absconded] failed:', err))
+})
+
+// Daily transport compliance sweep (vehicle/driver documents expiring
+// within each school's own configured lead time), 8:30 AM server time
+// (just after the absconded sweep), across every school. POST
+// /transport/fleet/compliance-alerts/run is the per-school manual
+// equivalent.
+cron.schedule('30 8 * * *', () => {
+  runTransportComplianceAlerts()
+    .then(result => console.log(`[transport-compliance] vehicle-docs:${result.vehicleDocsNotified} driver-docs:${result.driverDocsNotified}`))
+    .catch(err => console.error('[transport-compliance] failed:', err))
 })
 
 // Daily exam auto-start sweep, 00:05 server time (just after midnight),
