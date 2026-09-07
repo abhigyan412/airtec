@@ -41,6 +41,20 @@ interface CreateNotificationParams {
   link?: string
   relatedEntityType?: string
   relatedEntityId?: string
+  /**
+   * Opt out of the once-per-entity-per-day dedupe below.
+   *
+   * Set this for anything a person triggers by acting on the entity, as
+   * opposed to a cron tick reporting on it. Assigning cover, cancelling
+   * it and assigning it again is three real events about one arrangement
+   * on one day, and the teacher has to hear all three — the dedupe
+   * swallowed the third, so somebody re-assigned to a period they had
+   * just been stood down from was never told they were back on it.
+   *
+   * Cron-driven notifications leave this alone: their whole safety
+   * property is that re-running a tick does not spam the same alert.
+   */
+  repeatable?: boolean
 }
 
 export async function createNotification(params: CreateNotificationParams) {
@@ -85,7 +99,15 @@ async function writeNotifications(
   // When tied to a specific entity (an invoice, a homework post, ...),
   // dedupe against the same user/type/entity/day so re-running a cron
   // tick or an accidental double-submit doesn't spam the same alert.
-  const { data, error } = params.relatedEntityId
+  //
+  // `repeatable` turns that off for state transitions a person drives,
+  // where a second notification about the same entity on the same day is
+  // a second real event rather than a repeat of the first. The cost is
+  // that a genuine double-submit now notifies twice; being told twice
+  // that you are covering period 8 is a far smaller failure than not
+  // being told at all.
+  const dedupe = !!params.relatedEntityId && !params.repeatable
+  const { data, error } = dedupe
     ? await supabase.from('notifications')
         .upsert(rows, { onConflict: 'user_id,type,related_entity_id,notification_date', ignoreDuplicates: true })
         .select()

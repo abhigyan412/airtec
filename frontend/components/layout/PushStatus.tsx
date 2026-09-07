@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button'
 
 export function PushStatus({ app }: { app: 'staff' | 'family' }) {
   const {
-    ready, blocker, subscribed, serverKnown, canEnable, busy, error,
+    ready, blocker, subscribed, serverKnown, transportDown, canEnable, busy, error,
     subscribe, unsubscribe, sendTest,
   } = usePushSubscription(app)
 
@@ -33,7 +33,19 @@ export function PushStatus({ app }: { app: 'staff' | 'family' }) {
   // skipped. refresh() tries to repair this automatically; if it is still
   // false here, the repair itself failed.
   const brokenSync = subscribed && serverKnown === false
-  const on = subscribed && !brokenSync
+  // Registered fine, and still unreachable: the server has no transport
+  // for this kind of device. Reads as "Not working" rather than "On",
+  // because "On" here would be the same lie that hid a phone receiving
+  // nothing for two days.
+  const unreachable = subscribed && !brokenSync && transportDown
+  const on = subscribed && !brokenSync && !unreachable
+
+  // The diagnostics page is a raw dump — bridge flags, JSON, and buttons
+  // that poke the OS. It is the right thing to reach for when push is
+  // misbehaving and the wrong thing to dangle in front of a school
+  // secretary whose notifications work. So it appears only when there is
+  // something for it to explain.
+  const somethingWrong = (!!blocked && !canEnable) || brokenSync || unreachable
 
   const handleTest = async () => {
     const { delivered, reason, partial } = await sendTest()
@@ -56,22 +68,25 @@ export function PushStatus({ app }: { app: 'staff' | 'family' }) {
         {/* A wall you can walk back from is not "Unavailable" — it is
             just off. Saying otherwise next to a working Turn on button
             contradicts itself, and the red triangle overstates it. */}
-        <StatusIcon on={on} blocked={(!!blocked && !canEnable) || brokenSync} />
+        <StatusIcon on={on} blocked={somethingWrong} />
         <p className="flex-1 text-xs font-semibold text-foreground">Push on this device</p>
         <span className={cn('text-[11px] font-semibold',
-          on ? 'text-success' : (blocked && !canEnable) || brokenSync ? 'text-destructive' : 'text-muted-foreground')}>
-          {on ? 'On' : blocked && !canEnable ? 'Unavailable' : brokenSync ? 'Not working' : 'Off'}
+          on ? 'text-success' : somethingWrong ? 'text-destructive' : 'text-muted-foreground')}>
+          {on ? 'On' : blocked && !canEnable ? 'Unavailable' : somethingWrong ? 'Not working' : 'Off'}
         </span>
         {/* The only way into the diagnostics page from inside the wrapped
-            app, which has no address bar. It was shown only when a
-            blocker was set — so the moment push reported "On" while
-            notifications still weren't appearing, the one page that could
-            explain it became unreachable. "On" is not the same as
-            working, so it is always here now. */}
-        <a href="/push-debug" title="Push diagnostics" aria-label="Push diagnostics"
-          className="text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground">
-          ?
-        </a>
+            app, which has no address bar — so it has to be reachable
+            whenever push is not working, including the case where the
+            app reports "On". It is hidden while everything is healthy:
+            this row is on a real school's screen, and a link to a JSON
+            dump is not something to offer somebody whose notifications
+            are simply working. */}
+        {somethingWrong && (
+          <a href="/push-debug" title="Push diagnostics" aria-label="Push diagnostics"
+            className="text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground">
+            ?
+          </a>
+        )}
       </div>
 
       {blocked && (
@@ -85,6 +100,13 @@ export function PushStatus({ app }: { app: 'staff' | 'family' }) {
         <p className="mt-1.5 pl-[26px] text-[11px] leading-relaxed text-muted-foreground">
           This browser is subscribed but the server has no record of it, so nothing is being sent.
           Turn it off and on again to re-register.
+        </p>
+      )}
+
+      {unreachable && (
+        <p className="mt-1.5 pl-[26px] text-[11px] leading-relaxed text-muted-foreground">
+          This device is registered, but the server has no way to send to it yet. Nothing you can
+          fix from here — it needs the push credentials set on the server.
         </p>
       )}
 

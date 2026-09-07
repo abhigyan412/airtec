@@ -92,6 +92,39 @@ describe('notification writes', () => {
       expect(count).toBe(1)
     })
 
+    /**
+     * Assign cover to Nupur, change it to somebody else, then assign it
+     * back to Nupur. Three real instructions about one arrangement on
+     * one day, and the dedupe swallowed the third — so a teacher who had
+     * just been told "cover cancelled" was put back on the period and
+     * never heard about it. `repeatable` is what the arrangement call
+     * sites pass to opt out.
+     */
+    it('repeats a notification about the same entity when the caller asks it to', async () => {
+      const relatedEntityId = crypto.randomUUID()
+      const assign = () => createNotification({
+        ...params(), userId: userA, relatedEntityId,
+        relatedEntityType: 'arrangement', repeatable: true,
+      })
+      const first = await assign()
+      const again = await assign()
+      expect(first.count).toBe(1)
+      expect(again.count).toBe(1)
+      expect(first.ids[0]).not.toBe(again.ids[0])
+      const { count } = await sb.from('notifications')
+        .select('id', { count: 'exact', head: true }).eq('user_id', userA)
+      expect(count).toBe(2)
+    })
+
+    it('still dedupes by default, so a cron re-run cannot spam', async () => {
+      // The guard for the opposite mistake: `repeatable` must be opt-in,
+      // or every digest notification starts repeating every tick.
+      const relatedEntityId = crypto.randomUUID()
+      await createNotification({ ...params(), userId: userA, relatedEntityId, relatedEntityType: 'arrangement' })
+      const second = await createNotification({ ...params(), userId: userA, relatedEntityId, relatedEntityType: 'arrangement' })
+      expect(second.count).toBe(0)
+    })
+
     it('does not dedupe when there is no related entity', async () => {
       await createNotification({ ...params(), userId: userA })
       await createNotification({ ...params(), userId: userA })
