@@ -126,9 +126,10 @@ const NAV: NavItem[] = [
     module: 'transport',
     icon: Bus,
     children: [
-      // Trips & Boarding/Live Map land here as each ships.
+      // Live Map lands here once it ships.
       { label: 'Fleet', href: '/transport/fleet', icon: Truck, permission: 'transport.view' },
       { label: 'Routes & Stops', href: '/transport/routes', icon: RouteIcon, permission: 'transport.view' },
+      { label: 'Trips & Boarding', href: '/transport/trips', icon: CalendarClock, permission: 'transport.view' },
       { label: 'Settings', href: '/transport/settings', icon: SettingsIcon, permission: 'transport.view' },
     ],
   },

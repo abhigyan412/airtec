@@ -1039,6 +1039,14 @@ export const transportApi = {
     set: (studentId: string, data: any) => api.post(`/transport/network/students/${studentId}/assignment`, data).then(r => r.data),
     clear: (studentId: string) => api.delete(`/transport/network/students/${studentId}/assignment`).then(r => r.data),
   },
+  trips: {
+    list: (date: string) => api.get('/transport/trips', { params: { date } }).then(r => r.data),
+    schedule: (data: any) => api.post('/transport/trips', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/transport/trips/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/transport/trips/${id}`).then(r => r.data),
+    roster: (id: string) => api.get(`/transport/trips/${id}/roster`).then(r => r.data),
+    markBoarding: (id: string, data: any) => api.post(`/transport/trips/${id}/boarding`, data).then(r => r.data),
+  },
 }
 
 export const homeworkApi = {
