@@ -66,6 +66,18 @@ export type PushState = {
    * subscribed, the server has nothing, and every push is skipped.
    */
   serverKnown: boolean | null
+  /**
+   * The server cannot reach this KIND of device at all, because the
+   * transport it needs is unconfigured there.
+   *
+   * Distinct from `serverKnown`, which is about whether the server has a
+   * row for this device. It can have the row, report the subscription as
+   * healthy, and still never deliver — which is precisely what happened
+   * when the OneSignal credentials were missing from the deployed
+   * container: the phone was registered, the app said "On", and every
+   * notification went to a laptop instead.
+   */
+  transportDown: boolean
   /** The one reason push cannot be switched on right now, if there is one. */
   blocker: PushBlocker
   /** Back-compat alias for `blocker === 'ios-needs-install'`. */
@@ -154,7 +166,7 @@ const resynced = new Set<string>()
 
 const INITIAL: PushState = {
   transport: 'webpush',
-  supported: false, permission: 'unsupported', subscribed: false, serverKnown: null,
+  supported: false, permission: 'unsupported', subscribed: false, serverKnown: null, transportDown: false,
   blocker: 'none', needsHomeScreenInstall: false, shouldOffer: false,
   canEnable: false, busy: false, error: null, ready: false,
 }
@@ -181,9 +193,18 @@ export function usePushSubscription(app: 'staff' | 'family') {
   const reconcile = useCallback(async (
     endpoint: string,
     register: () => Promise<void>,
+    /** Which transport this device needs the server to have configured. */
+    transport: 'onesignal' | 'webpush',
   ): Promise<boolean | null> => {
     try {
       const { data } = await api.get('/notifications/push/subscriptions', { params: { endpoint } })
+      // Whether the server can reach this kind of device at all. Asked
+      // here because this is already the one place that talks to the
+      // endpoint reporting it.
+      const providers = data?.data?.providers ?? {}
+      if (alive.current) {
+        setState(s => ({ ...s, transportDown: providers[transport] === false }))
+      }
       let known: boolean = !!data?.data?.thisDevice
       if (!known && !resynced.has(endpoint)) {
         resynced.add(endpoint)
@@ -254,7 +275,7 @@ export function usePushSubscription(app: 'staff' | 'family') {
       }
       const known = await reconcile(deviceId, () =>
         api.post('/notifications/push/subscribe', { provider: 'onesignal', subscriptionId: deviceId, app })
-          .then(() => undefined))
+          .then(() => undefined), 'onesignal')
       if (alive.current) setState(s => ({ ...s, serverKnown: known }))
       return
     }
@@ -274,7 +295,7 @@ export function usePushSubscription(app: 'staff' | 'family') {
       if (!alive.current) return
       setState(s => ({
         ...s, transport: 'webpush',
-        supported: false, permission: 'unsupported', subscribed: false, serverKnown: null,
+        supported: false, permission: 'unsupported', subscribed: false, serverKnown: null, transportDown: false,
         blocker, needsHomeScreenInstall: blocker === 'ios-needs-install',
         canEnable: false, ready: true,
         // Worth telling an iPhone user how to enable this; pointless on a
@@ -312,7 +333,7 @@ export function usePushSubscription(app: 'staff' | 'family') {
 
     const known = await reconcile(subscription.endpoint, () =>
       api.post('/notifications/push/subscribe', { subscription: subscription!.toJSON(), app })
-        .then(() => undefined))
+        .then(() => undefined), 'webpush')
     if (alive.current) setState(s => ({ ...s, serverKnown: known }))
   }, [app, reconcile])
 
@@ -455,7 +476,18 @@ export function usePushSubscription(app: 'staff' | 'family') {
    * succeeded — the endpoint reports the delivery row's own status, so a
    * push that was skipped comes back as `delivered: false` with a reason.
    */
-  const sendTest = useCallback(async (): Promise<{ delivered: boolean; reason: string | null }> => {
+  const sendTest = useCallback(async (): Promise<{
+    delivered: boolean
+    reason: string | null
+    /**
+     * Set when the push reached some of this account's devices and not
+     * others — typically a browser succeeding while a phone could not be
+     * reached at all. `delivered` is true in that case, so reporting it
+     * as a plain success is what let a laptop vouch for a phone that
+     * received nothing.
+     */
+    partial: string | null
+  }> => {
     setState(s => ({ ...s, busy: true, error: null }))
     try {
       // Whoever taps this is looking at the app, so the notification is
@@ -467,11 +499,15 @@ export function usePushSubscription(app: 'staff' | 'family') {
       const { data } = await api.post('/notifications/test-push')
       const result = data?.data ?? {}
       setState(s => ({ ...s, busy: false }))
-      return { delivered: !!result.delivered, reason: result.reason ?? null }
+      return {
+        delivered: !!result.delivered,
+        reason: result.reason ?? null,
+        partial: result.partial ?? null,
+      }
     } catch (err: any) {
       const reason = messageFor(err, 'The test notification could not be sent')
       setState(s => ({ ...s, busy: false, error: reason }))
-      return { delivered: false, reason }
+      return { delivered: false, reason, partial: null }
     }
   }, [])
 

@@ -82,6 +82,64 @@ This creates the school + admin user + seeds default data (classes 1–12, 4 hou
 
 ---
 
+## Deployment (Dokploy / Docker Compose)
+
+`docker-compose.yml` is the single deployment definition — three services:
+the backend API, the staff admin app, and the parent/student family portal.
+Both web apps proxy `/api/*` to the backend over the internal Docker network,
+so the backend needs no public domain and there is no CORS to configure.
+
+### Local
+
+```bash
+cp .env.example .env      # fill in Supabase keys at minimum
+docker compose up --build
+```
+
+- staff  → `http://localhost:${WEB_HOST_PORT:-3010}`
+- portal → `http://localhost:${PORTAL_HOST_PORT:-3011}`
+
+Host ports are loopback-bound and default to 3010/3011/4010 rather than
+3000/3001/4000, so they don't collide with another app on a shared host. If
+the port you pick is already taken the container fails to start with
+`port is already allocated`.
+
+### Dokploy
+
+1. Create a **Compose** application pointing at this repo.
+2. Paste the variables from `.env.example` into the **Environment** tab.
+3. Assign a domain to **each** web app, targeting its container port:
+   - staff admin → `frontend`, container port `3000`
+   - family portal → `portal`, container port `3001`
+
+The public domain is independent of the host ports above: Traefik routes the
+domain straight to the container port.
+
+> **Adding a new environment variable takes two edits, not one.** Compose
+> passes into a container only what that service's `environment:` block names.
+> A variable set in Dokploy's Environment tab but missing from
+> `docker-compose.yml` arrives as `undefined`, and the failure is usually
+> silent — this is exactly how OneSignal push was dead in production for two
+> days while the app reported push as working. Add every new variable to the
+> `environment:` block **and** to `.env.example`.
+
+Anything baked in at *build* time (`NEXT_PUBLIC_*`, `BACKEND_URL`) is passed
+as a compose `build.args` entry instead, and changing it needs a rebuild, not
+just a restart.
+
+### Crons
+
+Every scheduled job is in-process (`cron.schedule` in `backend/src/index.ts`):
+the delivery outbox every minute, fee reminders at 07:00 IST, HR alerts and the
+timetable sweeps at 08:00. The backend container runs with
+`restart: unless-stopped`, so it stays up and they keep their schedule — that
+is a deployment requirement, not an incidental detail. On a host that spins the
+service down when idle, none of them fire, and the authenticated
+`POST /api/notifications/run-deliveries` and `run-fee-reminders` endpoints exist
+as the fallback for that case.
+
+---
+
 ## API Reference
 
 ### Auth

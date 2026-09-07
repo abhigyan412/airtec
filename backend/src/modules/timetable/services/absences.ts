@@ -358,6 +358,7 @@ export async function cancelAbsence(
       message: `${teacherName} is back — the cover you were given for ${absence.absence_date} is no longer needed.`,
       link: '/timetable/my-week',
       relatedEntityType: 'teacher_absence', relatedEntityId: absenceId,
+      repeatable: true,
     })
   }
 
@@ -377,6 +378,7 @@ export async function cancelAbsence(
       } on ${absence.absence_date}.`,
       link: '/timetable/my-week',
       relatedEntityType: 'teacher_absence', relatedEntityId: absenceId,
+      repeatable: true,
     })
   }
 
@@ -390,6 +392,7 @@ export async function cancelAbsence(
       }. ${reason || ''}`.trim(),
       link: `/timetable/arrangements?date=${absence.absence_date}`,
       relatedEntityType: 'teacher_absence', relatedEntityId: absenceId,
+      repeatable: true,
     })
   }
 

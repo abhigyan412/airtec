@@ -63,13 +63,17 @@ due/overdue sweep (`shared/utils/feeReminders.ts:54`).
    picking type/title/message/link from *parallel arrays by index*, producing rows
    like a `fee_due` notification titled "Attendance alert" linking to
    `/hr/my-leave`; templates now travel as units and are chosen by recipient role.
-3. **The daily cron likely never fires in production — still open, and this is
-   the one that blocks everything else.** `render.yaml:6` uses Render's
-   `plan: free`, which spins the service down when idle; `cron.schedule('0 7 * * *')`
-   at `index.ts:113` is in-process, so a sleeping service has no process to run
-   it. The code comment anticipates this and offers
-   `POST /notifications/run-fee-reminders` as a manual fallback. Worth confirming
-   whether fee reminders have *ever* run unattended.
+3. **The daily cron does fire in production — closed by the move to Dokploy.**
+   This was open while the backend ran on a free plan that spins the service
+   down when idle: every `cron.schedule(...)` in `index.ts` is in-process, and a
+   sleeping service has no process to run one. The Compose deployment runs the
+   backend container with `restart: unless-stopped`, so it is always up and the
+   crons keep their schedule. Confirmed against production notification rows:
+   `fee_overdue` lands ~01:30 UTC (the `0 7 * * *` reminder at 07:00 IST),
+   `absence_detected` and `arrangement_unfilled` at ~01:33 and 02:30 UTC, and
+   delivery rows settle seconds after insert (the `* * * * *` outbox tick).
+   `POST /notifications/run-fee-reminders` and `POST /notifications/run-deliveries`
+   remain as manual fallbacks, but nothing depends on them.
 
    Promoted out of this list into Phase 1 (§8): the delivery worker in §5.2 is
    scheduled exactly the same way, so it inherits the defect wholesale. Building
@@ -337,8 +341,10 @@ Added to `backend/src/modules/notifications/routes.ts`, all behind the existing
 | `GET /notifications/vapid-public-key` | Public key for `pushManager.subscribe()`. Public value, but keep it behind auth for symmetry. |
 
 New env vars: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`. Add to
-`render.yaml` with `sync: false` and to `docker-compose.yml`'s backend
-`environment` block, matching how the Supabase keys are handled.
+`docker-compose.yml`'s backend `environment` block and to `.env.example`,
+matching how the Supabase keys are handled. Setting a variable in Dokploy's
+Environment tab is not enough on its own — Compose passes through only what that
+block names, and an unnamed key reaches the container undefined.
 
 ### 5.4 Fix the links — done (`dd08890`)
 
@@ -484,14 +490,14 @@ need to scale separately from the API. A single school's attendance and fee
 notifications are nowhere near that. If volume grows, the worker's claim query is
 the seam to swap — nothing else changes.
 
-**The scheduling problem is real and must be solved regardless.** Both the
-existing fee cron and the new delivery worker are in-process, and Render's free
-plan spins the service down when idle. Options, in order of preference:
-
-1. Move the backend off the free plan. Simplest, and the fee cron starts working
-   too.
-2. Keep the crons but drive them from an external scheduler (GitHub Actions,
-   cron-job.org) hitting authenticated trigger endpoints. Works on free tier.
+**The scheduling problem was real and is now solved by the deployment.** Both
+the existing fee cron and the delivery worker are in-process, so they need a
+process that stays alive. That was the objection to a host which spins the
+service down when idle; the Compose deployment keeps the backend container up
+(`restart: unless-stopped`), and the crons have been observed firing on schedule
+in production. If the backend ever moves to a host that sleeps, the fallback is
+to drive the crons from an external scheduler (GitHub Actions, cron-job.org)
+hitting the authenticated trigger endpoints, which exist for exactly that.
 3. Supabase `pg_cron` calling a database function. Removes the Node dependency
    entirely but splits logic across two languages.
 

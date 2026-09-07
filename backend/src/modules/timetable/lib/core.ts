@@ -122,6 +122,12 @@ interface NotifyParams {
   link?: string
   relatedEntityType?: string
   relatedEntityId?: string
+  /**
+   * For notifications a person triggers, which must fire every time even
+   * when an earlier one about the same arrangement went out today. See
+   * CreateNotificationParams.repeatable.
+   */
+  repeatable?: boolean
 }
 
 export async function notify(params: NotifyParams): Promise<number> {
@@ -135,6 +141,7 @@ export async function notify(params: NotifyParams): Promise<number> {
     link: params.link,
     relatedEntityType: params.relatedEntityType,
     relatedEntityId: params.relatedEntityId,
+    repeatable: params.repeatable,
   })
   return count
 }

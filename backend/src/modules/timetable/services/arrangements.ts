@@ -548,6 +548,7 @@ export async function assignSubstitute(
       title: 'Your reserved period has been taken for cover',
       message: `${label(arrangement)} on ${DAY_NAMES[arrangement.day_of_week]} needed cover. Reason given: ${options.overrideReason ?? 'cover required'}.`,
       link: '/timetable/my-week', relatedEntityType: 'arrangement', relatedEntityId: arrangementId,
+      repeatable: true,
     })
   }
 
@@ -556,6 +557,9 @@ export async function assignSubstitute(
     title: `You are covering ${label(arrangement)}`,
     message: `Period ${arrangement.period_number} (${formatTime(arrangement.start_time)}) on ${prettyDate(arrangement.arrangement_date)}, standing in for a colleague. Please acknowledge.`,
     link: '/timetable/my-week', relatedEntityType: 'arrangement', relatedEntityId: arrangementId,
+    // Re-assigning the same teacher to the same period on the same day
+    // is a new instruction, not a repeat of the old one.
+    repeatable: true,
   })
 
   await audit(schoolId, actorId, 'assign', 'arrangement', arrangementId, {
@@ -586,6 +590,7 @@ export async function unassign(schoolId: string, actorId: string, arrangementId:
       title: 'Cover cancelled',
       message: `You are no longer needed for ${label(arrangement)}, period ${arrangement.period_number} on ${prettyDate(arrangement.arrangement_date)}.`,
       link: '/timetable/my-week', relatedEntityType: 'arrangement', relatedEntityId: arrangementId,
+      repeatable: true,
     })
   }
   await audit(schoolId, actorId, 'unassign', 'arrangement', arrangementId, { previous_substitute: previous })
@@ -641,6 +646,7 @@ export async function decline(schoolId: string, actorId: string, arrangementId: 
     message: `${label(arrangement)} period ${arrangement.period_number} on ${prettyDate(arrangement.arrangement_date)} was declined: ${reason}`,
     link: `/timetable/arrangements?date=${arrangement.arrangement_date}`,
     relatedEntityType: 'arrangement', relatedEntityId: arrangementId,
+    repeatable: true,
   })
 
   await audit(schoolId, actorId, 'decline', 'arrangement', arrangementId, { reason })
@@ -697,6 +703,7 @@ export async function cancelArrangement(
     message: `${label(arrangement)} period ${arrangement.period_number} on ${prettyDate(arrangement.arrangement_date)} — the class teacher is back. ${reason}`,
     link: `/timetable/arrangements?date=${arrangement.arrangement_date}`,
     relatedEntityType: 'arrangement', relatedEntityId: arrangementId,
+    repeatable: true,
   })
 
   await audit(schoolId, actorId, 'cancel', 'arrangement', arrangementId, { reason, by_absent_teacher: isAbsentTeacher })

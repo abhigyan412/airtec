@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/shared/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PushPrompt } from './PushPrompt'
 import { PushStatus } from './PushStatus'
+import { useNotificationToasts } from '@/lib/useNotificationToasts'
 
 function timeAgo(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime()
@@ -27,6 +28,11 @@ export function NotificationBell({ variant = 'dark' }: { variant?: 'dark' | 'lig
   const panelRef = useRef<HTMLDivElement>(null)
   const qc = useQueryClient()
   const router = useRouter()
+
+  // Announce anything that arrives while the app is open. Lives here
+  // because the bell is mounted in the header on every authenticated
+  // page, which is exactly the lifetime this needs.
+  useNotificationToasts()
 
   const { data: unread } = useQuery({
     queryKey: ['notifications-unread-count'],
