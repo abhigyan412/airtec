@@ -106,14 +106,27 @@ async function fail(row: any, message: string) {
  * push, a phone running the Median app on OneSignal — so this fans out
  * per provider and succeeds if any device was reached.
  */
-async function deliverPush(row: any, notification: any): Promise<boolean> {
+/**
+ * What one push delivery actually achieved, per transport.
+ *
+ * `partial` is the whole point. A user's devices can span both
+ * transports, so "delivered" and "delivered everywhere" are different
+ * facts, and a row that records only the first one is how a dead
+ * transport hides behind a healthy one.
+ */
+type PushResult = { delivered: boolean; partial: string | null }
+
+async function deliverPush(row: any, notification: any): Promise<PushResult> {
   const { data: subs } = await supabase
     .from('push_subscriptions')
     .select('*')
     .eq('user_id', notification.user_id)
     .is('failed_at', null)
 
-  if (!subs?.length) { await settle(row.id, { status: 'skipped', last_error: 'no active subscription' }); return false }
+  if (!subs?.length) {
+    await settle(row.id, { status: 'skipped', last_error: 'no active subscription' })
+    return { delivered: false, partial: null }
+  }
 
   const web = subs.filter((s: any) => s.provider !== 'onesignal')
   const native = subs.filter((s: any) => s.provider === 'onesignal')
@@ -132,31 +145,46 @@ async function deliverPush(row: any, notification: any): Promise<boolean> {
   const errors: string[] = []
   const notes: string[] = []
 
-  const absorb = (r: FanOut) => {
+  // Labelled, because "which transport" is the first thing anybody
+  // debugging this needs and the hardest thing to recover afterwards.
+  const absorb = (label: string, r: FanOut) => {
     delivered += r.delivered; expired += r.expired
-    errors.push(...r.errors)
-    if (r.note) notes.push(r.note)
+    errors.push(...r.errors.map(e => `${label}: ${e}`))
+    if (r.note) notes.push(`${label}: ${r.note}`)
   }
 
   if (web.length) {
-    if (!webPushConfigured()) errors.push('VAPID keys not configured')
-    else if (configureVapid()) absorb(await sendWebPush(web, payload))
+    if (!webPushConfigured()) errors.push(`web push: VAPID keys not configured (${web.length} device(s) skipped)`)
+    else if (configureVapid()) absorb('web push', await sendWebPush(web, payload))
   }
 
   if (native.length) {
-    if (!oneSignalConfigured()) errors.push('OneSignal is not configured')
-    else absorb(await sendOneSignal(native, payload))
+    if (!oneSignalConfigured()) errors.push(`onesignal: not configured (${native.length} device(s) skipped)`)
+    else absorb('onesignal', await sendOneSignal(native, payload))
   }
 
-  if (delivered) { await settle(row.id, { status: 'sent', sent_at: new Date().toISOString() }); return true }
-  if (errors.length) { await fail(row, errors.join('; ')); return false }
+  if (delivered) {
+    // At least one device has it, so the notification is not lost and
+    // must not be re-sent: a delivery row covers a channel, not a
+    // device, so retrying would push again to whichever transport just
+    // succeeded. The row is `sent` — but any transport that failed is
+    // written down rather than discarded, because the alternative is a
+    // row that reads as a clean success while a whole class of device
+    // (every phone in the Median wrapper, say) silently receives
+    // nothing. `last_error` is cleared on a clean send so a stale note
+    // from an earlier attempt cannot masquerade as a current one.
+    const partial = [...errors, ...notes].join('; ') || null
+    await settle(row.id, { status: 'sent', sent_at: new Date().toISOString(), last_error: partial })
+    return { delivered: true, partial }
+  }
+  if (errors.length) { await fail(row, errors.join('; ')); return { delivered: false, partial: null } }
   // Every subscription was expired — nothing to retry.
   if (expired) {
     await settle(row.id, { status: 'skipped', last_error: notes[0] ?? 'all subscriptions expired' })
-    return false
+    return { delivered: false, partial: null }
   }
   await settle(row.id, { status: 'skipped', last_error: 'no active subscription' })
-  return false
+  return { delivered: false, partial: null }
 }
 
 type FanOut = {
@@ -315,33 +343,45 @@ async function deliverEmail(row: any, _notification: any): Promise<boolean> {
  * `sent` counts deliveries that actually reached a provider, not rows
  * taken off the queue — a batch that is entirely skipped reports 0.
  */
-export async function runDeliveries(batchSize = 100): Promise<{ claimed: number; sent: number }> {
+export async function runDeliveries(
+  batchSize = 100,
+): Promise<{ claimed: number; sent: number; partial: number }> {
   // Return anything a previous crash stranded mid-flight.
   await supabase.rpc('requeue_stale_deliveries', { older_than: '5 minutes' })
 
   const { data: claimed, error } = await supabase.rpc('claim_pending_deliveries', { batch_size: batchSize })
-  if (error) { console.error('[delivery] claim failed:', error.message); return { claimed: 0, sent: 0 } }
+  if (error) { console.error('[delivery] claim failed:', error.message); return { claimed: 0, sent: 0, partial: 0 } }
   const rows = (claimed ?? []) as any[]
-  if (!rows.length) return { claimed: 0, sent: 0 }
+  if (!rows.length) return { claimed: 0, sent: 0, partial: 0 }
 
   const ids = [...new Set(rows.map(r => r.notification_id))]
   const { data: notifications } = await supabase.from('notifications').select('*').in('id', ids)
   const byId = new Map((notifications ?? []).map((n: any) => [n.id, n]))
 
   let sent = 0
+  let partial = 0
   for (const row of rows) {
     const notification = byId.get(row.notification_id)
     if (!notification) { await settle(row.id, { status: 'skipped', last_error: 'notification deleted' }); continue }
     try {
-      const ok = row.channel === 'push'
-        ? await deliverPush(row, notification)
-        : await deliverEmail(row, notification)
-      if (ok) sent++
+      if (row.channel === 'push') {
+        const result = await deliverPush(row, notification)
+        if (result.delivered) sent++
+        if (result.partial) {
+          partial++
+          // Logged, not just stored: a transport that is down for
+          // everyone shows up here on the first tick instead of waiting
+          // for somebody to notice they stopped getting notifications.
+          console.warn(`[delivery] partial push for ${row.notification_id}: ${result.partial}`)
+        }
+      } else if (await deliverEmail(row, notification)) {
+        sent++
+      }
     } catch (err: any) {
       await fail(row, err?.message ?? 'unknown error')
     }
   }
-  return { claimed: rows.length, sent }
+  return { claimed: rows.length, sent, partial }
 }
 
 /** Fire-and-forget nudge so the common case doesn't wait for the next tick. */

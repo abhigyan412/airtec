@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { oneSignalInfo } from '@/lib/median'
+import { API_BASE } from '@/lib/api'
 
 // ── Push diagnostics ────────────────────────────────────────────────
 //
@@ -15,6 +16,17 @@ import { oneSignalInfo } from '@/lib/median'
 // deduce. Safe to leave in place — it reads state and reports it, and
 // the only button that changes anything is the one that asks the OS for
 // notification permission.
+//
+// The server half matters just as much. A device can register perfectly,
+// report a healthy bridge, and still never receive anything because the
+// transport it needs is unconfigured on the server — which is exactly
+// what happened for two days, and which nothing on this page could see
+// while it only read the bridge. `providers` and `everReached` below are
+// the two values that answer it.
+//
+// Fetched with plain fetch, not the shared api client: that client hard-
+// logs-out on a 401, and a diagnostics page must never bounce the person
+// reading it to the login screen.
 
 type Row = { label: string; value: any }
 
@@ -22,6 +34,8 @@ export default function PushDebug() {
   const [rows, setRows] = useState<Row[]>([])
   const [raw, setRaw] = useState<string>('(not read yet)')
   const [normalised, setNormalised] = useState<string>('(not read yet)')
+  const [server, setServer] = useState<any>(null)
+  const [serverText, setServerText] = useState<string>('(not read yet)')
   const [log, setLog] = useState<string[]>([])
 
   const say = (m: string) => setLog(l => [...l, `${new Date().toISOString().slice(11, 19)}  ${m}`])
@@ -58,6 +72,26 @@ export default function PushDebug() {
     } catch (e: any) {
       setNormalised('threw: ' + (e?.message ?? String(e)))
     }
+
+    // What the SERVER believes about this account's devices.
+    try {
+      const token = localStorage.getItem('airtec_token')
+      const res = await fetch(`${API_BASE}/notifications/push/subscriptions`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) {
+        setServer(null)
+        setServerText(`HTTP ${res.status}: ${body?.error ?? 'request failed'}`
+          + (res.status === 401 ? ' — sign in first, then re-read.' : ''))
+      } else {
+        setServer(body?.data ?? null)
+        setServerText(JSON.stringify(body?.data, null, 2) ?? 'null')
+      }
+    } catch (e: any) {
+      setServer(null)
+      setServerText('threw: ' + (e?.message ?? String(e)))
+    }
   }, [])
 
   useEffect(() => {
@@ -73,7 +107,7 @@ export default function PushDebug() {
     await probe()
   }
 
-  const all = `--- flags ---\n${rows.map(r => `${r.label}: ${r.value}`).join('\n')}\n\n--- raw oneSignalInfo ---\n${raw}\n\n--- normalised ---\n${normalised}\n\n--- log ---\n${log.join('\n')}`
+  const all = `--- flags ---\n${rows.map(r => `${r.label}: ${r.value}`).join('\n')}\n\n--- raw oneSignalInfo ---\n${raw}\n\n--- normalised ---\n${normalised}\n\n--- server ---\n${serverText}\n\n--- log ---\n${log.join('\n')}`
 
   return (
     <div style={{ padding: 16, fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12, lineHeight: 1.5 }}>
@@ -100,6 +134,53 @@ export default function PushDebug() {
         </table>
       </Section>
 
+      <Section title="Server — can this account actually be reached?">
+        {server ? (
+          <>
+            <table style={{ borderCollapse: 'collapse', width: '100%', marginBottom: 8 }}>
+              <tbody>
+                <tr>
+                  <td style={{ padding: '2px 8px 2px 0', opacity: 0.7, whiteSpace: 'nowrap' }}>transports configured</td>
+                  <td style={{ padding: '2px 0', fontWeight: 600 }}>
+                    web push: <Verdict ok={!!server.providers?.webpush} />
+                    {'   '}onesignal: <Verdict ok={!!server.providers?.onesignal} />
+                  </td>
+                </tr>
+                <tr>
+                  <td style={{ padding: '2px 8px 2px 0', opacity: 0.7, whiteSpace: 'nowrap' }}>devices the server knows</td>
+                  <td style={{ padding: '2px 0', fontWeight: 600 }}>{server.active ?? 0}</td>
+                </tr>
+              </tbody>
+            </table>
+            {(server.devices ?? []).map((d: any) => (
+              <div key={d.id} style={{ marginBottom: 6, paddingLeft: 8, borderLeft: '2px solid #d4d4d8' }}>
+                <div style={{ fontWeight: 700 }}>{d.provider}</div>
+                <div>reachable: <Verdict ok={!!d.reachable} /></div>
+                {/* The single comparison that exposed a phone silently
+                    receiving nothing while every delivery said "sent". */}
+                <div>ever delivered to: <Verdict ok={!!d.everReached} /></div>
+                <div style={{ opacity: 0.7 }}>last used {String(d.last_used_at)}</div>
+                <div style={{ opacity: 0.7, wordBreak: 'break-all' }}>{String(d.user_agent).slice(0, 90)}</div>
+              </div>
+            ))}
+            {(server.unreachable ?? []).length > 0 && (
+              <Pre>{`${server.unreachable.length} registered device(s) can never be reached: `
+                + `${server.unreachable.map((u: any) => u.provider).join(', ')} `
+                + `is not configured on this server. Push will report "sent" if any OTHER `
+                + `device succeeds, so trust this line over a delivery status.`}</Pre>
+            )}
+            {(server.devices ?? []).some((d: any) => d.reachable && !d.everReached) && (
+              <Pre>{'A device is reachable but has never been delivered to. If that persists '
+                + 'after a test push, the send is failing silently rather than being skipped.'}</Pre>
+            )}
+          </>
+        ) : (
+          <Pre>{serverText}</Pre>
+        )}
+      </Section>
+
+      <Section title="Server — raw"><Pre>{serverText}</Pre></Section>
+
       <Section title="Raw oneSignalInfo() — what the app actually reports"><Pre>{raw}</Pre></Section>
       <Section title="Normalised by median.ts"><Pre>{normalised}</Pre></Section>
       <Section title="Action log"><Pre>{log.join('\n') || '(nothing yet)'}</Pre></Section>
@@ -114,6 +195,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       {children}
     </div>
   )
+}
+
+function Verdict({ ok }: { ok: boolean }) {
+  return <span style={{ color: ok ? '#15803d' : '#b91c1c', fontWeight: 700 }}>{ok ? 'yes' : 'NO'}</span>
 }
 
 function Pre({ children }: { children: React.ReactNode }) {

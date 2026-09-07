@@ -213,9 +213,23 @@ router.get('/push/subscriptions', asyncHandler(async (req: AuthRequest, res: Res
       // on a server perfectly able to reach their phone.
       configured: webPushConfigured() || oneSignalConfigured(),
       providers: { webpush: webPushConfigured(), onesignal: oneSignalConfigured() },
+      // A device whose provider is unconfigured on this server can never
+      // be reached, however healthy its registration looks.
+      unreachable: subs
+        .filter(s => (s.provider === 'onesignal' ? !oneSignalConfigured() : !webPushConfigured()))
+        .map(s => ({ id: s.id, provider: s.provider ?? 'webpush' })),
       devices: subs.map(s => ({
         id: s.id, app: s.app, provider: s.provider ?? 'webpush', user_agent: s.user_agent,
         last_used_at: s.last_used_at, created_at: s.created_at,
+        // `last_used_at` is stamped at registration and then only on a
+        // real send, so "still equal to created_at" means this device
+        // has never once been delivered to. That single comparison is
+        // what exposed a phone silently receiving nothing for two days
+        // while every delivery row said `sent`.
+        everReached: !!s.last_used_at && !!s.created_at
+          && new Date(s.last_used_at).getTime() > new Date(s.created_at).getTime(),
+        // Cannot be reached at all, whatever the delivery rows claim.
+        reachable: s.provider === 'onesignal' ? oneSignalConfigured() : webPushConfigured(),
       })),
     },
   })
@@ -274,14 +288,27 @@ router.post('/test-push', asyncHandler(async (req: AuthRequest, res: Response) =
 
   const push = ((deliveries ?? []) as any[])[0]
   const delivered = push?.status === 'sent'
+  // `sent` with an error recorded means some devices got it and others
+  // could not be reached. Answering a bare "delivered: true" there is
+  // the exact failure this endpoint exists to catch — it is what let a
+  // laptop's web push vouch for a phone that received nothing.
+  const partial = delivered ? (push?.last_error ?? null) : null
+  // Listed rather than spread: `runDeliveries` also returns a `partial`
+  // COUNT for the whole batch, and letting that share a key with this
+  // delivery's partial-failure TEXT is the kind of collision that reads
+  // fine and means two different things.
   res.json({
     success: true,
     data: {
-      ...result,
+      claimed: result.claimed,
+      sent: result.sent,
       subscriptions: subs,
       delivered,
       status: push?.status ?? 'unknown',
-      reason: delivered ? null : (push?.last_error ?? 'Delivery is still queued; it should arrive shortly.'),
+      partial,
+      reason: delivered
+        ? partial
+        : (push?.last_error ?? 'Delivery is still queued; it should arrive shortly.'),
     },
   })
 }))

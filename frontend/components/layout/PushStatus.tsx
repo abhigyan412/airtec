@@ -36,9 +36,18 @@ export function PushStatus({ app }: { app: 'staff' | 'family' }) {
   const on = subscribed && !brokenSync
 
   const handleTest = async () => {
-    const { delivered, reason } = await sendTest()
-    if (delivered) toast.success('Sent — it should appear on this device now.')
-    else toast.error(reason ?? 'The test notification did not go out.')
+    const { delivered, reason, partial } = await sendTest()
+    // "Delivered" and "delivered everywhere" are different answers, and
+    // a green toast for the second one is how a working laptop hid a
+    // phone that had never received a single push. Say which device
+    // missed out instead.
+    if (delivered && partial) {
+      toast.warning(`Sent, but not to every device — ${partial}`, { duration: 8000 })
+    } else if (delivered) {
+      toast.success('Sent — it should appear on this device now.')
+    } else {
+      toast.error(reason ?? 'The test notification did not go out.')
+    }
   }
 
   return (

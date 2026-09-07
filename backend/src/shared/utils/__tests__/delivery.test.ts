@@ -366,6 +366,67 @@ describe('delivery outbox', () => {
       expect((await deliveriesFor(n.id))[0].status).toBe('sent')
     })
 
+    /**
+     * The regression this suite exists for.
+     *
+     * ONESIGNAL_* went missing from the deployed container's environment
+     * while both keys sat correctly in the deployment dashboard, so
+     * `oneSignalConfigured()` was false in production. Every phone in the
+     * Median wrapper was skipped — and it stayed invisible for two days
+     * because the same users had a laptop on web push: that success
+     * stamped the row `sent`, and the OneSignal message was thrown away
+     * with the rest of the error list.
+     *
+     * A `sent` row is still correct here (the notification reached a
+     * device, and re-sending would double-notify the laptop), so what is
+     * asserted is that the row and the API both keep saying which
+     * transport got nothing.
+     */
+    it.runIf(hasProviderColumn)('records the failed transport when the other one succeeds', async () => {
+      const appId = process.env.ONESIGNAL_APP_ID
+      const restKey = process.env.ONESIGNAL_REST_API_KEY
+      delete process.env.ONESIGNAL_APP_ID
+      delete process.env.ONESIGNAL_REST_API_KEY
+      try {
+        await addDevice(`os-unconfigured-${Date.now()}`)
+        await sb.from('push_subscriptions').insert({
+          user_id: userId, school_id: schoolId, app: 'family', provider: 'webpush',
+          endpoint: `https://push.example.com/laptop-${Date.now()}`, p256dh: 'k', auth: 'a',
+        })
+        sendNotification.mockResolvedValue({ statusCode: 201 })
+
+        const n = await addPushDelivery()
+        const result = await runDeliveries(50)
+
+        // The laptop got it, so the notification is not lost...
+        const row = (await deliveriesFor(n.id))[0]
+        expect(row.status).toBe('sent')
+        expect(result.sent).toBe(1)
+        // ...and the phone that got nothing is on the record, not erased.
+        expect(result.partial).toBe(1)
+        expect(row.last_error).toContain('onesignal')
+        expect(row.last_error).toContain('not configured')
+        // No request was even attempted without credentials.
+        expect(oneSignalFetch).not.toHaveBeenCalled()
+      } finally {
+        if (appId) process.env.ONESIGNAL_APP_ID = appId
+        if (restKey) process.env.ONESIGNAL_REST_API_KEY = restKey
+      }
+    })
+
+    it.runIf(hasProviderColumn)('leaves no stale error on a delivery that reached every device', async () => {
+      await addDevice(`os-clean-${Date.now()}`)
+      oneSignalFetch.mockResolvedValue(okJson({ id: 'notif-uuid', recipients: 1 }))
+
+      const n = await addPushDelivery()
+      const result = await runDeliveries(50)
+
+      const row = (await deliveriesFor(n.id))[0]
+      expect(row.status).toBe('sent')
+      expect(row.last_error).toBeNull()
+      expect(result.partial).toBe(0)
+    })
+
     it.runIf(hasProviderColumn)('still delivers to the phone when web push is broken', async () => {
       await addDevice(`os-solo-${Date.now()}`)
       await sb.from('push_subscriptions').insert({

@@ -455,7 +455,18 @@ export function usePushSubscription(app: 'staff' | 'family') {
    * succeeded — the endpoint reports the delivery row's own status, so a
    * push that was skipped comes back as `delivered: false` with a reason.
    */
-  const sendTest = useCallback(async (): Promise<{ delivered: boolean; reason: string | null }> => {
+  const sendTest = useCallback(async (): Promise<{
+    delivered: boolean
+    reason: string | null
+    /**
+     * Set when the push reached some of this account's devices and not
+     * others — typically a browser succeeding while a phone could not be
+     * reached at all. `delivered` is true in that case, so reporting it
+     * as a plain success is what let a laptop vouch for a phone that
+     * received nothing.
+     */
+    partial: string | null
+  }> => {
     setState(s => ({ ...s, busy: true, error: null }))
     try {
       // Whoever taps this is looking at the app, so the notification is
@@ -467,11 +478,15 @@ export function usePushSubscription(app: 'staff' | 'family') {
       const { data } = await api.post('/notifications/test-push')
       const result = data?.data ?? {}
       setState(s => ({ ...s, busy: false }))
-      return { delivered: !!result.delivered, reason: result.reason ?? null }
+      return {
+        delivered: !!result.delivered,
+        reason: result.reason ?? null,
+        partial: result.partial ?? null,
+      }
     } catch (err: any) {
       const reason = messageFor(err, 'The test notification could not be sent')
       setState(s => ({ ...s, busy: false, error: reason }))
-      return { delivered: false, reason }
+      return { delivered: false, reason, partial: null }
     }
   }, [])
 
