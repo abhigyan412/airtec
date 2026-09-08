@@ -175,6 +175,7 @@ const STATUS_BADGE: Record<string, any> = { active: 'secondary', overdue: 'destr
 
 function ActiveLoansTab({ canCirculate }: { canCirculate: boolean }) {
   const qc = useQueryClient()
+  const [lostFor, setLostFor] = useState<any | null>(null)
   const { data: loans, isLoading } = useQuery({ queryKey: ['library-loans'], queryFn: () => libraryApi.circulation.loans().then(r => r.data) })
 
   const returnMutation = useMutation({
@@ -218,6 +219,7 @@ function ActiveLoansTab({ canCirculate }: { canCirculate: boolean }) {
                       <div className="flex gap-1">
                         <Button size="sm" variant="outline" onClick={() => returnMutation.mutate(l.id)} disabled={returnMutation.isPending}>Return</Button>
                         <Button size="sm" variant="ghost" onClick={() => renewMutation.mutate(l.id)} disabled={renewMutation.isPending}>Renew</Button>
+                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setLostFor(l)}>Lost/Damaged</Button>
                       </div>
                     </TableCell>
                   )}
@@ -227,7 +229,52 @@ function ActiveLoansTab({ canCirculate }: { canCirculate: boolean }) {
           </TableBody>
         </Table>
       )}
+
+      {lostFor && <ReportLostDialog loan={lostFor} onClose={() => setLostFor(null)} />}
     </Card>
+  )
+}
+
+function ReportLostDialog({ loan, onClose }: { loan: any; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [fineType, setFineType] = useState<'lost' | 'damage'>('lost')
+  const [pct, setPct] = useState('100')
+
+  const mutation = useMutation({
+    mutationFn: () => libraryApi.fines.create({ loan_id: loan.id, fine_type: fineType, calc_basis: 'pct_of_cost', pct: Number(pct) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['library-loans'] })
+      toast.success(`Reported ${fineType} — a fine was logged`)
+      onClose()
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to report'),
+  })
+
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle>Report Lost or Damaged</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>What happened?</Label>
+            <Select value={fineType} onValueChange={v => setFineType(v as 'lost' | 'damage')}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="lost">Lost</SelectItem><SelectItem value="damage">Damaged</SelectItem></SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Charge (% of the book's recorded cost)</Label>
+            <Input type="number" min={0} max={200} value={pct} onChange={e => setPct(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <Button variant="destructive" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+            {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Report
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

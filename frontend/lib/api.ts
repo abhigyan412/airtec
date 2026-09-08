@@ -1111,6 +1111,15 @@ export const libraryApi = {
     reserve: (title_id: string, member_id: string) => api.post('/library/circulation/reservations', { title_id, member_id }).then(r => r.data),
     cancelReservation: (id: string) => api.delete(`/library/circulation/reservations/${id}`).then(r => r.data),
   },
+  fines: {
+    list: (status?: string) => api.get('/library/fines', { params: { status } }).then(r => r.data),
+    create: (data: any) => api.post('/library/fines', data).then(r => r.data),
+    bill: (id: string) => api.post(`/library/fines/${id}/bill`).then(r => r.data),
+    requestWaiver: (id: string) => api.post(`/library/fines/${id}/request-waiver`).then(r => r.data),
+    workflowStatus: (id: string) => api.get(`/library/fines/${id}/workflow-status`).then(r => r.data),
+    workflowAction: (id: string, status: 'approved' | 'rejected', notes?: string) =>
+      api.post(`/library/fines/${id}/workflow-action`, { status, notes }).then(r => r.data),
+  },
 }
 
 export const homeworkApi = {

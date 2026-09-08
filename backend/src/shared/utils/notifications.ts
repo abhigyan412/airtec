@@ -32,6 +32,7 @@ export type NotificationType =
   | 'absence_detected' | 'workload_breach' | 'booking_overridden'
   | 'exam_datesheet_announced'
   | 'transport_document_expiring' | 'student_boarded' | 'student_alighted' | 'transport_incident_reported' | 'transport_service_due'
+  | 'library_due_soon' | 'library_overdue' | 'library_fine_imposed' | 'library_reservation_ready'
 
 interface CreateNotificationParams {
   schoolId: string

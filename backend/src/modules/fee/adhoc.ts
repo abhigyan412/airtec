@@ -26,8 +26,14 @@ const CreateSchema = z.object({
   bill_now: z.boolean().default(true),
 }).refine(v => v.student_id || v.class_id, { message: 'Either a student or a class is required' })
 
-/** Raise a one-line invoice for a charge and link the two. */
-async function bill(charge: any, schoolId: string, userId: string) {
+/**
+ * Raise a one-line invoice for a charge and link the two. Exported so
+ * other modules that need to bill a one-off charge (library fines) go
+ * through the real invoicing/ledger pipeline instead of a second,
+ * disconnected balance — the caller creates its own fee_adhoc_charges
+ * row first, same shape POST / does here, then calls this.
+ */
+export async function bill(charge: any, schoolId: string, userId: string) {
   const { data: year } = await supabase.from('academic_years')
     .select('id').eq('school_id', schoolId).eq('is_current', true).maybeSingle()
   if (!year) return null

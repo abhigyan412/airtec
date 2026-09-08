@@ -37,6 +37,7 @@ import { runDeliveries } from './shared/utils/delivery'
 import { runLeaveAccrual, runLeaveYearEnd } from './shared/utils/leavePolicy'
 import { runHrAlerts } from './shared/utils/hrAlerts'
 import { runTransportComplianceAlerts } from './shared/utils/transportComplianceAlerts'
+import { runLibraryDueDateAlerts } from './shared/utils/libraryDueDateAlerts'
 import { runAbscondedSweep } from './shared/utils/absconded'
 import { releaseExpiredSeatHolds, processExpiredWaitlistOffers } from './shared/utils/admissionSeatLedger'
 import { runExamAutoStart } from './shared/utils/examAutoStart'
@@ -291,6 +292,17 @@ cron.schedule('30 8 * * *', () => {
   runTransportComplianceAlerts()
     .then(result => console.log(`[transport-compliance] vehicle-docs:${result.vehicleDocsNotified} driver-docs:${result.driverDocsNotified}`))
     .catch(err => console.error('[transport-compliance] failed:', err))
+})
+
+// Daily library due-date sweep (due-soon reminders, overdue detection,
+// and the accruing overdue fine), 8:45 AM server time (just after the
+// transport compliance sweep), across every school. POST
+// /library/fines/due-date-alerts/run is the per-school manual
+// equivalent.
+cron.schedule('45 8 * * *', () => {
+  runLibraryDueDateAlerts()
+    .then(result => console.log(`[library-due-dates] due-soon:${result.dueSoonNotified} overdue:${result.overdueMarked} fines-updated:${result.finesUpdated}`))
+    .catch(err => console.error('[library-due-dates] failed:', err))
 })
 
 // Daily exam auto-start sweep, 00:05 server time (just after midnight),

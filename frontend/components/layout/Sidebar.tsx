@@ -142,6 +142,7 @@ const NAV: NavItem[] = [
       // is a tab inside Circulation, not its own entry.
       { label: 'Catalog', href: '/library/catalog', icon: BookOpen, permission: 'library.view' },
       { label: 'Circulation', href: '/library/circulation', icon: ScanLine, permission: 'library.view' },
+      { label: 'Fines', href: '/library/fines', icon: Receipt, permission: 'library.view' },
       { label: 'Settings', href: '/library/settings', icon: SettingsIcon, permission: 'library.view' },
     ],
   },
