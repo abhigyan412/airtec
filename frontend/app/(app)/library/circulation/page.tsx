@@ -2,7 +2,7 @@
 import { useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ScanLine, Loader2, X, CalendarClock, Plus } from 'lucide-react'
+import { ScanLine, Loader2, X, CalendarClock, Plus, RotateCcw } from 'lucide-react'
 import { libraryApi } from '@/lib/api'
 import { usePermissions } from '@/lib/usePermissions'
 import { PageHeader } from '@/components/shared/PageHeader'
@@ -27,6 +27,7 @@ function daysUntil(dateStr: string) {
 export default function LibraryCirculationPage() {
   const { can } = usePermissions()
   const canCirculate = can('library.circulation')
+  const [recallOpen, setRecallOpen] = useState(false)
 
   return (
     <div className="space-y-6">
@@ -35,7 +36,11 @@ export default function LibraryCirculationPage() {
         description="Issue, return and renew books — scan a member once, then scan books one after another."
         icon={ScanLine}
         className="mb-0"
+        actions={canCirculate && (
+          <Button variant="outline" size="sm" onClick={() => setRecallOpen(true)}><RotateCcw className="h-4 w-4" /> Recall All</Button>
+        )}
       />
+      {recallOpen && <RecallDialog onClose={() => setRecallOpen(false)} />}
       <Tabs defaultValue="Scan Desk">
         <TabsList>
           <TabsTrigger value="Scan Desk">Scan Desk</TabsTrigger>
@@ -358,5 +363,46 @@ function ReservationsTab({ canCirculate }: { canCirculate: boolean }) {
         </DialogContent>
       </Dialog>
     </Card>
+  )
+}
+
+function RecallDialog({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient()
+  const [dueDate, setDueDate] = useState('')
+  const [reason, setReason] = useState('')
+  const { data: suggestion } = useQuery({ queryKey: ['library-recall-suggestion'], queryFn: () => libraryApi.recall.suggestion().then(r => r.data) })
+
+  const mutation = useMutation({
+    mutationFn: () => libraryApi.recall.run({ new_due_date: dueDate, reason: reason || undefined }),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['library-loans'] })
+      toast.success(`${res.data.recalled_count} loan(s) recalled — due dates shortened and borrowers notified`)
+      onClose()
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Failed to recall loans'),
+  })
+
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle>Recall All Active Loans</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          {suggestion && (
+            <p className="text-xs text-muted-foreground">
+              Suggestion: "{suggestion.name}" starts {suggestion.start_date} — consider recalling shortly before then.
+            </p>
+          )}
+          <div className="space-y-1.5"><Label>New due date</Label><Input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Reason (optional, shown to borrowers)</Label><Input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Annual exams" /></div>
+          <p className="text-xs text-muted-foreground">Only loans currently due after this date are affected — everything else is left alone.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} disabled={!dueDate || mutation.isPending}>
+            {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Recall
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

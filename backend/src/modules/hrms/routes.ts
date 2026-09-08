@@ -16,6 +16,7 @@ import { runHrAlerts } from '../../shared/utils/hrAlerts'
 import { runAbscondedSweep } from '../../shared/utils/absconded'
 import { fetchSchoolknotDay, SchoolknotRow } from './schoolknot'
 import { getSchoolknotConfig } from './schoolknot.config'
+import { activeLoansForStaffUser } from '../library/lib/gates'
 
 const router = Router()
 router.use(authenticate)
@@ -1121,6 +1122,13 @@ router.post('/exit/:exit_id/submit-settlement', requirePermissionV2('staff.exit_
     }
 
     if (exit.status !== 'cleared') return res.status(400).json({ success: false, error: `Clearance checklist must be complete first (current status: ${exit.status})` })
+
+    // Same "clear before you go" gate the TC workflow applies to
+    // students, for a staff member's own library borrowing.
+    const staffLoans = await activeLoansForStaffUser(school_id, exit.user_id)
+    if (staffLoans.length > 0) {
+      return res.status(400).json({ success: false, error: `Cannot proceed to settlement — ${staffLoans.length} library book(s) still on loan to this staff member.` })
+    }
 
     const [{ data: salary }, { data: leaveBalances }, { data: school }, { data: activeLoans }] = await Promise.all([
       supabase.from('salary_structures').select('*').eq('user_id', exit.user_id).eq('is_active', true).order('effective_from', { ascending: false }).limit(1).maybeSingle(),

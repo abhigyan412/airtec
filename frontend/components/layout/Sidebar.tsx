@@ -11,6 +11,7 @@ import {
   Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
   SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2, BookMarked, LayoutTemplate,
   CalendarRange, Megaphone, Bus, Truck, Route as RouteIcon, ScanLine,
+  ShoppingCart, ClipboardCheck,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -143,6 +144,10 @@ const NAV: NavItem[] = [
       { label: 'Catalog', href: '/library/catalog', icon: BookOpen, permission: 'library.view' },
       { label: 'Circulation', href: '/library/circulation', icon: ScanLine, permission: 'library.view' },
       { label: 'Fines', href: '/library/fines', icon: Receipt, permission: 'library.view' },
+      { label: 'Textbook Distribution', href: '/library/textbooks', icon: BookMarked, permission: 'library.view' },
+      { label: 'Acquisition', href: '/library/acquisition', icon: ShoppingCart, permission: 'library.manage_acquisition' },
+      { label: 'Stock Verification', href: '/library/audit', icon: ClipboardCheck, permission: 'library.stock_audit' },
+      { label: 'Reports', href: '/library/reports', icon: BarChart3, permission: 'library.view' },
       { label: 'Settings', href: '/library/settings', icon: SettingsIcon, permission: 'library.view' },
     ],
   },

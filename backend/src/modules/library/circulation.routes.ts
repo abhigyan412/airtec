@@ -7,8 +7,64 @@ import { asyncHandler } from '../../shared/utils/helpers'
 import { dayOfWeekFor } from '../timetable/lib/core'
 import { toLocalDateStr } from '../../shared/utils/academicCalendar'
 import { resolvePolicy } from './lib/policy'
+import { createNotifications, getRecipientUserIdsForStudent } from '../../shared/utils/notifications'
 
 const router = Router()
+
+// ═══════════════════════════════════════════════════════════════
+// MASS RECALL — schools commonly call back all issued books before
+// exams or the year end. This ERP already knows the exam calendar, so
+// it can surface the nearest upcoming exam as a recall-date suggestion
+// instead of a librarian remembering to do this manually. The recall
+// itself is a deliberate, librarian-triggered action (no full-time
+// librarian at most Indian schools means an unattended auto-recall
+// would be a surprise, not a convenience) — it only shortens due
+// dates and notifies; status stays active/overdue so every other
+// active-loan check (scan-return, renewal block, TC/promotion/exit
+// gates, the overdue sweep) keeps seeing these loans correctly.
+// ═══════════════════════════════════════════════════════════════
+router.get('/recall/suggestion', requirePermissionV2('library.circulation'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const today = toLocalDateStr(new Date())
+    const { data: exam } = await supabase.from('exams')
+      .select('id, name, start_date').eq('school_id', req.user!.school_id)
+      .gte('start_date', today).order('start_date', { ascending: true }).limit(1).maybeSingle()
+    res.json({ success: true, data: exam ?? null })
+  })
+)
+
+const RecallSchema = z.object({ new_due_date: z.string(), class_id: z.string().uuid().optional(), reason: z.string().max(300).optional() })
+
+router.post('/recall', requirePermissionV2('library.circulation'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const parsed = RecallSchema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid input' })
+    const school_id = req.user!.school_id
+
+    let q = supabase.from('book_loans')
+      .select('id, due_date, member_id, book_copies!inner(school_id, book_titles(title)), library_members!inner(student_id, user_id, students(class_id))')
+      .eq('book_copies.school_id', school_id).in('status', ['active', 'overdue']).gt('due_date', parsed.data.new_due_date)
+    const { data: loans, error } = await q
+    if (error) return res.status(500).json({ success: false, error: error.message })
+
+    const targeted = ((loans ?? []) as any[]).filter(l => !parsed.data.class_id || l.library_members?.students?.class_id === parsed.data.class_id)
+    if (!targeted.length) return res.json({ success: true, data: { recalled_count: 0 } })
+
+    await supabase.from('book_loans').update({ due_date: parsed.data.new_due_date }).in('id', targeted.map(l => l.id))
+
+    for (const loan of targeted) {
+      const recipients = loan.library_members?.student_id ? await getRecipientUserIdsForStudent(loan.library_members.student_id) : (loan.library_members?.user_id ? [loan.library_members.user_id] : [])
+      if (!recipients.length) continue
+      await createNotifications(recipients, {
+        schoolId: school_id, type: 'library_recalled',
+        title: 'Library book recalled',
+        message: `"${loan.book_copies?.book_titles?.title}" has been recalled — please return it by ${parsed.data.new_due_date}${parsed.data.reason ? ` (${parsed.data.reason})` : ''}.`,
+        link: '/library/circulation', relatedEntityType: 'book_loan', relatedEntityId: loan.id,
+      })
+    }
+    res.json({ success: true, data: { recalled_count: targeted.length } })
+  })
+)
 
 // ═══════════════════════════════════════════════════════════════
 // MEMBERS — a thin wrapper so circulation never cares whether the

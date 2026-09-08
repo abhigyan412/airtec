@@ -1120,6 +1120,44 @@ export const libraryApi = {
     workflowAction: (id: string, status: 'approved' | 'rejected', notes?: string) =>
       api.post(`/library/fines/${id}/workflow-action`, { status, notes }).then(r => r.data),
   },
+  textbooks: {
+    list: (params?: { academic_year_id?: string; scheme?: string; student_id?: string }) => api.get('/library/textbooks', { params }).then(r => r.data),
+    create: (data: any) => api.post('/library/textbooks', data).then(r => r.data),
+    bulkCreate: (data: any) => api.post('/library/textbooks/bulk', data).then(r => r.data),
+  },
+  acquisitionRequests: {
+    list: (status?: string) => api.get('/library/acquisition/requests', { params: { status } }).then(r => r.data),
+    create: (data: any) => api.post('/library/acquisition/requests', data).then(r => r.data),
+    workflowStatus: (id: string) => api.get(`/library/acquisition/requests/${id}/workflow-status`).then(r => r.data),
+    workflowAction: (id: string, status: 'approved' | 'rejected', notes?: string) =>
+      api.post(`/library/acquisition/requests/${id}/workflow-action`, { status, notes }).then(r => r.data),
+    order: (id: string) => api.patch(`/library/acquisition/requests/${id}/order`).then(r => r.data),
+    receive: (id: string, data?: { title_id?: string; cost?: number }) => api.patch(`/library/acquisition/requests/${id}/receive`, data).then(r => r.data),
+  },
+  periodicals: {
+    list: () => api.get('/library/acquisition/periodicals').then(r => r.data),
+    create: (data: any) => api.post('/library/acquisition/periodicals', data).then(r => r.data),
+    issues: (id: string) => api.get(`/library/acquisition/periodicals/${id}/issues`).then(r => r.data),
+    addIssue: (id: string, issue_date: string) => api.post(`/library/acquisition/periodicals/${id}/issues`, { issue_date }).then(r => r.data),
+    updateIssue: (issueId: string, status: 'received' | 'missing') => api.patch(`/library/acquisition/periodicals/issues/${issueId}`, { status }).then(r => r.data),
+  },
+  audit: {
+    list: () => api.get('/library/audit').then(r => r.data),
+    start: () => api.post('/library/audit').then(r => r.data),
+    get: (id: string) => api.get(`/library/audit/${id}`).then(r => r.data),
+    scan: (id: string, barcode: string) => api.post(`/library/audit/${id}/scan`, { barcode }).then(r => r.data),
+    complete: (id: string, mark_unscanned_as_lost = false) => api.post(`/library/audit/${id}/complete`, { mark_unscanned_as_lost }).then(r => r.data),
+  },
+  recall: {
+    suggestion: () => api.get('/library/circulation/recall/suggestion').then(r => r.data),
+    run: (data: { new_due_date: string; class_id?: string; reason?: string }) => api.post('/library/circulation/recall', data).then(r => r.data),
+  },
+  reports: {
+    defaulters: () => api.get('/library/reports/defaulters').then(r => r.data),
+    mostBorrowed: (params?: { from?: string; to?: string }) => api.get('/library/reports/most-borrowed', { params }).then(r => r.data),
+    valuation: () => api.get('/library/reports/valuation').then(r => r.data),
+    textbookAudit: (params?: { academic_year_id?: string; scheme?: string }) => api.get('/library/reports/textbook-distribution-audit', { params }).then(r => r.data),
+  },
 }
 
 export const homeworkApi = {

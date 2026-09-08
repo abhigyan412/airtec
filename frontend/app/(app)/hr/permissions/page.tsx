@@ -84,7 +84,7 @@ const ACTION_LABELS: Record<string, string> = {
   manage_fleet: 'Manage Fleet', manage_routes: 'Manage Routes & Stops', manage_trips: 'Manage Trips',
   mark_boarding: 'Mark Boarding', settings_manage: 'Manage Settings',
   manage_catalog: 'Manage Catalog', circulation: 'Circulation', manage_fines: 'Manage Fines',
-  manage_acquisition: 'Manage Acquisition',
+  manage_acquisition: 'Manage Acquisition', stock_audit: 'Stock Verification',
 }
 
 export default function RolePermissionsPage() {

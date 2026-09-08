@@ -33,6 +33,7 @@ export type NotificationType =
   | 'exam_datesheet_announced'
   | 'transport_document_expiring' | 'student_boarded' | 'student_alighted' | 'transport_incident_reported' | 'transport_service_due'
   | 'library_due_soon' | 'library_overdue' | 'library_fine_imposed' | 'library_reservation_ready'
+  | 'library_recalled' | 'library_acquisition_update'
 
 interface CreateNotificationParams {
   schoolId: string

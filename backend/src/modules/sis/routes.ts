@@ -12,6 +12,7 @@ import { createNotification, createNotifications, getRecipientUserIdsForStudent 
 import { buildStudentSearchFilter } from '../../shared/utils/studentSearch'
 import { getTeacherContext } from '../../shared/utils/teacherContext'
 import { ensureTransferCertificateWorkflowDefinition, assignDefaultUserRole } from '../rbac/seed'
+import { activeLoansForStudent, activeLoanCountsForStudents } from '../library/lib/gates'
 
 const router = Router()
 
@@ -999,9 +1000,17 @@ router.post('/bulk/promote', requirePermissionV2('student.promote'),
     // suspended student inside an otherwise-valid whole-class promotion
     // doesn't block the rest of the class.
     const suspendedCount = fetched.filter(s => s.status === 'suspended').length
-    const students = fetched.filter(s => s.status !== 'suspended')
+    let students = fetched.filter(s => s.status !== 'suspended')
+
+    // Same skip-not-fail treatment as suspended students — a whole-class
+    // promotion shouldn't be blocked by the few who still have a book
+    // out, and the librarian can chase those individually.
+    const loanCounts = await activeLoanCountsForStudents(school_id, students.map(s => s.id))
+    const withLoansCount = loanCounts.size
+    students = students.filter(s => !loanCounts.has(s.id))
+
     if (!students.length) {
-      return res.status(400).json({ success: false, error: 'All selected students are suspended — reactivate them before transferring.' })
+      return res.status(400).json({ success: false, error: 'All selected students are suspended or have library books still on loan — clear those first.' })
     }
 
     const promotionRecords = students.map(s => ({
@@ -1025,10 +1034,14 @@ router.post('/bulk/promote', requirePermissionV2('student.promote'),
       .in('id', students.map(s => s.id)).eq('school_id', school_id)
     if (updateErr) return res.status(400).json({ success: false, error: updateErr.message })
 
-    const message = suspendedCount
-      ? `${students.length} student${students.length > 1 ? 's' : ''} promoted successfully — ${suspendedCount} suspended student${suspendedCount > 1 ? 's were' : ' was'} skipped.`
+    const skipNotes = [
+      suspendedCount ? `${suspendedCount} suspended` : null,
+      withLoansCount ? `${withLoansCount} with library books still on loan` : null,
+    ].filter(Boolean)
+    const message = skipNotes.length
+      ? `${students.length} student${students.length > 1 ? 's' : ''} promoted successfully — ${skipNotes.join(', ')} skipped.`
       : `${students.length} students promoted successfully`
-    res.json({ success: true, data: { promoted_count: students.length, skipped_suspended: suspendedCount, message } })
+    res.json({ success: true, data: { promoted_count: students.length, skipped_suspended: suspendedCount, skipped_with_loans: withLoansCount, message } })
   })
 )
 
@@ -1898,6 +1911,13 @@ router.post('/:id/tc/:tcId/workflow-action', asyncHandler(async (req: AuthReques
     const feeDue = studentWithFees?.fee_summary?.total_due ?? 0
     if (feeDue > 0) {
       return res.status(400).json({ success: false, error: `Cannot confirm dues cleared — ₹${feeDue} still due for this student` })
+    }
+    // Same "clear before you go" gate, for library books rather than
+    // fees — a TC issued while books are still on loan is exactly the
+    // scenario library_members/book_loans exist to prevent going unnoticed.
+    const activeLoans = await activeLoansForStudent(school_id, id)
+    if (activeLoans.length > 0) {
+      return res.status(400).json({ success: false, error: `Cannot confirm dues cleared — ${activeLoans.length} library book(s) still on loan to this student` })
     }
   }
 
