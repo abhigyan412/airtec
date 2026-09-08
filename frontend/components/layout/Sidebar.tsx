@@ -138,9 +138,9 @@ const NAV: NavItem[] = [
     module: 'library',
     icon: BookOpen,
     children: [
-      // Catalog/Circulation/Reservations/Fines/Acquisition land here as
-      // each phase ships — Settings goes first, same order Transport was
-      // built in.
+      // Circulation/Reservations/Fines/Acquisition land here as each
+      // phase ships.
+      { label: 'Catalog', href: '/library/catalog', icon: BookOpen, permission: 'library.view' },
       { label: 'Settings', href: '/library/settings', icon: SettingsIcon, permission: 'library.view' },
     ],
   },

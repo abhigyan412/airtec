@@ -1080,6 +1080,25 @@ export const libraryApi = {
     update: (id: string, data: any) => api.patch(`/library/settings/borrowing-policies/${id}`, data).then(r => r.data),
     delete: (id: string) => api.delete(`/library/settings/borrowing-policies/${id}`).then(r => r.data),
   },
+  titles: {
+    list: () => api.get('/library/catalog/titles').then(r => r.data),
+    get: (id: string) => api.get(`/library/catalog/titles/${id}`).then(r => r.data),
+    create: (data: any) => api.post('/library/catalog/titles', data).then(r => r.data),
+    update: (id: string, data: any) => api.patch(`/library/catalog/titles/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/library/catalog/titles/${id}`).then(r => r.data),
+    import: (rows: Record<string, string>[]) => api.post('/library/catalog/titles/import', { rows }).then(r => r.data),
+    addCopy: (id: string, data: any) => api.post(`/library/catalog/titles/${id}/copies`, data).then(r => r.data),
+  },
+  copies: {
+    update: (id: string, data: any) => api.patch(`/library/catalog/copies/${id}`, data).then(r => r.data),
+    delete: (id: string) => api.delete(`/library/catalog/copies/${id}`).then(r => r.data),
+  },
+  donations: {
+    list: (status?: string) => api.get('/library/acquisition/donations', { params: { status } }).then(r => r.data),
+    create: (data: any) => api.post('/library/acquisition/donations', data).then(r => r.data),
+    accept: (id: string, title_id?: string) => api.patch(`/library/acquisition/donations/${id}/accept`, { title_id }).then(r => r.data),
+    reject: (id: string) => api.patch(`/library/acquisition/donations/${id}/reject`).then(r => r.data),
+  },
 }
 
 export const homeworkApi = {
