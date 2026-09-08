@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ArrowLeft, Loader2, CheckCircle, UserCog, IdCard, Phone, Copy, Check, UserPlus } from 'lucide-react'
+import { ArrowLeft, Loader2, CheckCircle, UserCog, Briefcase, Phone, Copy, Check, UserPlus } from 'lucide-react'
 import { teamApi, rbacApi } from '@/lib/api'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
@@ -18,7 +18,7 @@ import {
 
 const SECTIONS = [
   { id: 'account', label: 'Account & Role', icon: UserCog },
-  { id: 'employment', label: 'Employment', icon: IdCard },
+  { id: 'employment', label: 'Employment', icon: Briefcase },
   { id: 'contact', label: 'Contact & Bank', icon: Phone },
 ]
 
