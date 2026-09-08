@@ -33,9 +33,34 @@ const InviteSchema = z.object({
   role_id: z.string().min(1),
   phone: z.string().optional(),
   password: z.string().min(6),
-  // optional staff profile fields
+  // optional staff_profiles fields — everything the Add Staff page
+  // collects up front, so a new hire doesn't need a second visit to
+  // PUT /hrms/staff/:user_id/profile just to record a DOB or bank
+  // detail. designation/department stay separate from that later edit
+  // route on purpose (see its own comment) — they're only ever set here
+  // or via a tracked promotion, never a silent profile edit.
   designation: z.string().optional(),
   department: z.string().optional(),
+  employee_id: z.string().optional(),
+  date_of_joining: z.string().optional(),
+  date_of_birth: z.string().optional(),
+  gender: z.string().optional(),
+  blood_group: z.string().optional(),
+  qualification: z.string().optional(),
+  experience_years: z.number().optional(),
+  employment_type: z.enum(['full_time', 'part_time', 'contract', 'probation']).optional(),
+  alternate_phone: z.string().optional(),
+  personal_email: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  pincode: z.string().optional(),
+  emergency_contact_name: z.string().optional(),
+  emergency_contact_phone: z.string().optional(),
+  bank_name: z.string().optional(),
+  bank_account_number: z.string().optional(),
+  bank_ifsc: z.string().optional(),
+  pan_number: z.string().optional(),
 })
 
 // ── GET /team - list all staff with auth status ─────────────
@@ -129,17 +154,46 @@ router.post('/invite', requirePermissionV2('team.invite'),
       return res.status(400).json({ success: false, error: userError.message })
     }
 
-    // 3. Optionally create a staff_profiles row (for non-admin roles)
-    if (chosenRole.name !== 'School Admin' && (body.designation || body.department)) {
+    // 3. Optionally create a staff_profiles row (for non-admin roles) —
+    // any of the extended fields is enough to trigger it, not just
+    // designation/department, now that the Add Staff page collects the
+    // fuller profile up front.
+    const hasProfileData = [
+      body.designation, body.department, body.employee_id, body.date_of_joining, body.date_of_birth,
+      body.gender, body.blood_group, body.qualification, body.experience_years, body.employment_type,
+      body.alternate_phone, body.personal_email, body.address, body.city, body.state, body.pincode,
+      body.emergency_contact_name, body.emergency_contact_phone, body.bank_name, body.bank_account_number,
+      body.bank_ifsc, body.pan_number,
+    ].some(v => v !== undefined && v !== null && v !== '')
+
+    if (chosenRole.name !== 'School Admin' && hasProfileData) {
       await supabase.from('staff_profiles').insert({
         school_id,
         user_id: newUser.id,
         designation: body.designation || null,
         department: body.department || null,
-        employment_type: 'full_time',
+        employee_id: body.employee_id || null,
+        date_of_joining: body.date_of_joining || new Date().toISOString().split('T')[0],
+        date_of_birth: body.date_of_birth || null,
+        gender: body.gender || null,
+        blood_group: body.blood_group || null,
+        qualification: body.qualification || null,
+        experience_years: body.experience_years ?? null,
+        employment_type: body.employment_type || 'full_time',
         employment_status: 'active',
-        date_of_joining: new Date().toISOString().split('T')[0],
         phone: body.phone || null,
+        alternate_phone: body.alternate_phone || null,
+        personal_email: body.personal_email || null,
+        address: body.address || null,
+        city: body.city || null,
+        state: body.state || null,
+        pincode: body.pincode || null,
+        emergency_contact_name: body.emergency_contact_name || null,
+        emergency_contact_phone: body.emergency_contact_phone || null,
+        bank_name: body.bank_name || null,
+        bank_account_number: body.bank_account_number || null,
+        bank_ifsc: body.bank_ifsc || null,
+        pan_number: body.pan_number || null,
       })
     }
 

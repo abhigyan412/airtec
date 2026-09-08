@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { hrmsApi, notificationsApi } from '@/lib/api'
+import { usePermissions } from '@/lib/usePermissions'
 import { cn } from '@/lib/utils'
 import { Search, Users, UserCheck, UserPlus, Briefcase, ChevronRight, ShieldAlert, FileWarning, UserX, X } from 'lucide-react'
 import Link from 'next/link'
@@ -49,6 +50,8 @@ const ROLE_LABELS: Record<string, string> = {
 }
 
 export default function StaffDirectoryPage() {
+  const { can } = usePermissions()
+  const canAddStaff = can('team.invite')
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState('')
   const [showExpiringDocs, setShowExpiringDocs] = useState(false)
@@ -84,7 +87,12 @@ export default function StaffDirectoryPage() {
         title="Staff Directory"
         description="Manage staff profiles, leave, payroll and recruitment"
         icon={Users}
-        actions={<HrQuickNav current="staff" />}
+        actions={
+          <>
+            {canAddStaff && <Button asChild size="sm"><Link href="/hr/staff/new"><UserPlus className="h-4 w-4" /> Add Staff</Link></Button>}
+            <HrQuickNav current="staff" />
+          </>
+        }
       />
 
       {/* Stats */}
@@ -181,11 +189,13 @@ export default function StaffDirectoryPage() {
             <EmptyState
               icon={Users}
               title="No staff yet"
-              description="Staff appear here once they've been invited and have accepted their account."
+              description="Add your first staff member to get started."
               action={
-                <Button asChild>
-                  <Link href="/settings/team"><UserPlus className="h-4 w-4" /> Invite a team member</Link>
-                </Button>
+                canAddStaff ? (
+                  <Button asChild>
+                    <Link href="/hr/staff/new"><UserPlus className="h-4 w-4" /> Add Staff</Link>
+                  </Button>
+                ) : undefined
               }
             />
           )
