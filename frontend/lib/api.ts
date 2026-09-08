@@ -1099,6 +1099,18 @@ export const libraryApi = {
     accept: (id: string, title_id?: string) => api.patch(`/library/acquisition/donations/${id}/accept`, { title_id }).then(r => r.data),
     reject: (id: string) => api.patch(`/library/acquisition/donations/${id}/reject`).then(r => r.data),
   },
+  circulation: {
+    today: () => api.get('/library/circulation/today').then(r => r.data),
+    ensureMember: (data: { student_id?: string; user_id?: string }) => api.post('/library/circulation/members/ensure', data).then(r => r.data),
+    getMember: (memberId: string) => api.get(`/library/circulation/members/${memberId}`).then(r => r.data),
+    scan: (member_id: string, barcode: string) => api.post('/library/circulation/scan', { member_id, barcode }).then(r => r.data),
+    loans: (status?: string) => api.get('/library/circulation/loans', { params: { status } }).then(r => r.data),
+    returnLoan: (id: string) => api.post(`/library/circulation/loans/${id}/return`).then(r => r.data),
+    renewLoan: (id: string) => api.post(`/library/circulation/loans/${id}/renew`).then(r => r.data),
+    reservations: () => api.get('/library/circulation/reservations').then(r => r.data),
+    reserve: (title_id: string, member_id: string) => api.post('/library/circulation/reservations', { title_id, member_id }).then(r => r.data),
+    cancelReservation: (id: string) => api.delete(`/library/circulation/reservations/${id}`).then(r => r.data),
+  },
 }
 
 export const homeworkApi = {

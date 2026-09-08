@@ -10,7 +10,7 @@ import {
   Wallet, ClipboardList, BarChart3, ShieldCheck, School, ArrowUpNarrowWide,
   Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
   SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2, BookMarked, LayoutTemplate,
-  CalendarRange, Megaphone, Bus, Truck, Route as RouteIcon,
+  CalendarRange, Megaphone, Bus, Truck, Route as RouteIcon, ScanLine,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -138,9 +138,10 @@ const NAV: NavItem[] = [
     module: 'library',
     icon: BookOpen,
     children: [
-      // Circulation/Reservations/Fines/Acquisition land here as each
-      // phase ships.
+      // Fines/Acquisition land here as each phase ships. Reservations
+      // is a tab inside Circulation, not its own entry.
       { label: 'Catalog', href: '/library/catalog', icon: BookOpen, permission: 'library.view' },
+      { label: 'Circulation', href: '/library/circulation', icon: ScanLine, permission: 'library.view' },
       { label: 'Settings', href: '/library/settings', icon: SettingsIcon, permission: 'library.view' },
     ],
   },
