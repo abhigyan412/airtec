@@ -31,3 +31,15 @@ export const publicAdmissionApi = {
   bookSlot: (schoolId: string, inquiryId: string, slotId: string) =>
     publicApi.post(`/schools/${schoolId}/inquiries/${inquiryId}/slots/${slotId}/book`).then(r => r.data),
 }
+
+export const publicRecruitmentApi = {
+  info: (schoolId: string) =>
+    publicApi.get(`/schools/${schoolId}/recruitment-info`).then(r => r.data),
+  submitApplication: (schoolId: string, data: {
+    candidate_name: string; phone: string; email?: string
+    job_posting_id?: string; current_designation?: string; experience_years?: number
+    expected_salary?: number; notice_period?: string; cover_letter?: string
+    resume_base64?: string; resume_file_name?: string; resume_mime_type?: string
+    company?: string
+  }) => publicApi.post(`/schools/${schoolId}/job-applications`, data).then(r => r.data),
+}

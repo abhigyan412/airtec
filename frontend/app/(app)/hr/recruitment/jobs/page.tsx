@@ -2,12 +2,14 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hrmsApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { ArrowLeft, Plus, Briefcase, Users, Loader2, Pause, Play, XCircle } from 'lucide-react'
+import { ArrowLeft, Plus, Briefcase, Users, Loader2, Pause, Play, XCircle, QrCode, Copy, ExternalLink, Printer } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
+import { QRCodeSVG } from 'qrcode.react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -28,6 +30,7 @@ const STATUS_VARIANT: Record<string, 'secondary' | 'success' | 'warning'> = {
 
 export default function JobPostingsPage() {
   const qc = useQueryClient()
+  const { user } = useAuth()
   const [showCreate, setShowCreate] = useState(false)
   const [statusFilter, setStatusFilter] = useState('')
 
@@ -63,6 +66,8 @@ export default function JobPostingsPage() {
           }
         />
       </div>
+
+      {user?.school_id && <RecruitmentQrCard schoolId={user.school_id} />}
 
       {/* Filter pills */}
       <div className="flex flex-wrap gap-2">
@@ -235,5 +240,140 @@ function CreateJobModal({ onClose }: { onClose: () => void }) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// One QR per school, not per posting — the link never changes; whichever
+// postings are currently 'open' is what actually decides what the public
+// form's position dropdown offers. Same rendering approach as Admission's
+// own QR card (cycles/page.tsx) — client-side from the plain URL via
+// qrcode.react, no backend image generation.
+function RecruitmentQrCard({ schoolId }: { schoolId: string }) {
+  const { user } = useAuth()
+  const [copied, setCopied] = useState(false)
+  const [printSize, setPrintSize] = useState<PrintSizeKey>('medium')
+  const url = typeof window !== 'undefined' ? `${window.location.origin}/careers/${schoolId}` : ''
+  const schoolName = user?.schools?.name ?? ''
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      toast.success('Link copied')
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast.error('Could not copy — copy it manually instead')
+    }
+  }
+
+  return (
+    <>
+    <Card className="print:hidden">
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2"><QrCode className="h-4 w-4" /> Careers QR &amp; Link</CardTitle>
+        <CardDescription className="text-xs">
+          Share this with candidates — scanning or opening it takes them straight to a public application form that lands right in your pipeline below.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col sm:flex-row items-start sm:items-center gap-5">
+        <div className="shrink-0 rounded-xl border border-border bg-white p-3">
+          {url && <QRCodeSVG value={url} size={128} />}
+        </div>
+        <div className="min-w-0 flex-1 space-y-2">
+          <p className="break-all rounded-lg bg-muted px-3 py-2 font-mono text-xs text-foreground">{url}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" onClick={copyLink}>
+              <Copy className="h-3.5 w-3.5" /> {copied ? 'Copied' : 'Copy Link'}
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <a href={url} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-3.5 w-3.5" /> Preview Form
+              </a>
+            </Button>
+            <div className="ml-1 flex items-center gap-1.5 border-l border-border pl-3">
+              <Select value={printSize} onValueChange={v => setPrintSize(v as PrintSizeKey)}>
+                <SelectTrigger className="h-8 w-[168px] text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PRINT_SIZES).map(([key, s]) => (
+                    <SelectItem key={key} value={key}>{s.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button variant="outline" size="sm" onClick={() => window.print()}>
+                <Printer className="h-3.5 w-3.5" /> Print
+              </Button>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+    {url && <QrPrintSheet url={url} schoolName={schoolName} size={printSize} />}
+    </>
+  )
+}
+
+// Same three physical sizes and print approach as Admission's QrPrintSheet
+// (cycles/page.tsx) — duplicated rather than shared, since no generic QR
+// component exists yet in this codebase and these two callers differ only
+// in copy/URL, not structure.
+const PRINT_SIZES = {
+  small: { label: 'Small — sheet of stickers', mm: 40 },
+  medium: { label: 'Medium — A5 flyer', mm: 80 },
+  large: { label: 'Large — A4 poster', mm: 150 },
+} as const
+type PrintSizeKey = keyof typeof PRINT_SIZES
+
+function QrPrintSheet({ url, schoolName, size }: { url: string; schoolName: string; size: PrintSizeKey }) {
+  const qrPixelSize = 512
+
+  if (size === 'small') {
+    return (
+      <div className="hidden print:block">
+        <style>{`
+          @media print {
+            @page { size: A4 portrait; margin: 10mm; }
+            body { background: #fff !important; }
+            .qr-sticker-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6mm; }
+            .qr-sticker { background: #fff !important; border: 1px dashed #999; border-radius: 2mm; padding: 4mm; text-align: center; }
+            .qr-sticker svg { width: 40mm; height: 40mm; }
+            .qr-sticker p { font-size: 7pt; color: #000; margin-top: 2mm; }
+          }
+        `}</style>
+        <div className="qr-sticker-grid">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="qr-sticker">
+              <QRCodeSVG value={url} size={qrPixelSize} />
+              <p>{schoolName ? `${schoolName} — We're Hiring` : "We're Hiring"}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  const cfg = size === 'large'
+    ? { page: 'A4 portrait', qrMm: 130, heading: '18mm', sub: '10mm' }
+    : { page: 'A5 portrait', qrMm: 70, heading: '14mm', sub: '8mm' }
+
+  return (
+    <div className="hidden print:block">
+      <style>{`
+        @media print {
+          @page { size: ${cfg.page}; margin: 14mm; }
+          body { background: #fff !important; }
+          .qr-sheet { position: fixed; inset: 0; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+          .qr-sheet h1 { font-size: ${cfg.heading}; font-weight: 700; color: #000; margin-bottom: 6mm; }
+          .qr-sheet svg { width: ${cfg.qrMm}mm; height: ${cfg.qrMm}mm; }
+          .qr-sheet p { font-size: ${cfg.sub}; color: #333; margin-top: 6mm; }
+          .qr-sheet .qr-link { font-size: 8pt; color: #666; margin-top: 3mm; word-break: break-all; }
+        }
+      `}</style>
+      <div className="qr-sheet">
+        <h1>{schoolName ? `${schoolName} — We're Hiring` : "We're Hiring"}</h1>
+        <QRCodeSVG value={url} size={qrPixelSize} />
+        <p>Scan to apply</p>
+        <p className="qr-link">{url}</p>
+      </div>
+    </div>
   )
 }

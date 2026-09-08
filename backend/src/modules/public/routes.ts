@@ -426,4 +426,121 @@ router.post('/schools/:schoolId/inquiries/:inquiryId/slots/:slotId/book', asyncH
   res.status(201).json({ success: true })
 }))
 
+// ═══════════════════════════════════════════════════════════════
+// RECRUITMENT — the same QR/public-apply model as Admission above,
+// applied to job candidates instead of prospective students: one
+// school-wide QR/link (never a per-posting one — see the frontend QR
+// card's own comment), a public form, straight into job_applications
+// so the recruitment kanban never needs to know how a candidate arrived.
+// ═══════════════════════════════════════════════════════════════
+
+// GET /public/schools/:schoolId/recruitment-info — the form needs to
+// know the school's name and which postings are actually open right
+// now, same combined-call reasoning as /admission-info. Unlike
+// admissions, there's no cycle to gate on — a school always accepts
+// speculative/general applications even with zero open postings, so
+// this never blocks submission, only informs what the posting dropdown
+// offers.
+router.get('/schools/:schoolId/recruitment-info', asyncHandler(async (req: Request, res: Response) => {
+  const { schoolId } = req.params
+  if (!UUID_RE.test(schoolId)) {
+    return res.status(404).json({ success: false, error: 'Application form not found for this link.' })
+  }
+
+  const { data: school } = await supabase.from('schools').select('id, name').eq('id', schoolId).maybeSingle()
+  if (!school) return res.status(404).json({ success: false, error: 'Application form not found for this link.' })
+
+  const { data: postings } = await supabase
+    .from('job_postings')
+    .select('id, title, department, designation, employment_type')
+    .eq('school_id', schoolId).eq('status', 'open')
+    .order('created_at', { ascending: false })
+
+  res.json({ success: true, data: { school_name: school.name, postings: postings ?? [] } })
+}))
+
+const PublicJobApplicationSchema = z.object({
+  candidate_name: z.string().trim().min(1).max(200),
+  phone: z.string().trim().min(6).max(20),
+  email: z.string().trim().email().optional().or(z.literal('')),
+  job_posting_id: z.string().uuid().optional(),
+  current_designation: z.string().max(200).optional(),
+  experience_years: z.number().min(0).max(60).optional(),
+  expected_salary: z.number().min(0).optional(),
+  notice_period: z.string().max(100).optional(),
+  cover_letter: z.string().max(2000).optional(),
+  resume_base64: z.string().optional(),
+  resume_file_name: z.string().max(300).optional(),
+  resume_mime_type: z.string().optional(),
+  // Honeypot — same convention as PublicInquirySchema.company above.
+  company: z.string().optional(),
+})
+
+// POST /public/schools/:schoolId/job-applications — a candidate created
+// here lands at status 'applied', the exact same first stage as one
+// added by HR by hand (POST /hrms/applications) — the kanban, stats and
+// every downstream stage-move already treat every application the same
+// regardless of how it arrived.
+router.post('/schools/:schoolId/job-applications', asyncHandler(async (req: Request, res: Response) => {
+  const { schoolId } = req.params
+  if (!UUID_RE.test(schoolId)) {
+    return res.status(404).json({ success: false, error: 'Application form not found for this link.' })
+  }
+  const { data: school } = await supabase.from('schools').select('id').eq('id', schoolId).maybeSingle()
+  if (!school) return res.status(404).json({ success: false, error: 'Application form not found for this link.' })
+
+  const body = PublicJobApplicationSchema.parse(req.body)
+
+  if (body.company && body.company.trim()) {
+    // Spam signal — pretend success, write nothing. Same as the
+    // admission inquiry honeypot above.
+    return res.json({ success: true, application_number: null })
+  }
+
+  if (body.job_posting_id) {
+    const { data: posting } = await supabase
+      .from('job_postings').select('id').eq('id', body.job_posting_id).eq('school_id', schoolId).eq('status', 'open').maybeSingle()
+    if (!posting) return res.status(400).json({ success: false, error: 'This position is no longer accepting applications.' })
+  }
+
+  let resume_url: string | null = null
+  if (body.resume_base64 && body.resume_file_name) {
+    const base64Data = body.resume_base64.replace(/^data:[\w/+.-]+;base64,/, '')
+    const buffer = Buffer.from(base64Data, 'base64')
+    if (buffer.length > 10 * 1024 * 1024) {
+      return res.status(400).json({ success: false, error: 'Resume file is too large (10 MB limit).' })
+    }
+    const filePath = `${schoolId}/${Date.now()}_${body.resume_file_name}`
+    const { error: uploadErr } = await supabase.storage
+      .from('recruitment-documents')
+      .upload(filePath, buffer, { contentType: body.resume_mime_type ?? 'application/octet-stream', upsert: false })
+    if (uploadErr) return res.status(400).json({ success: false, error: 'Resume upload failed — please try again.' })
+    const { data: urlData } = supabase.storage.from('recruitment-documents').getPublicUrl(filePath)
+    resume_url = urlData.publicUrl
+  }
+
+  const appNumber = await nextDocumentNumber(schoolId, 'CAND')
+  const { data: created, error } = await supabase.from('job_applications').insert({
+    school_id: schoolId,
+    job_posting_id: body.job_posting_id || null,
+    candidate_name: body.candidate_name,
+    phone: body.phone,
+    email: body.email || null,
+    current_designation: body.current_designation || null,
+    experience_years: body.experience_years ?? null,
+    expected_salary: body.expected_salary ?? null,
+    notice_period: body.notice_period || null,
+    cover_letter: body.cover_letter || null,
+    resume_url,
+    source: 'QR Code',
+    status: 'applied',
+    application_number: appNumber,
+  }).select('id').single()
+  if (error) return res.status(400).json({ success: false, error: 'Could not submit — please try again.' })
+
+  await supabase.from('application_status_history').insert({ application_id: created!.id, status: 'applied' })
+
+  res.status(201).json({ success: true, application_number: appNumber })
+}))
+
 export default router
