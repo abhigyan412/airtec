@@ -11,7 +11,7 @@ import {
   Network, UserCheck2, Send, Grid3X3, LayoutGrid, User, Layers, Receipt, Tag, FileText, Lock,
   SlidersHorizontal, Gauge, FileSpreadsheet, CalendarClock, Wand2, Building2, BookMarked, LayoutTemplate,
   CalendarRange, Megaphone, Bus, Truck, Route as RouteIcon, ScanLine,
-  ShoppingCart, ClipboardCheck,
+  ShoppingCart, ClipboardCheck, Sparkles,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { usePermissions } from '@/lib/usePermissions'
@@ -102,6 +102,11 @@ const NAV: NavItem[] = [
       { label: 'Seats', href: '/admission/seats', icon: LayoutGrid, permission: 'admission.view' },
       { label: 'Cycles', href: '/admission/cycles', icon: CalendarClock, permission: 'admission.view', badge: 'QR' },
       { label: 'Test / Interview Slots', href: '/admission/slots', icon: ClipboardList, permission: 'admission.view' },
+      // roles (not permission) gates this one — the `allowed()` check below
+      // returns on `item.roles` before ever reaching `item.permission`, and
+      // the page itself is entirely school_admin/principal-only with no
+      // read-only view for anyone else, unlike Settings above it.
+      { label: 'Policy Assistant', href: '/admission/assistant', icon: Sparkles, roles: ['school_admin', 'principal'] },
       { label: 'Settings', href: '/admission/settings', icon: SettingsIcon, permission: 'admission.view' },
     ],
   },

@@ -1,5 +1,7 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
+import rateLimit from 'express-rate-limit'
+import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '../../shared/db/client'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { authenticate, requireRole, AuthRequest } from '../../shared/middleware/auth'
@@ -13,6 +15,10 @@ import {
   getClassSeatAvailability, applyLedgerTransition, checkClassLockOpen,
   releaseExpiredSeatHolds, processExpiredWaitlistOffers,
 } from '../../shared/utils/admissionSeatLedger'
+import { simulateFeeHoldPolicy } from '../../shared/utils/admissionFeeHoldSimulator'
+import { simulateStageAgingAlert, simulateOccupancyAlert } from '../../shared/utils/admissionAlertSimulator'
+import { getStuckInquiryDetails } from '../../shared/utils/admissionInquiryNotes'
+import { askPolicyCopilot, isPolicyCopilotAvailable, getPolicyCopilotCapabilities } from './policyCopilot'
 
 const router = Router()
 router.use(authenticate)
@@ -1674,6 +1680,131 @@ router.post('/inquiries/process-waitlist-offers', requireRole('school_admin', 'p
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const result = await processExpiredWaitlistOffers(req.user!.school_id)
     res.json({ success: true, data: result })
+  })
+)
+
+const FeeHoldSimulationSchema = z.object({
+  hypothetical_hold_days: z.number().int().min(0),
+  hypothetical_grace_days: z.number().int().min(0).optional(),
+  class_id: z.string().uuid().optional(),
+  from_date: z.string().optional(),
+  to_date: z.string().optional(),
+})
+
+// POST /applications/fee-hold-policy-simulation — read-only backtest: "if
+// admission_fee_hold_days had been X (and grace Y) all along, which
+// resolved applications would have ended up differently?" Pure analysis
+// over admissionFeeHoldSimulator.ts — zero writes, no expire/collect
+// counterpart, since there's nothing to commit. Same governance audience as
+// expire-fee-holds/extend-fee-hold above, not the broader admission.view
+// crowd (Counselor, Receptionist, etc.) that can read plain settings.
+router.post('/applications/fee-hold-policy-simulation', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const body = FeeHoldSimulationSchema.parse(req.body)
+    const result = await simulateFeeHoldPolicy({
+      schoolId: req.user!.school_id,
+      hypotheticalHoldDays: body.hypothetical_hold_days,
+      hypotheticalGraceDays: body.hypothetical_grace_days,
+      classId: body.class_id,
+      fromDate: body.from_date,
+      toDate: body.to_date,
+    })
+    res.json({ success: true, data: result })
+  })
+)
+
+// POST /admission-alerts/stage-aging-simulation — read-only backtest for the
+// stage-aging dashboard alert: a pure current-state recomputation (see
+// admissionAlertSimulator.ts), no historical reconstruction needed. Same
+// governance audience as the other policy-tuning tools.
+router.post('/admission-alerts/stage-aging-simulation', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { hypothetical_aging_days } = z.object({ hypothetical_aging_days: z.number().int().min(0) }).parse(req.body)
+    const result = await simulateStageAgingAlert({ schoolId: req.user!.school_id, hypotheticalAgingDays: hypothetical_aging_days })
+    res.json({ success: true, data: result })
+  })
+)
+
+// POST /admission-alerts/occupancy-simulation — read-only backtest for the
+// occupancy dashboard alert, same current-state-only reasoning as above.
+router.post('/admission-alerts/occupancy-simulation', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const body = z.object({
+      hypothetical_percent: z.number().int().min(0).max(100),
+      hypothetical_days: z.number().int().min(0).optional(),
+    }).parse(req.body)
+    const result = await simulateOccupancyAlert({
+      schoolId: req.user!.school_id,
+      hypotheticalPercent: body.hypothetical_percent,
+      hypotheticalDays: body.hypothetical_days,
+    })
+    res.json({ success: true, data: result })
+  })
+)
+
+// POST /admission-alerts/stuck-inquiry-details — read-only, real counselor
+// follow-up notes for currently-stuck inquiries (see admissionInquiryNotes.ts).
+// Same governance audience as the other policy-tuning tools, kept as a real
+// endpoint for testability even with no dedicated frontend form — reachable
+// through the Assistant panel via the registry.
+router.post('/admission-alerts/stuck-inquiry-details', requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { hypothetical_aging_days } = z.object({ hypothetical_aging_days: z.number().int().min(0).optional() }).parse(req.body)
+    const result = await getStuckInquiryDetails({ schoolId: req.user!.school_id, hypotheticalAgingDays: hypothetical_aging_days })
+    res.json({ success: true, data: result })
+  })
+)
+
+// GET /policy-copilot/status — cheap availability probe (no DB/LLM call) so
+// the frontend can decide whether to render the Ask box at all, plus the
+// registered capability list (name/description/example prompt) so the UI
+// can show "what can I ask" chips without hand-duplicating that text —
+// it's generated straight from policySimulators.ts's registry. Absent
+// ANTHROPIC_API_KEY is a supported configuration, not a startup failure —
+// same convention as OneSignal push.
+router.get('/policy-copilot/status', requireRole('school_admin', 'principal'),
+  asyncHandler(async (_req: AuthRequest, res: Response) => {
+    res.json({ success: true, data: { available: isPolicyCopilotAvailable(), capabilities: getPolicyCopilotCapabilities() } })
+  })
+)
+
+const PolicyCopilotAskSchema = z.object({
+  question: z.string().trim().min(1).max(500),
+})
+
+// A dedicated limiter for just this one route, not index.ts's cross-cutting
+// list — this guards one paid, multi-second endpoint, not a path prefix.
+// Same window/max as the existing credentialLimiter.
+const policyCopilotLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 })
+
+// POST /policy-copilot/ask — natural-language front end over the registered
+// simulators in policySimulators.ts: the model's only job is to call one of
+// those tools and narrate its real output, never invent numbers itself.
+// Re-checks availability itself defensively even though the frontend should
+// have already checked /status.
+router.post('/policy-copilot/ask', policyCopilotLimiter, requireRole('school_admin', 'principal'),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    if (!isPolicyCopilotAvailable()) {
+      return res.status(503).json({ success: false, error: 'The admission policy assistant is not configured for this deployment.', available: false })
+    }
+    const { question } = PolicyCopilotAskSchema.parse(req.body)
+    try {
+      const result = await askPolicyCopilot(question, req.user!.school_id)
+      res.json({ success: true, data: result })
+    } catch (err) {
+      if (err instanceof Anthropic.AuthenticationError) {
+        console.error('[policy-copilot] authentication error:', err.message)
+        return res.status(502).json({ success: false, error: 'The admission policy assistant is misconfigured for this deployment.' })
+      }
+      if (err instanceof Anthropic.RateLimitError) {
+        return res.status(502).json({ success: false, error: 'The admission policy assistant is busy — please try again shortly.' })
+      }
+      if (err instanceof Anthropic.APIError) {
+        console.error('[policy-copilot] API error:', err.message)
+        return res.status(502).json({ success: false, error: 'The admission policy assistant could not answer that right now.' })
+      }
+      throw err
+    }
   })
 )
 

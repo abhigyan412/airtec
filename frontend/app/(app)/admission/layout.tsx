@@ -1,8 +1,9 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { UserPlus, ClipboardList, LayoutGrid, CalendarClock, Settings } from 'lucide-react'
+import { UserPlus, ClipboardList, LayoutGrid, CalendarClock, Settings, Sparkles } from 'lucide-react'
 import { usePermissions } from '@/lib/usePermissions'
+import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
 // Mirrors app/(app)/fees/layout.tsx — same tab-bar-above-{children} pattern.
@@ -16,14 +17,19 @@ const TABS = [
   { href: '/admission/seats', label: 'Seats', icon: LayoutGrid, anyOf: ['admission.view'] },
   { href: '/admission/cycles', label: 'Cycles', icon: CalendarClock, anyOf: ['admission.view'] },
   { href: '/admission/slots', label: 'Slots', icon: ClipboardList, anyOf: ['admission.view'] },
+  // roles-gated, not just permission — this tab (and the page behind it) is
+  // entirely school_admin/principal-only, unlike every other tab here which
+  // shows a read-only view to anyone with admission.view.
+  { href: '/admission/assistant', label: 'Assistant', icon: Sparkles, anyOf: ['admission.view'], roles: ['school_admin', 'principal'] },
   { href: '/admission/settings', label: 'Settings', icon: Settings, anyOf: ['admission.view'] },
 ]
 
 export default function AdmissionLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { canAny } = usePermissions()
+  const { user } = useAuth()
 
-  const visible = TABS.filter(t => canAny(...t.anyOf))
+  const visible = TABS.filter(t => canAny(...t.anyOf) && (!('roles' in t) || t.roles.includes(user?.role ?? '')))
 
   return (
     <div className="animate-fade-in">

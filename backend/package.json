@@ -16,6 +16,7 @@
     "seed:reset": "tsx src/seed.ts --reset"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
     "@supabase/supabase-js": "^2.45.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
