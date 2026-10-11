@@ -72,6 +72,12 @@ services:
       # relative target is not something a native notification can act on,
       # so without this every OneSignal tap opens the app's default page.
       APP_BASE_URL: ${APP_BASE_URL:-}
+      # Anthropic API key for the fee-hold policy copilot (POST
+      # /api/admission/policy-copilot/ask). Optional — absent means the
+      # endpoint reports itself unavailable and the frontend hides the Ask
+      # box, matching the OneSignal pattern above: a supported
+      # configuration, not a startup failure.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # Every date this product computes is a school's date: which day a
       # receipt belongs to, which month a collection lands in, and above
       # all which financial year a payment on 31 March falls into. A
@@ -92,6 +98,11 @@ services:
       # chars) while the provider is 'mock'; with Razorpay it must match
       # the secret set in their dashboard.
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
+      # Incoming-webhook URL (Slack, Google Chat or Discord) that gets a
+      # one-line message for every marketing-site lead: demo requests and
+      # free-trial requests (POST /api/public/leads). Optional: when unset,
+      # leads are still stored in marketing_leads, nobody is pinged.
+      LEADS_WEBHOOK_URL: ${LEADS_WEBHOOK_URL:-}
       RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
       RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
       # CORS allow-list. Both apps proxy /api over the internal network,

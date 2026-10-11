@@ -11,6 +11,7 @@ import { supabase } from '../../shared/db/client'
 import { nextDocumentNumber } from '../../shared/utils/documentNumbers'
 import { asyncHandler } from '../../shared/utils/helpers'
 import { checkAdmissionCycleOpen } from '../admission/routes'
+import { createLead, LeadInsertError } from '../../shared/utils/marketingLeads'
 
 const router = Router()
 
@@ -541,6 +542,35 @@ router.post('/schools/:schoolId/job-applications', asyncHandler(async (req: Requ
   await supabase.from('application_status_history').insert({ application_id: created!.id, status: 'applied' })
 
   res.status(201).json({ success: true, application_number: appNumber })
+}))
+
+// POST /public/leads — lead capture for the public marketing site
+// (docs/marketing-site/plan.md §9): "Book a demo", the home-page short form
+// and free-trial requests. Unlike every other route in this file it has no
+// school_id: these are prospects, not tenants. Covered by the /api/public
+// limiter in index.ts. Validation, spam checks and the team-chat ping live in
+// shared/utils/marketingLeads.ts.
+//
+// Spam (filled honeypot, or submitted under 3s after the form rendered) gets
+// the same 201 as a real lead and nothing is written, so a script has nothing
+// to learn from. The response never echoes the submitted data.
+router.post('/leads', asyncHandler(async (req: Request, res: Response) => {
+  try {
+    await createLead(req.body, {
+      insert: async (row) => {
+        const { error } = await supabase.from('marketing_leads' as any).insert(row as any)
+        return { error }
+      },
+      webhookUrl: process.env.LEADS_WEBHOOK_URL,
+    })
+  } catch (err) {
+    if (err instanceof LeadInsertError) {
+      console.error('[leads] insert failed:', err.dbError)
+      return res.status(500).json({ success: false, error: 'Could not submit — please try again.' })
+    }
+    throw err // ZodError → 400 via errorHandler
+  }
+  res.status(201).json({ ok: true })
 }))
 
 export default router
