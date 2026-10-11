@@ -282,6 +282,17 @@ export const admissionApi = {
       api.post(`/admission/applications/${id}/extend-fee-hold`, data).then(r => r.data),
     issueOfferLetter: (id: string) =>
       api.post(`/admission/applications/${id}/issue-offer-letter`).then(r => r.data),
+    simulateFeeHoldPolicy: (data: {
+      hypothetical_hold_days: number
+      hypothetical_grace_days?: number
+      class_id?: string
+      from_date?: string
+      to_date?: string
+    }) => api.post('/admission/applications/fee-hold-policy-simulation', data).then(r => r.data),
+    policyCopilot: {
+      status: () => api.get('/admission/policy-copilot/status').then(r => r.data),
+      ask: (question: string) => api.post('/admission/policy-copilot/ask', { question }).then(r => r.data),
+    },
   },
 
   classes: () =>
@@ -294,6 +305,15 @@ export const admissionApi = {
   },
 
   alerts: () => api.get('/admission/admission-alerts').then(r => r.data),
+
+  alertSimulations: {
+    stageAging: (data: { hypothetical_aging_days: number }) =>
+      api.post('/admission/admission-alerts/stage-aging-simulation', data).then(r => r.data),
+    occupancy: (data: { hypothetical_percent: number; hypothetical_days?: number }) =>
+      api.post('/admission/admission-alerts/occupancy-simulation', data).then(r => r.data),
+    stuckInquiryDetails: (data: { hypothetical_aging_days?: number }) =>
+      api.post('/admission/admission-alerts/stuck-inquiry-details', data).then(r => r.data),
+  },
 
   classDisplayStyle: {
     get: () => api.get('/admission/class-display-style').then(r => r.data),

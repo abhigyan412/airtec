@@ -196,6 +196,11 @@ export async function checkClassLockOpen(schoolId: string, classId: unknown): Pr
 // and the application auto-rejected — matching how a real, un-actioned
 // reservation is a lost seat, not a limbo state.
 //
+// Exported so admissionFeeHoldSimulator.ts can identify already-auto-rejected
+// applications by the same text, instead of duplicating this literal and
+// risking silent drift between the two files.
+export const FEE_HOLD_AUTO_REJECT_REASON = 'Application fee not paid within the hold period'
+
 // schoolId: omit for the unattended cron (all schools); pass it for the
 // admin-triggered manual endpoint, same convention as runFeeReminders.
 export async function releaseExpiredSeatHolds(schoolId?: string) {
@@ -231,7 +236,7 @@ export async function releaseExpiredSeatHolds(schoolId?: string) {
 
     await supabase.from('admission_applications').update({
       status: 'rejected',
-      auto_rejected_reason: 'Application fee not paid within the hold period',
+      auto_rejected_reason: FEE_HOLD_AUTO_REJECT_REASON,
       fee_hold_deadline: null,
     }).eq('id', app.id)
 
